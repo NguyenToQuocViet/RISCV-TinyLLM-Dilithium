@@ -8,6 +8,29 @@ The RISC-V subsystem is being rebuilt from a clean scaffold. Treat only committe
 
 Before modifying RISC-V RTL, tests, scripts, build infrastructure, specifications, research artifacts, or internal structure, read [`docs/AGENT_POLICY.md`](docs/AGENT_POLICY.md) and apply its participation categories, Decision-Complete Gate, and Ownership Gap Gate.
 
+## Migration Direction and Document Map
+
+Start with a five-stage core baseline without cache or branch prediction so later additions have a defined comparison point. This orders the work; cache and predictor RTL may be migrated in later increments. The order needs no standalone `core-first` decision record. Each migration increment belongs on a short-lived feature branch and reaches `develop` through review and a Pull Request, as defined by [`../../docs/PROJECT_MANAGEMENT.md`](../../docs/PROJECT_MANAGEMENT.md). Keep the migration history in versioned documents and Git, not in a long-lived branch.
+
+Use each document for its own question:
+
+| Document | Read or update when | Owns |
+| --- | --- | --- |
+| [`../../README.md`](../../README.md) | Orienting to the project or updating its high-level status. | Project overview and links, not detailed core behavior. |
+| [`../../docs/PROJECT_MANAGEMENT.md`](../../docs/PROJECT_MANAGEMENT.md) | Planning branches, ownership, review, integration, or release. | Project-wide workflow and authority. |
+| [`../../docs/ROADMAP.md`](../../docs/ROADMAP.md) | Defining or changing a team milestone. | Project direction, version scope, and acceptance criteria; RISC-V work enters it at the project-milestone level. |
+| [`../../docs/CHANGELOG.md`](../../docs/CHANGELOG.md) | Recording an accepted development change or release. | Project-level change summary, not per-file migration status. |
+| [`docs/AGENT_POLICY.md`](docs/AGENT_POLICY.md) | Assigning agent participation, decision ownership, or implementation mode. | RISC-V AI collaboration boundaries and gates. |
+| `docs/MIGRATION.md` (planned) | Reviewing or migrating any old RISC-V RTL, including later cache or predictor work. | Living file-level history: old repository revision and path, review status, disposition, destination, material changes, and evidence. It tracks work; it does not define milestone scope or core behavior. |
+| `docs/designs/5-stage-baseline-core.md` (planned) | Drafting, reviewing, implementing, or verifying the five-stage baseline. | Intended core behavior, interfaces, microarchitecture, and verification expectations once accepted by the RISC-V owner. |
+| `docs/decisions/` | A material RISC-V-owned choice needs durable rationale and trade-offs beyond the current design contract. | Accepted subsystem decisions; ordinary migration steps and the baseline-first order need no separate record. |
+
+Planned paths are not current authorities until their documents are written, reviewed, and merged. Place RISC-V-internal technical designs under `docs/designs/` as needed; use the same contract role as the five-stage document for later configurations or substantial internal features. Project-wide decisions, shared designs, and system-level architecture follow the root `docs/decisions/`, `docs/designs/`, and `docs/architecture/` authorities in `PROJECT_MANAGEMENT.md`. Escalate shared interfaces and cross-subsystem effects to the project-level owner.
+
+Before starting a RISC-V feature for the next project milestone, confirm that `ROADMAP.md` defines that milestone's scope and acceptance criteria. For each migration increment, inspect the exact old source revision, review its behavior, resolve and document implementation-shaping decisions, then change RTL and verify it. Update `MIGRATION.md` as review status, disposition, destination, changes, or evidence evolve, and include the relevant update in the increment's PR. Keep a design marked `Proposed` until its owner accepts it; a file's existence or old RTL behavior does not establish an accepted contract. Update the owning design when intended behavior changes, and link related documents instead of copying their contents. Preserve established document names; use descriptive lowercase kebab-case names for new RISC-V designs and decisions.
+
+Organize RISC-V RTL by function. Share a source module across five- and seven-stage configurations when its contract matches; name divergent modules distinctly. Use filelists and build profiles to select sources and top modules for each configuration. A filelist does not disable logic instantiated by a selected top module.
+
 ## Mandatory Agent Workflow
 
 1. Inspect the applicable instructions, specifications, decisions, source, tests, and Git state.
