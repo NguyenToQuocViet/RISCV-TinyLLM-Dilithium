@@ -311,7 +311,32 @@ ID/EX captures ID output derived from current IF/ID.
 
 `data_response_fire` makes the MEM wait resolved for the current edge, so arbitration continues to redirect, load-use, or normal behavior. On a response-plus-redirect edge, the old WB instruction retires, the completed memory instruction enters MEM/WB, the redirecting EX instruction enters EX/MEM, and both younger pipeline entries become invalid. On a response-plus-load-use edge, the old WB instruction retires, the completed memory instruction enters MEM/WB, the load in EX enters EX/MEM, ID/EX receives a bubble, and the dependent IF/ID instruction remains held.
 
-During a load-use hazard, IF/ID does not consume a new instruction, but the Prefetch Unit continues normal response capture, `READY` creation, PC allocation, and request issue subject to Fetch Buffer capacity and `OBI_OUTSTANDING_MAX=1`. During an unresolved MEM wait, proactive frontend progress is frozen: the Prefetch Unit does not allocate a new PC, consume a `READY` entry into IF/ID, or first-present an uncommitted queued request. Mandatory OBI progress continues in both cases. A request already asserted retains stable `req` and payload and may be granted; `instr_request_fire` is recorded; an expected outstanding response is accepted on `instr_response_fire`; and the Fetch Buffer performs every state transition required by those events. MEM stall freezes architectural and proactive fetch progress, not protocol obligations.
+During a load-use hazard, IF/ID does not consume a new instruction, but the
+Prefetch Unit continues normal response capture, `READY` creation, PC
+allocation, and request issue subject to Fetch Buffer capacity,
+`OBI_OUTSTANDING_MAX=1`, and the registered-MEM-occupancy rule below. During an
+unresolved MEM wait, proactive frontend progress is frozen: the Prefetch Unit
+does not allocate a new PC, consume a `READY` entry into IF/ID, or first-present
+an uncommitted queued request.
+
+First presentation of an instruction request is qualified by current
+registered MEM occupancy, not by combinational MEM-wait release. While
+`EX/MEM.valid && EX/MEM.mem_en` is true, the frontend must not first-present an
+uncommitted queued request, including during the cycle in which
+`data_response_fire` releases the pipeline. After that edge, first presentation
+is permitted only if the updated EX/MEM entry does not contain another memory
+instruction and the other fetch-issue conditions permit it. This rule uses
+existing registered state and prevents a combinational path from
+`data_rvalid` to `instr_req`. It does not delay pipeline advance, fetch
+allocation, IF/ID delivery, or redirect processing otherwise permitted on the
+response edge, and it adds no pipeline release bubble.
+
+Mandatory OBI progress continues during both load-use and MEM stalls. A request
+already asserted retains stable `req` and payload and may be granted, including
+on the MEM response edge; `instr_request_fire` is recorded; an expected
+outstanding response is accepted on `instr_response_fire`; and the Fetch Buffer
+performs every state transition required by those events. MEM stall freezes
+architectural and proactive fetch progress, not protocol obligations.
 
 ### Architectural side effects
 
@@ -330,9 +355,10 @@ the younger store's address phase is accepted.
 
 Synchronous reset and an unresolved MEM wait prevent WB advance and force `wb_retire_fire=0`. Redirect, load-use, normal flow, and a `data_response_fire` edge that releases a MEM wait allow WB to advance. A held WB instruction therefore cannot be counted as retiring repeatedly. The register file write is the separate side effect `rf_write_fire = wb_retire_fire && MEM/WB.reg_write && MEM/WB.rd != 0`; branch and jump link values use this ordinary WB path. Invalid, flushed, or killed pipeline state cannot write the register file, create a data request, perform a store, or redirect control flow. A valid MEM owner remains responsible for continuing its current request and response protocol while the architectural pipeline is frozen; the interlock does not suppress mandatory OBI progress.
 
-A store address transfer on `data_request_fire = req && gnt` is irrevocable from the core's
-perspective: transaction ownership has passed to the data interface and the
-core no longer has the right to roll it back. This transfer does not imply that
+A store address transfer on `data_request_fire`, as defined in
+[OBI response validity and reset](#obi-response-validity-and-reset), is
+irrevocable from the core's perspective: transaction ownership has passed to
+the data interface and the core no longer has the right to roll it back. This transfer does not imply that
 physical memory must be updated in the handshake cycle; the subordinate owns
 that internal timing. `data_response_fire` confirms transaction completion. A younger
 redirect does not cancel an older store already accepted in MEM, whereas a
@@ -396,19 +422,29 @@ The following optional signals are not present at the five-stage baseline bounda
 ### OBI response validity and reset
 
 The per-port outstanding state records whether the core expects a response for
-an accepted address transfer. The request and response events are defined for
-each port as:
+an accepted address transfer. At each rising edge of `clk`, request and
+response events use the sampled `rst_n` and per-port signals as follows:
 
 ```text
-request_fire          = req && gnt
-raw_response_transfer = rvalid && rready
+request_fire          = rst_n && req && gnt
+raw_response_transfer = rst_n && rvalid && rready
 response_fire         = outstanding && raw_response_transfer
 ```
 
-Here `outstanding` is the current pre-edge state. For each port, accepted
-request and expected-response events update ownership as
+Reset has priority in the core, both harness subordinates, and their checkers.
+On an edge sampling `rst_n=0`, no request is accepted, no response creates a
+result or completion, and no new instruction side effect occurs, even if the
+pre-edge `req && gnt` or `rvalid && rready` signals are high. All three events
+above are zero, and unexpected-response checking is inactive on that edge.
+These are sampled-edge event definitions, not a requirement to gate OBI
+outputs asynchronously with `rst_n`.
+
+Here `outstanding` is the current pre-edge state. On an edge sampling
+`rst_n=1`, each port's accepted request and expected-response events update
+ownership as
 `next_outstanding = current_outstanding + request_fire - response_fire`, subject
-to that port's one-outstanding limit.
+to that port's one-outstanding limit. On a reset edge, next outstanding state
+is zero instead.
 
 The instruction port therefore has `instr_request_fire` and
 `instr_response_fire`; the data port has `data_request_fire` and
@@ -436,13 +472,21 @@ per-port outstanding state. It does not reset the `pc` or `instruction` payload
 of an invalid Fetch Buffer entry. The baseline contains no separate
 data-response buffer. After a rising edge samples `rst_n=0`, the reset control
 state drives core `req=0`; the harness subordinate drives `rvalid=0` and clears
-every pending response. This is synchronous behavior and does not require
-asynchronous combinational gating merely because `rst_n` becomes low between
-rising edges. A post-reset raw response transfer has no corresponding
-outstanding transaction and is a protocol violation: it must not create a valid
-pipeline entry or architectural side effect, and verification must detect it.
-The core reset does not clear backing memory and does not guarantee rollback of
-a store whose address transfer was accepted before reset.
+all pending transaction and response state. This is synchronous behavior and
+does not require asynchronous combinational gating merely because `rst_n`
+becomes low between rising edges. The harness must never return a response for
+a pre-reset transaction after reset. Responses for newly accepted post-reset transactions
+follow the normal expected-response rules.
+
+A response received outside reset while no transaction is outstanding is
+drained, discarded, and reported as a protocol violation without creating a
+valid pipeline entry or architectural side effect. This is not a guarantee
+that the core can identify every stale response: with no transaction ID or
+reset epoch, a forbidden pre-reset response cannot necessarily be distinguished
+from a response to a newly outstanding transaction. Correct operation therefore
+depends on both subordinates honoring the shared-reset flush contract. The
+core reset does not clear backing memory and does not guarantee rollback of a
+store whose address transfer was accepted before reset.
 
 ### Instruction fetch capacity and transaction states
 
@@ -468,13 +512,13 @@ A queued entry may either be internal and not yet presented to OBI, or be drivin
 
 The OBI Interface selects the oldest eligible `QUEUED` entry by allocation age for instruction-memory issue. A numerically lower PC does not imply an older entry. An older `READY` entry does not block issue because its memory transaction is already complete. Once a queued entry has been presented with `req=1` and is waiting for `gnt`, neither a younger queued entry nor a redirect target may bypass or replace it.
 
-The next queued entry may be presented while one older instruction transaction remains `OUTSTANDING`. The subordinate holds `gnt=0` until it has capacity to accept that request. It may assert `gnt` on the same edge that the older expected response fires, but it must not create a state in which more than one instruction transaction is granted but not responded. Verification enforces `next_outstanding <= OBI_OUTSTANDING_MAX`, where `next_outstanding = current_outstanding + instr_request_fire - instr_response_fire` and `OBI_OUTSTANDING_MAX=1`. A raw unexpected response does not decrement this count. The presented request exists in registered Fetch Buffer state and must not arise combinationally from the older response.
+The next queued entry may be presented while one older instruction transaction remains `OUTSTANDING`. The subordinate holds `gnt=0` until it has capacity to accept that request. It may assert `gnt` on the same edge that the older expected response fires, but it must not create a state in which more than one instruction transaction is granted but not responded. Verification enforces `next_outstanding <= OBI_OUTSTANDING_MAX`, where `OBI_OUTSTANDING_MAX=1`. On an edge sampling `rst_n=1`, `next_outstanding = current_outstanding + instr_request_fire - instr_response_fire`; a reset edge instead clears the count to zero. A raw unexpected response does not decrement this count. The presented request exists in registered Fetch Buffer state and must not arise combinationally from the older response.
 
 No deasserted-`req` bubble is required between accepted instruction transactions. After `instr_request_fire` for one request on cycle N, the OBI Interface may select the next queued entry, change to its request payload after the accepting edge, and keep `req=1` during cycle N+1. Each individual entry's payload nevertheless remains stable from its first asserted `req` until its own `gnt`.
 
 The Fetch Controller owns the registered `next_fetch_pc`; the Fetch Buffer does not calculate `PC + 4` or otherwise choose the next address. When the Fetch Controller allocates a free entry as `QUEUED`, it assigns the current `next_fetch_pc` to that entry. Ownership of that fetch PC then transfers to the entry, and the Fetch Controller advances its registered next-fetch state immediately without waiting for `gnt` or a response. A later predictor may change how the Fetch Controller selects `next_fetch_pc`, but it does not change this ownership boundary.
 
-The additional entries therefore allow the sequential next fetch to be prepared from registered frontend state while an older transaction awaits its response and an older completed instruction awaits pipeline consumption. A new request must not be created through a combinational dependency on the current `rvalid`, `rdata`, or `gnt`. If a later instruction memory, cache, or interconnect accepts more than one granted-but-not-responded transaction, multiple entries may become `OUTSTANDING` only after an explicit configuration-contract update; the Fetch Buffer architecture itself need not be replaced.
+The additional entries therefore allow the sequential next fetch to be prepared from registered frontend state while an older transaction awaits its response and an older completed instruction awaits pipeline consumption. A new instruction request must not be created through a combinational dependency on the current `rvalid`, `rdata`, or `gnt` of either OBI port. In particular, first presentation follows the registered-MEM-occupancy rule in [Pipeline-control priority](#pipeline-control-priority). If a later instruction memory, cache, or interconnect accepts more than one granted-but-not-responded transaction, multiple entries may become `OUTSTANDING` only after an explicit configuration-contract update; the Fetch Buffer architecture itself need not be replaced.
 
 When `instr_response_fire` occurs for a live `OUTSTANDING` entry, the Fetch Buffer captures `rdata` as that entry's instruction payload and changes the entry to `READY`, independently of whether IF/ID can accept an instruction on that cycle. The subordinate then has no further responsibility for that transaction. `RESPONSE_BYPASS=0`: a response cannot pass combinationally from OBI into IF/ID, and even an immediately consumable expected response must first become registered `READY` state. If the `OUTSTANDING` entry is killed, its expected response is accepted and discarded and the entry becomes `FREE` without ever becoming a valid `READY` instruction.
 
@@ -564,6 +608,18 @@ Request/outstanding ownership and killed state are control-plane state and are r
 
 For core-level verification, the testbench provides one independently responding OBI memory model per port, with separate backing storage and non-overlapping code and data address regions. The code model covers `0x0000_0000` through `0x0000_FFFF`; IF fetches instructions only from this region. The data model covers `0x0001_0000` through `0x0001_FFFF`; MEM loads and stores only in this region. Read-only constants loaded by the program, initialized and uninitialized data, stack, and test result locations belong in the data region. Programs that write executable code or access the other port's region are outside this baseline's scope. There is no IF/MEM arbiter at this core-to-testbench boundary.
 
+The code-region restriction applies to every presented instruction request,
+including speculative and wrong-path fetches, not only to instructions that
+eventually execute. The harness and test program jointly own this precondition.
+Test images must provide suitable padding with legal NOP instructions and safe
+terminal control flow so that sequential prefetch remains in range, including
+while a terminating status-store awaits its response. Keeping only executed
+PCs in range is insufficient near the end of the code region. On each edge
+sampling `rst_n=1` and instruction `req=1`, the harness checks the request
+address independently of `gnt`; an out-of-range request immediately fails the
+test instead of being left waiting for grant. This is a harness/program
+requirement and does not add a range checker or exception mechanism to the core.
+
 These testbench responders verify core behavior, not DDR timing or performance. The later system may place code and data in distinct regions of the same physical DDR; its memory map, OBI-to-AXI path, and shared arbitration belong to the project-level integration contract.
 
 ## Verification strategy and ownership
@@ -581,11 +637,9 @@ valid, hold, bubble, and flush behavior; request stability through grant;
 outstanding limits and transaction ordering; and the prohibition on any
 architectural or externally visible side effect from invalid state.
 
-Short integration programs check final register and data-memory signatures. A
-dedicated test-status store is the core-level completion convention. The
-testbench recognizes completion only on `data_response_fire` for that
-status-store transaction, not merely when its address phase is accepted or on
-an unexpected raw response transfer.
+Short integration programs check final register and data-memory signatures and
+use the [harness completion and timeout contract](#harness-completion-and-timeout-contract)
+below.
 
 A RISC-V architectural or ISA test suite provides an additional independent
 architectural-correctness layer. The selected tests and harness adaptation must
@@ -618,7 +672,9 @@ Mandatory directed verification is organized around six scenario groups:
    `instr_request_fire` for B, and the
    `READY + OUTSTANDING + QUEUED` steady state, frontend progress during a
    load-use hazard, proactive frontend freeze with mandatory protocol progress
-   during a MEM wait, and every specified redirect disposition for `READY`,
+   during a MEM wait, and first-presentation suppression through the MEM
+   response cycle, including when another memory instruction replaces the
+   completed one. Cover every specified redirect disposition for `READY`,
    `OUTSTANDING`, presented `QUEUED`, and unpresented `QUEUED` entries.
 5. **Data OBI.** Cover delayed grant and expected response, duplicate-request
    suppression, the one-outstanding limit, load and store formatting, store
@@ -626,9 +682,12 @@ Mandatory directed verification is organized around six scenario groups:
    side-effect contract, and unexpected-response handling.
 6. **Reset and recovery.** Cover reset while idle, with occupied pipeline
    stages, while a request awaits grant, with an instruction or data transaction
-   outstanding, and with a killed instruction response pending. Confirm that
-   invalid state creates no side effect and that the core does not treat a store
-   accepted before reset as rolled back.
+   outstanding, and with a killed instruction response pending. Cover reset
+   edges with pre-edge `req && gnt` or `rvalid && rready` high; no new transaction
+   is accepted and no response result or completion is created. Confirm that
+   both subordinates flush pre-reset protocol state, that invalid state creates
+   no side effect, and that the core does not treat a store accepted before
+   reset as rolled back.
 
 Every semantic distinction and simultaneous-event case named above requires at
 least one directed self-checking test. The contract does not require the full
@@ -640,10 +699,11 @@ statement, branch, condition, or toggle coverage.
 An unexpected response is always drained so protocol progress cannot deadlock,
 but its monitor or assertion reports a protocol violation and the test fails.
 
-Verification artifacts are organized by role in the verification lifecycle:
+Verification artifacts are organized under `src/riscv/tb/` by role in the
+verification lifecycle, consistently with the project-level subsystem layout:
 
 ```text
-verification/
+tb/
 ├── common/
 ├── regression/
 ├── exploratory/
@@ -673,6 +733,34 @@ focused SystemVerilog-UVM environment may be added for learning and practicing
 UVM methodology; it does not require rewriting the existing verification stack
 or displacing the Python backbone.
 
+### Harness completion and timeout contract
+
+The aligned word at `TEST_STATUS = 32'h0001_FFFC` is reserved for test
+completion. The test program's linker layout must exclude all four bytes from
+ordinary data and stack allocation. Completion uses only `SW` to this address:
+`32'd1` means PASS and `32'd2` means FAIL. Any other value or access width used
+for a status-store is a test-convention violation and fails the test; partial
+stores to any byte of the reserved word are not completion events.
+
+The harness identifies the status-store from its accepted address-phase
+payload and retains that identity until the matching `data_response_fire`.
+Neither address acceptance alone nor an unexpected response completes a test.
+On the expected response edge, final register and data-memory signatures are
+sampled only after that edge's sequential updates have settled, including any
+older WB register write retiring on that same edge. The test then ends with
+the reported status and signature/checker results; a PASS status does not
+override a failed signature or checker. This completion ABI avoids a sampling
+race with the baseline's held-WB release behavior.
+
+Every test declares finite grant-delay, response-latency, and total-cycle
+limits in its version-controlled configuration. The memory responders honor
+the configured delay bounds, and harness watchdogs fail the test when a bound
+is exceeded. The acceptance evidence records the configuration used. These
+are test-environment limits, not fixed-latency assumptions or timeout hardware
+in the core; the core continues to use OBI handshakes for progress. Finite,
+recorded bounds make a timeout distinguishable from an intentionally delayed
+transaction and reproducible with the rest of the test configuration.
+
 ### Objective acceptance gate
 
 The verification environment selected for an acceptance run is defined by
@@ -688,6 +776,7 @@ Git revision
 simulator and tool versions
 exact commands
 randomized seeds
+test delay bounds and watchdog limits
 ```
 
 An acceptance run must satisfy all of the following conditions:
