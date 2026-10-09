@@ -226,11 +226,14 @@ Project architect chịu trách nhiệm đối với các quyết định vượ
 
 ## 5. Branch Model
 
-Repository duy trì hai long-lived branch:
+Repository duy trì năm long-lived branch:
 
 ```text
 main
 develop
+riscv
+tinyllm
+dilithium
 ```
 
 Các branch phát triển còn lại là short-lived branch.
@@ -240,13 +243,43 @@ Branch model:
 ```text
 main
 ├── develop
-│   ├── feature/*
+│   ├── riscv
+│   │   └── feature/riscv/*
+│   ├── tinyllm
+│   │   └── feature/tinyllm/*
+│   ├── dilithium
+│   │   └── feature/dilithium/*
+│   ├── feature/<scope>-<description>
 │   └── integration/*
 │
 └── hotfix/*
 ```
 
-Không tạo long-lived branch riêng cho từng contributor hoặc từng subsystem.
+`riscv`, `tinyllm` và `dilithium` là các nhánh phát triển của subsystem tương ứng, được tạo từ `develop` và do subsystem owner quản lý.
+
+Luồng đưa thay đổi nội bộ về project:
+
+```text
+feature/<subsystem>/<description>
+              ↓
+       subsystem owner merge
+              ↓
+   riscv / tinyllm / dilithium
+              ↓
+      Pull Request + review
+              ↓
+           develop
+              ↓
+      Release Pull Request
+              ↓
+            main
+```
+
+Owner phát triển feature trên short-lived branch và tự merge về nhánh subsystem sau khi phạm vi đã hoàn thành, verification đã pass và documentation đã được cập nhật. Bước merge nội bộ này không bắt buộc Pull Request.
+
+Chỉ đưa các feature đã hoàn thành vào nhánh subsystem. Pull Request từ nhánh subsystem vào `develop` bao gồm toàn bộ thay đổi trên nhánh đó chưa có trong `develop`.
+
+Không tạo thêm long-lived branch riêng cho từng contributor. Không force-push hoặc xóa các long-lived branch.
 
 ---
 
@@ -281,7 +314,7 @@ Trước stable release đầu tiên, `main` có thể chứa repository scaffol
 
 `develop` là **shared development baseline** mới nhất của toàn project.
 
-Đây là branch mà các contributor sử dụng làm nền để phát triển feature mới.
+Đây là branch làm nền cho các nhánh subsystem, integration và thay đổi chung của project.
 
 `develop` phải chứa các thay đổi đã:
 
@@ -296,7 +329,11 @@ Không gắn stable version tag trực tiếp lên `develop`.
 
 Không push trực tiếp lên `develop`.
 
-Mọi thay đổi thông thường phải đi qua Pull Request.
+Mọi thay đổi đưa vào `develop` phải đi qua Pull Request từ nhánh subsystem, `integration/*` hoặc feature có phạm vi chung của project.
+
+Trước khi merge Pull Request từ nhánh subsystem vào `develop`, owner phải đồng bộ `develop` mới nhất về nhánh subsystem, xử lý conflict và chạy lại verification liên quan trên kết quả kết hợp. Đồng bộ ở đây là merge `develop` vào nhánh subsystem, giữ lại các thay đổi của subsystem.
+
+Sau khi Pull Request được merge, owner đồng bộ `develop` trở lại nhánh subsystem để các feature tiếp theo có cùng baseline với project. Không rebase các nhánh subsystem đã được chia sẻ.
 
 `develop` luôn hướng tới version tiếp theo được định nghĩa trong `ROADMAP.md`.
 
@@ -306,20 +343,38 @@ Mọi thay đổi thông thường phải đi qua Pull Request.
 
 `feature/*` là short-lived branch dùng cho một thay đổi logic cụ thể.
 
+### 8.1 Feature nội bộ subsystem
+
 Naming format:
+
+```text
+feature/<subsystem>/<description>
+```
+
+`<subsystem>` là `riscv`, `tinyllm` hoặc `dilithium`.
+
+Một feature branch phải:
+
+- Được tạo từ nhánh subsystem tương ứng.
+- Có phạm vi rõ ràng.
+- Không trở thành branch phát triển dài hạn của một subsystem.
+- Không chứa các thay đổi không liên quan đến mục tiêu của branch.
+- Được subsystem owner kiểm tra và merge trở lại nhánh subsystem tương ứng; Pull Request ở bước này là tùy chọn.
+- Được xóa sau khi merge khi không còn cần thiết.
+
+Thay đổi ảnh hưởng shared interface, system-level contract hoặc nhiều subsystem phải được xử lý qua `integration/*` và review ở cấp project.
+
+### 8.2 Feature có phạm vi chung của project
+
+Thay đổi quy định, tài liệu chung hoặc maintenance ở cấp project dùng format:
 
 ```text
 feature/<scope>-<description>
 ```
 
-Một feature branch phải:
+Các nhánh này được tạo từ `develop` và merge trở lại `develop` thông qua Pull Request. Ví dụ: `feature/subsystem-workflow`.
 
-- Được tạo từ `develop`.
-- Có phạm vi rõ ràng.
-- Không trở thành branch phát triển dài hạn của một subsystem.
-- Không chứa các thay đổi không liên quan đến mục tiêu của branch.
-- Được merge trở lại `develop` thông qua Pull Request.
-- Được xóa sau khi merge khi không còn cần thiết.
+### 8.3 Migration code
 
 Migration code từ project cũ cũng được xử lý như một feature.
 
@@ -340,7 +395,11 @@ documentation
         ↓
 verification
         ↓
-Pull Request
+subsystem owner acceptance + merge
+        ↓
+riscv / tinyllm / dilithium
+        ↓
+Pull Request + review
         ↓
 develop
 ```
@@ -416,21 +475,23 @@ Việc đồng bộ hotfix về `develop` là bắt buộc để lỗi không xu
 
 ## 11. Pull Request Policy
 
-Pull Request là đơn vị chính thức để project review và chấp nhận thay đổi.
+Pull Request là đơn vị chính thức để project review và chấp nhận thay đổi vào `develop` và `main`.
 
-Không merge feature vào shared branch nếu không có Pull Request.
+Feature nội bộ có thể được subsystem owner merge vào nhánh subsystem mà không cần Pull Request, theo mục 5 và 8. Ngoại lệ này không áp dụng cho việc đưa thay đổi vào `develop` hoặc `main`.
 
-### 11.1 Feature Pull Request
+### 11.1 Pull Request vào `develop`
 
 Luồng:
 
 ```text
-feature/*
+riscv / tinyllm / dilithium
     ↓
 Pull Request
     ↓
 develop
 ```
+
+`integration/*` và feature có phạm vi chung của project cũng merge vào `develop` qua Pull Request với cùng yêu cầu review.
 
 Pull Request phải mô tả rõ:
 
@@ -446,7 +507,8 @@ Pull Request phải mô tả rõ:
 
 Trước khi merge:
 
-- Scope của branch phải hoàn thành.
+- Phạm vi thay đổi của Pull Request phải hoàn thành.
+- Với nhánh subsystem, `develop` mới nhất phải được đồng bộ vào nhánh đó và kết quả kết hợp phải được kiểm tra.
 - Required tests phải pass.
 - Conflict với target branch phải được xử lý.
 - Không có regression đã biết trong phạm vi kiểm tra.
@@ -470,7 +532,9 @@ Review phải kiểm tra cả:
 
 Pull Request mặc định được merge bằng merge commit để bảo toàn lịch sử phát triển của branch.
 
-Squash merge chỉ được sử dụng ngoại lệ khi lịch sử commit quá nhiễu nhưng final diff đã được review, đúng phạm vi và đủ điều kiện merge.
+Pull Request từ `riscv`, `tinyllm` hoặc `dilithium` vào `develop` bắt buộc dùng merge commit. Giữ lại nhánh subsystem sau khi merge để tiếp tục phát triển.
+
+Squash merge chỉ được sử dụng ngoại lệ cho short-lived branch khi lịch sử commit quá nhiễu nhưng final diff đã được review, đúng phạm vi và đủ điều kiện merge.
 
 Squash không được dùng để che giấu thay đổi ngoài scope, conflict chưa được xử lý hoặc verification chưa đầy đủ.
 
@@ -628,6 +692,9 @@ main
 develop
 → accepted development state toward next release
 
+riscv / tinyllm / dilithium
+→ owner-accepted subsystem changes awaiting project integration
+
 feature/*
 → work in progress
 ```
@@ -670,6 +737,8 @@ main / hotfix change
         ↓
 develop
 ```
+
+Các subsystem nhận cùng correction khi owner đồng bộ `develop` về nhánh subsystem theo mục 7.
 
 Stable release và development branch không được phép duy trì hai cách sửa khác nhau cho cùng một defect nếu không có technical justification được ghi lại.
 
@@ -758,11 +827,19 @@ ROADMAP defines target
         ↓
 develop
         ↓
-feature/*
+riscv / tinyllm / dilithium
+        ↓
+feature/<subsystem>/<description>
         ↓
 implementation + verification + documentation
         ↓
-Pull Request
+subsystem owner acceptance + merge
+        ↓
+subsystem branch
+        ↓
+sync develop + verification
+        ↓
+Pull Request to develop
         ↓
 review
         ↓
@@ -781,13 +858,21 @@ version tag
 next ROADMAP target
 ```
 
-Feature acceptance và project release là hai cấp độ khác nhau.
+Feature có phạm vi chung của project và integration work xuất phát từ `develop`, thực hiện verification và documentation cần thiết, rồi quay lại `develop` qua Pull Request.
+
+Subsystem acceptance, project integration và project release là ba cấp độ khác nhau.
 
 ```text
-feature/* → develop
+feature/<subsystem>/<description> → subsystem branch
 ```
 
-có nghĩa thay đổi đã được chấp nhận để trở thành một phần của development baseline.
+có nghĩa owner đã chấp nhận thay đổi nội bộ subsystem.
+
+```text
+riscv / tinyllm / dilithium → develop
+```
+
+có nghĩa thay đổi đã qua project review và được chấp nhận vào development baseline chung.
 
 ```text
 develop → main
@@ -804,20 +889,24 @@ Các quy tắc sau là bắt buộc:
 1. Một repository chung cho toàn project.
 2. Chỉ duy trì một `main`.
 3. Chỉ duy trì một `develop`.
-4. Không phát triển trực tiếp trên `main`.
-5. Không phát triển trực tiếp trên `develop`.
-6. Feature phải được phát triển trên short-lived branch.
-7. Feature branch phải xuất phát từ `develop`.
-8. Feature phải merge về `develop` thông qua Pull Request.
-9. Integration branch phải xuất phát từ và quay trở lại `develop`.
-10. `main` chỉ chứa các stable milestone đã được chấp nhận, ngoại trừ bootstrap trước release đầu tiên.
-11. `develop` chỉ được promote lên `main` khi release acceptance criteria đã hoàn thành.
-12. Mỗi stable release phải có version tag.
-13. Development state không được gắn stable version tag.
-14. Hotfix phải xuất phát từ `main`.
-15. Hotfix phải tạo PATCH release.
-16. Hotfix phải được đồng bộ trở lại `develop`.
-17. Thay đổi system-level contract phải có project architect review.
-18. Code cũ phải được review, document và verify trước khi trở thành development baseline.
-19. Implementation và documentation không được cố ý duy trì hai trạng thái mâu thuẫn.
-20. `ROADMAP.md` xác định project đang đi tới đâu; `CHANGELOG.md` ghi lại project đã thay đổi như thế nào; Git tag xác định chính xác stable snapshot đã được phát hành.
+4. Duy trì ba nhánh subsystem `riscv`, `tinyllm` và `dilithium`, được tạo từ `develop` và do owner tương ứng quản lý.
+5. Không force-push hoặc xóa các long-lived branch.
+6. Không phát triển trực tiếp trên `main` hoặc `develop`.
+7. Feature phải được phát triển trên short-lived branch.
+8. Feature nội bộ xuất phát từ và quay trở lại nhánh subsystem tương ứng; owner được tự merge sau khi kiểm tra, không bắt buộc Pull Request.
+9. Feature có phạm vi chung của project xuất phát từ và quay trở lại `develop` qua Pull Request.
+10. Integration branch phải xuất phát từ và quay trở lại `develop` qua Pull Request.
+11. Nhánh subsystem phải được đồng bộ với `develop` và kiểm tra trước khi Pull Request vào `develop` được merge.
+12. Mọi thay đổi vào `develop` phải qua Pull Request và có ít nhất một reviewer khác author.
+13. Pull Request từ nhánh subsystem vào `develop` dùng merge commit và giữ lại nhánh subsystem.
+14. `main` chỉ chứa các stable milestone đã được chấp nhận, ngoại trừ bootstrap trước release đầu tiên.
+15. `develop` chỉ được promote lên `main` khi release acceptance criteria đã hoàn thành.
+16. Mỗi stable release phải có version tag.
+17. Development state không được gắn stable version tag.
+18. Hotfix phải xuất phát từ `main`.
+19. Hotfix phải tạo PATCH release.
+20. Hotfix phải được đồng bộ trở lại `develop` và các nhánh subsystem.
+21. Thay đổi system-level contract phải có project architect review.
+22. Code cũ phải được review, document và verify trước khi trở thành development baseline.
+23. Implementation và documentation không được cố ý duy trì hai trạng thái mâu thuẫn.
+24. `ROADMAP.md` xác định project đang đi tới đâu; `CHANGELOG.md` ghi lại project đã thay đổi như thế nào; Git tag xác định chính xác stable snapshot đã được phát hành.

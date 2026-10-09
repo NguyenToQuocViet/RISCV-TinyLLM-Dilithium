@@ -20,6 +20,7 @@ Giai đoạn bootstrap bao gồm:
 - Khởi tạo cấu trúc source cơ bản.
 - Bảo vệ `main` và `develop` bằng repository ruleset.
 - Tạo `develop` từ trạng thái bootstrap đã được chấp nhận trên `main`.
+- Tạo ba nhánh subsystem `riscv`, `tinyllm` và `dilithium` từ `develop`, với owner tương ứng quản lý feature nội bộ và đưa thay đổi vào `develop` qua Pull Request.
 - Xác định development target và acceptance criteria cho version đầu tiên trước khi bắt đầu feature development.
 
 ## Bootstrap Acceptance Criteria
@@ -30,6 +31,7 @@ Giai đoạn bootstrap hoàn thành khi:
 - Cấu trúc repository cơ bản đã được commit lên `main`.
 - `main` và `develop` không cho phép development trực tiếp.
 - `develop` đã được tạo từ commit bootstrap mới nhất trên `main`.
+- Các nhánh `riscv`, `tinyllm` và `dilithium` đã được tạo từ `develop` và có owner phụ trách.
 - Team đã xác định phạm vi và acceptance criteria của development milestone đầu tiên.
 
 ## Future Milestones
