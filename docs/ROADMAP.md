@@ -8,13 +8,13 @@ Không có trạng thái nào được xem là stable release cho đến khi ho�
 
 ## Current Development Target
 
-Repository đang ở giai đoạn bootstrap trước development milestone đầu tiên.
+Giai đoạn bootstrap đã hoàn thành. Project đang hướng tới development milestone đầu tiên.
 
-Mục tiêu hiện tại là thiết lập repository structure, development workflow và shared branch baseline để các subsystem có thể bắt đầu phát triển độc lập.
+Mục tiêu hiện tại là phát triển milestone đầu tiên theo phạm vi và acceptance criteria đã được team xác định, sử dụng `develop` làm shared development baseline.
 
 ## Bootstrap Scope
 
-Giai đoạn bootstrap bao gồm:
+Giai đoạn bootstrap đã bao gồm:
 
 - Chấp nhận project management workflow.
 - Khởi tạo cấu trúc source cơ bản.
@@ -25,7 +25,7 @@ Giai đoạn bootstrap bao gồm:
 
 ## Bootstrap Acceptance Criteria
 
-Giai đoạn bootstrap hoàn thành khi:
+Các acceptance criteria của giai đoạn bootstrap đã được đáp ứng:
 
 - `PROJECT_MANAGEMENT.md` đã được team chấp nhận.
 - Cấu trúc repository cơ bản đã được commit lên `main`.
@@ -34,8 +34,12 @@ Giai đoạn bootstrap hoàn thành khi:
 - Các nhánh `riscv`, `tinyllm` và `dilithium` đã được tạo từ `develop` và có owner phụ trách.
 - Team đã xác định phạm vi và acceptance criteria của development milestone đầu tiên.
 
+## First Development Milestone
+
+Team đã xác định phạm vi và acceptance criteria của development milestone đầu tiên.
+
+Chi tiết version, target scope và acceptance criteria của milestone này chưa được ghi trong tài liệu hiện tại. Các nội dung đã được team chấp nhận cần được cập nhật tại đây để theo dõi tiến độ và làm căn cứ cho verification và release.
+
 ## Future Milestones
 
-Development milestone đầu tiên chưa được xác định.
-
-Version, target scope và acceptance criteria tương ứng phải được team chấp nhận và cập nhật tại đây trước khi các feature branch của milestone đó được phát triển.
+Các milestone tiếp theo được cập nhật khi team thống nhất version, target scope và acceptance criteria tương ứng.
