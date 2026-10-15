@@ -1,15 +1,89 @@
 # Five-Stage Baseline Core
 
-**Status:** Accepted
-**Owner:** RISC-V subsystem owner
+**Status:** Accepted — BASE R1 approved by Nguyễn Tô Quốc Việt on 2026-10-15.
+**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
+**Contract revision:** R1 / 2026-10-15 (same revision as the CI and IRQ contracts).
+
+**Decision record:** Việt approved `BASE → BASE_CI → BASE_CI_IRQ`, BASE with
+37 integer operations plus FENCE, and one common elaboration-selected top.
+This supersedes the 2026-10-03 decision to include CSR/MRET and IRQ in BASE.
+Their selected semantics move to the [IRQ extension](external-interrupt-extension.md);
+the [CI extension](asynchronous-accelerator-control-extension.md) retains ABI v1.
+Preserved baseline behavior retains its prior owner selection. Việt completed
+the BASE R1 review and accepted this contract on 2026-10-15. The CI and IRQ
+contracts remain Proposed pending their own final owner review; BASE acceptance
+does not accept those extensions or shared SoC implementation. Record this
+snapshot in version control before functional implementation.
+
+These are CPU-boundary contracts, not RTL evidence or an accepted SoC design.
+Shared platform requirements remain subject to project/IP-owner review. AI
+assistance in specification restructuring is disclosed at PR/commit level under
+[AGENT_POLICY](../AGENT_POLICY.md).
 
 ## Purpose and boundary
 
-This design defines a five-stage processor core baseline without a cache or branch predictor. The baseline must execute programs with a standalone memory/test harness and be verified at the core boundary. SoC integration, AXI integration, and execution on FPGA are outside this baseline's completion boundary.
+This document owns the BASE five-stage CPU without a cache or branch predictor.
+BASE supports 37 integer operations and FENCE. CSR/MRET, CI, IRQ entry/drain
+and interrupt-specific PC state are absent. Ordinary aligned load/store can
+access mapped MMIO under the environment contract; an accelerator-management
+MMIO frontend is not a BASE prerequisite.
 
-The baseline states its supported instruction set and architectural limitations explicitly. It does not claim full RV32I compliance because trap, exception, and misalignment handling remain outside its implemented scope.
+BASE executes and is verified with a standalone core-level memory/test harness.
+AXI/DMA adaptation, actual accelerator IP, SoC integration and FPGA operation
+have separate gates. BASE has two functional OBI memory ports and no DMA engine;
+inert extension pins on the common top do not create an active extension path.
+This is a bounded ISA subset, not full RV32I compliance. Firmware/tests stay
+within the selected profile; no synchronous exception, illegal-instruction,
+access-fault, ECALL/EBREAK or misalignment handling is added here.
 
 The reset PC is the fixed constant `PC_RESET_VEC = 32'h0000_0000` defined in the RISC-V package, not a core instance parameter. Address `0x0000_0000` is the first word of the core-level harness's code region.
+
+## Build profiles and contract composition
+
+This is the only normative profile matrix in the R1 bundle. `CORE_PROFILE`
+is selected at elaboration, defaults to BASE, and has the following values.
+Any other value must fail configuration/elaboration checks.
+
+| `CORE_PROFILE` | Parent | Added behavior | Operation count | Owner document |
+| --- | --- | --- | ---: | --- |
+| `BASE = 0` | None | 37 integer operations + FENCE | 38 | This document |
+| `BASE_CI = 1` | BASE | ACC_SUBMIT, ACC_QUERY, ACC_ACK | 41 | [CI extension](asynchronous-accelerator-control-extension.md) |
+| `BASE_CI_IRQ = 2` | BASE_CI | Six CSR operations, MRET, external IRQ handling | 48 | [IRQ extension](external-interrupt-extension.md) |
+
+IRQ is an architectural capability separate from CI; an IRQ-only build is not
+in the supported R1 set. Firmware and test selection must match the hardware
+profile. There is no runtime feature discovery or hardware-profile toggle.
+
+One common top keeps the same port names, widths and directions in all builds:
+`clk`, synchronous `rst_n`, both OBI ports, the [CI command port](asynchronous-accelerator-control-extension.md#7-native-cpumanager-control-port)
+and `irq_external`. Disabled feature logic must not be instantiated; a filelist
+or a masked/tied-low IRQ alone does not prove hardware absence. In BASE,
+`ci_cmd_valid`, `ci_cmd_op`, `ci_cmd_target` and `ci_cmd_desc` are tied to zero;
+`ci_cmd_ready`/`ci_cmd_result` are ignored. BASE and BASE_CI ignore
+`irq_external`; it cannot affect PC, admission or retirement. They contain no
+IRQ CSR bank, drain/return ownership or `resume_pc` storage. Enabled port
+behavior is defined in its owning extension.
+
+| Behavior | BASE | BASE_CI override | BASE_CI_IRQ override |
+| --- | --- | --- | --- |
+| Decode / source use | Integer operations and FENCE | CI op/operands/use qualifiers | CSR intents/operands and MRET |
+| Pipeline metadata | BASE data/control | Prepared CI op/target/pointer through WB | CSR address/intents/operand through WB |
+| WB result | ALU/link or formatted load | CI result on command handshake | CSR old value at retirement |
+| WB hold / retirement | Unresolved MEM wait holds WB | CI-only WB wait; sole-live instruction, no data outstanding | Same CI rule; CSR/MRET WB effects |
+| Redirect / admission | EX branch/jump and ordinary hazards | Serialized CI excludes younger admission | Trap/return redirect, drain/recheck, serialized CSR/MRET |
+| Reset | BASE valid/control/OBI ownership | Also CI serialization/command ownership | Also IRQ/CSR-control ownership and interrupt enables |
+
+The [serialized-control protocol](asynchronous-accelerator-control-extension.md#61-serialized-control-protocol)
+is defined once in the CI contract and reused for CSR/MRET by the IRQ contract.
+It is inactive in BASE. Each extension overrides only its stated cases;
+ordinary instructions and every unspecified parent requirement are inherited.
+
+Polling and interrupt are firmware completion modes, not hardware profiles.
+BASE_CI uses polling. BASE_CI_IRQ permits either mode, selected once when the
+driver initializes after coordinated reset before any job/record is live.
+Polling-versus-IRQ comparisons use the same BASE_CI_IRQ hardware build.
+The accelerator-manager MMIO comparison frontend is deferred and is not a
+prerequisite for any profile above.
 
 ## Reset architecture
 
@@ -37,7 +111,14 @@ The baseline supports the following 37 RV32I integer instructions when legally e
 - Immediate arithmetic and logic: `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`, `ANDI`, `SLLI`, `SRLI`, `SRAI`.
 - Register arithmetic and logic: `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, `AND`.
 
-`FENCE`, `ECALL`, `EBREAK`, privileged instructions, ISA extensions, unsupported or illegal encodings, and misaligned instruction or data accesses are outside this baseline's contract and scope. Their behavior is not specified, and this baseline defines no handling mechanism for them.
+FENCE is the additional operation, for 38 supported operations in BASE.
+Execution is RV32, little-endian, with `IALIGN=32`. FENCE uses ordinary pipeline
+flow and the conservative memory-ordering contract below.
+
+CSR/MRET, CI, ECALL, EBREAK, WFI, counters, unlisted extensions, unsupported or
+illegal encodings and misaligned accesses are outside BASE. No trap/emulation
+mechanism is specified for them. Enabled extensions add only their listed
+operations and behavior.
 
 ## Pipeline organization
 
@@ -82,6 +163,7 @@ ID produces explicit source identifiers and semantic-use qualifiers. Their requi
 | Store | 1 | 1 |
 | OP-IMM | 1 | 0 |
 | OP | 1 | 1 |
+| `FENCE` | 0 | 0 |
 
 Hazard detection in ID uses these semantic qualifiers with `rs1_id` and `rs2_id`; encoded fields that are not semantically consumed cannot create a dependency. `rs1_used` and `rs2_used` are required ID/hazard metadata but are not mandatory pipeline state beyond ID. An implementation may carry them farther, but baseline correctness does not require it. EX forwarding may compare the carried source identifiers against producer destinations without the qualifiers because an unused source value is not selected or consumed by the already-decoded EX datapath.
 
@@ -176,6 +258,11 @@ Integer register operations decode with `operand1=fwd_rs1` and `operand2=fwd_rs2
 
 All nineteen integer ALU instructions decode `reg_write=1`, `wb_from_mem=0`, `mem_en=0`, and no redirect. `SRA` and `SRAI` are signed arithmetic right shifts. Addition and subtraction use 32-bit modulo arithmetic and do not trap on overflow. ID owns encoding legality and semantic operation selection; EX executes the selected `alu_op` without raw-instruction re-decode. The physical `alu_op` encoding remains an implementation choice.
 
+FENCE has no RF write, data request, EX redirect or meaningful ALU result.
+It follows ordinary pipeline flow as a live non-writing instruction. Encoded
+`rs1`/`rd` do not create dependencies or RF writes; predecessor/successor and
+`fm` fields do not weaken its conservative ordering contract.
+
 ### ID/EX boundary
 
 ID/EX carries only the semantic state required for the conventional five-stage EX datapath and for later-stage intent to survive without raw-instruction re-decode. Its required conceptual state is:
@@ -208,6 +295,8 @@ Branch conditions use the forwarded architectural sources directly: `BEQ` and `B
 
 Execution result and redirect target are distinct values. In particular, `JAL` and `JALR` produce architectural result `pc + 4` while redirecting to their separately computed target. EX conceptually produces an execution or architectural result, effective address and final store data when applicable, and `redirect_fire` with `redirect_target`. This semantic contract does not require physically separate ALU, comparator, target-adder, or link-adder hardware; logic may be shared while preserving the five-stage EX boundary and the defined results.
 
+FENCE performs neither a data request nor an EX control-flow redirect.
+
 ### EX/MEM boundary and data-request ownership
 
 A load or store must first become registered EX/MEM state before the data port may present its request. There is no combinational path from current EX forwarding, operand selection, or ALU output to data OBI. EX computes the result, effective address, and final store data; the clocked EX/MEM boundary then makes that instruction the MEM owner, and MEM derives the OBI request only from this held registered state.
@@ -222,19 +311,23 @@ rd, reg_write
 mem_en, mem_write, mem_type
 ```
 
-`ex_result` is the architectural ALU, `LUI`, or `AUIPC` result for the corresponding instruction, the `pc + 4` link value for `JAL` or `JALR`, and the effective byte address for a load or store. `store_data` is the final forwarded `rs2` value. `pc`, `imm`, source identifiers and values, operand selectors, `alu_op`, branch or jump control, and redirect target have completed their required role in EX and need not cross EX/MEM.
+`ex_result` is the architectural ALU, `LUI`, or `AUIPC` result for the corresponding instruction, the `pc + 4` link value for `JAL` or `JALR`, and the effective byte address for a load or store. `store_data` is the final forwarded `rs2` value. `pc`, `imm`, source identifiers and values, operand selectors, `alu_op`, branch or jump control, and EX redirect target have completed their required role in EX and need not cross EX/MEM.
 
 MEM may combinationally derive `addr`, `be`, `wdata`, `we`, and `req` from the held EX/MEM state and separate data-port protocol state. Conceptually, a request is presented only for a valid memory instruction whose address phase has not yet been accepted. It is not simply `valid && mem_en`: after `data_request_fire`, the accepted instruction must not issue a duplicate request. Request-accepted and outstanding ownership are control-plane state separate from the semantic `mem_en`, `mem_write`, and `mem_type` fields.
 
 While a request waits for `gnt`, EX/MEM state and every contract-defined OBI request field remain stable. After `data_request_fire`, `req` for that transaction is no longer issued, but the same instruction continues to own MEM until `data_response_fire`. EX/MEM may advance only on that expected completion; non-memory instructions are not subject to this transaction wait.
 
-The baseline keeps conventional late writeback-result selection. Non-load register-writing instructions carry `ex_result` toward WB. MEM forms a formatted `load_result` for a completed load, and MEM/WB carries compact selection state equivalent to `wb_from_mem`, which is one only for a load. WB selects:
+The baseline keeps late writeback-result selection. Ordinary register-writing
+instructions carry `ex_result`; MEM formats a completed load into `load_result`.
+MEM/WB preserves result selection through WB:
 
 ```text
 wb_data = wb_from_mem ? load_result : ex_result
 ```
 
-Thus the load response path in MEM ends with lane selection and sign or zero extension before the MEM/WB register; it does not add a load-versus-non-load result mux in MEM. The accepted trade-off is that the WB result mux remains on the MEM/WB-to-EX forwarding path. Moving result normalization earlier is a later localized optimization only if timing evidence justifies it.
+Load lane selection and sign/zero extension occur before MEM/WB. Forwarding
+and WB-to-ID bypass use this selected architectural value. Moving result
+normalization earlier requires a later contract update with timing evidence.
 
 ### Redirect event and pipeline recovery
 
@@ -244,7 +337,7 @@ On a redirect edge, the control-flow instruction advances normally and every old
 
 ### Forwarding and load-use hazards
 
-Every architectural source operand consumed by an instruction observes the youngest older producer whose result is available. The forwarding priority is `EX/MEM ready result > MEM/WB writeback result > register-file value`. A producer is ineligible when its pipeline state is invalid, it does not write a register, or its destination is `x0`. A load is not an EX/MEM forwarding source because its data does not exist until its memory response completes; it becomes eligible from MEM/WB after that response.
+Every architectural source operand consumed by an instruction observes the youngest older producer whose result is available. The forwarding priority is `EX/MEM ready result > MEM/WB writeback result > register-file value`. A producer is ineligible when its pipeline state is invalid, it does not write a register, or its destination is `x0`. A load is not an EX/MEM forwarding source because its data does not exist until its memory response completes; it becomes eligible from MEM/WB after that response. Forwarding and WB-to-ID selection always use the selected architectural `wb_data`, as defined by the selected profile.
 
 Forwarded source values cover ALU `rs1`, ALU `rs2` when the instruction does not select an immediate, both branch-comparison operands, the `JALR` base, the load/store effective-address base, and store write data. If ID reads a register that WB retires on the same cycle, ID observes the selected `wb_data` through the explicit WB-to-ID bypass defined below.
 
@@ -275,23 +368,32 @@ This is an explicit combinational WB-to-ID bypass. Correctness does not depend o
 
 A load-use hazard exists when EX contains a valid load with a nonzero destination and the valid younger instruction in ID actually consumes that destination as a source. The load advances to MEM, the dependent instruction and IF/ID are held, Fetch Buffer delivery is not consumed, and invalid state is inserted into ID/EX for one cycle. Source-use qualification prevents dependencies on encoded register fields that the consumer does not semantically read.
 
-The load-use bubble and variable memory wait are separate mechanisms. After the initial bubble, a load that lacks an expected response holds MEM and the dependent instruction remains held by the MEM-wait rule. On the `data_response_fire` edge, the load advances into MEM/WB, the dependent instruction may advance into EX, and its operand is supplied by MEM/WB forwarding.
+The load-use bubble and variable memory wait are separate mechanisms. After the initial bubble, a load that lacks an expected response holds MEM and the dependent ordinary instruction remains held by the MEM-wait rule. On the `data_response_fire` edge, the load advances into MEM/WB, the dependent instruction may advance into EX, and its operand is supplied by MEM/WB forwarding.
 
 ### Pipeline-control priority
 
-Next-state arbitration follows this priority:
+Next-state arbitration follows this BASE priority:
 
 1. Synchronous reset.
 2. Unresolved MEM wait.
-3. `redirect_fire`.
+3. EX branch/jump `redirect_fire`.
 4. Load-use hazard.
-5. Normal advance and IF availability.
+5. Normal advance and qualified IF availability.
 
 Reset invalidates pipeline, Fetch Buffer ownership/control, and OBI ownership state and suppresses every architectural side effect. An unresolved MEM wait exists when a valid load or store owns MEM and its data transaction has not completed with `data_response_fire`. It holds IF/ID, ID/EX, EX/MEM, and MEM/WB; suppresses new fetch consumption and every pipeline retirement; and prevents any pipeline instruction from advancing. If `data_response_fire` occurs in the current cycle, the MEM wait is resolved for that edge's next-state arbitration. The held WB instruction may then retire, the completed memory instruction may replace it in MEM/WB, and a redirect or load-use event behind MEM may be processed without an extra release bubble.
 
-This baseline deliberately propagates the unresolved MEM wait through WB. Allowing an older WB instruction to retire early would neither release the younger stages nor improve single-issue throughput or memory bandwidth, but would require preserving a forwarding value after its producer left MEM/WB. The accepted cost is delayed retirement of an older instruction for the duration of a younger memory wait. This policy must be revisited if precise trap or interrupt semantics, a decoupled retirement mechanism, or another feature makes early architectural retirement observable or necessary.
+This baseline deliberately propagates an unresolved MEM wait through WB.
+Retiring an older WB instruction early would require preserving its forwarding
+value after it left MEM/WB without releasing younger stages. BASE accepts
+delayed retirement for the duration of that memory wait. Extensions must state
+any additional hold/entry rules explicitly rather than silently changing this
+forwarding and memory-ownership policy.
 
-If no higher-priority event blocks it, redirect preserves older work and the redirecting instruction while invalidating all younger work. Redirect takes priority over a simultaneous load-use indication because the ID instruction is wrong-path. If neither applies, load-use performs the bubble behavior defined above. Otherwise valid instructions advance normally; lack of a `READY` fetch instruction prevents a new IF/ID valid entry but does not stop older stages from draining.
+If no higher-priority event blocks it, EX redirect preserves older work and
+the redirecting instruction and invalidates younger work. Redirect wins over a
+simultaneous load-use indication because ID is wrong-path. Otherwise the
+accepted load-use bubble applies. IF availability gates new IF/ID delivery,
+not the draining of older instructions.
 
 The per-stage next state follows the first applicable row below. “Capture the
 output from current X” means capture the combinational stage output produced by
@@ -307,14 +409,19 @@ ID/EX captures ID output derived from current IF/ID.
 | Unresolved MEM wait | Hold | Hold | Hold | Hold | `0` |
 | `redirect_fire` | Capture MEM output from current EX/MEM | Capture EX output from redirecting current ID/EX | Invalid | Invalid | Current MEM/WB valid |
 | Load-use hazard | Capture MEM output from current EX/MEM | Capture EX output from load in current ID/EX | Invalid bubble | Hold dependent instruction | Current MEM/WB valid |
-| Normal / IF availability | Capture MEM output from current EX/MEM | Capture EX output from current ID/EX | Capture ID output from current IF/ID | Capture oldest `READY`, otherwise invalid | Current MEM/WB valid |
+| Normal / IF availability | Capture MEM output from current EX/MEM | Capture EX output from current ID/EX | Capture ID output from current IF/ID | Capture oldest `READY` only if delivery is allowed, otherwise invalid | Current MEM/WB valid |
 
-`data_response_fire` makes the MEM wait resolved for the current edge, so arbitration continues to redirect, load-use, or normal behavior. On a response-plus-redirect edge, the old WB instruction retires, the completed memory instruction enters MEM/WB, the redirecting EX instruction enters EX/MEM, and both younger pipeline entries become invalid. On a response-plus-load-use edge, the old WB instruction retires, the completed memory instruction enters MEM/WB, the load in EX enters EX/MEM, ID/EX receives a bubble, and the dependent IF/ID instruction remains held.
+`data_response_fire` makes the MEM wait resolved for the current edge, so
+arbitration continues through redirect, load-use, or normal behavior. On a response-plus-redirect edge, old WB retires, the completed
+memory instruction enters MEM/WB, redirecting EX enters EX/MEM, and both
+younger pipeline entries become invalid. On a response-plus-load-use edge,
+old WB retires, completed MEM enters MEM/WB, the load in EX enters EX/MEM,
+ID/EX receives a bubble, and dependent IF/ID remains held.
 
-During a load-use hazard, IF/ID does not consume a new instruction, but the
-Prefetch Unit continues normal response capture, `READY` creation, PC
-allocation, and request issue subject to Fetch Buffer capacity,
-`OBI_OUTSTANDING_MAX=1`, and the registered-MEM-occupancy rule below. During an
+During a load-use hazard, IF/ID does not consume a new instruction. Response
+capture and required `READY` creation continue. Proactive allocation and issue
+also continue subject to Fetch Buffer capacity, `OBI_OUTSTANDING_MAX=1`, and the registered
+MEM-occupancy rule below. During an
 unresolved MEM wait, proactive frontend progress is frozen: the Prefetch Unit
 does not allocate a new PC, consume a `READY` entry into IF/ID, or first-present
 an uncommitted queued request.
@@ -340,7 +447,11 @@ architectural and proactive fetch progress, not protocol obligations.
 
 ### Architectural side effects
 
-Every architectural or externally visible side effect requires a valid instruction that owns the responsible pipeline stage. `wb_retire_fire` means that the current live instruction leaves the terminal WB stage on this edge; it is distinct from any particular architectural side effect. Conceptually:
+Every instruction-originated architectural or externally visible side effect
+requires a valid instruction that owns the responsible pipeline stage.
+Reset follows its separate control-state contract. `wb_retire_fire` means that the current
+live instruction leaves the terminal WB stage on this edge; it is distinct
+from any particular architectural side effect. Conceptually:
 
 ```text
 wb_retire_fire = current MEM/WB.valid
@@ -418,6 +529,46 @@ The baseline selects these OBI properties:
 `BE_FULL=0` still permits nonzero contiguous byte-enable patterns. The core's aligned-access restriction is a separate architectural contract. `OBI_OUTSTANDING_MAX=1` on the instruction link and `DATA_OUTSTANDING_MAX=1` on the data link are manager/subordinate link contracts, not OBI properties.
 
 The following optional signals are not present at the five-stage baseline boundary: `auser`, `wuser`, `ruser`, `aid`, `rid`, `mid`, `prot`, `memtype`, `dbg`, `atop`, `err`, `exokay`, `reqpar`, `gntpar`, `rvalidpar`, `rreadypar`, `achk`, and `rchk`. Consequently, the baseline has no bus-error response, transaction or manager identifiers, privilege or memory-type attributes, debug marker, atomic or exclusive signaling, user metadata, or interface-integrity signaling. Legal in-range accesses to the core-level harness are therefore required to complete without a bus error.
+
+### MMIO, FENCE, and integration obligations
+
+MMIO uses the ordinary aligned load/store data port. The CPU has no data
+cache, write buffer, speculative data access, or device-specific opcode. A
+live registered MEM owner presents each access once; younger accesses cannot
+pass an incomplete transaction. Supported byte lanes remain the load/store
+contract below, while a peripheral's accepted widths and register semantics
+belong to its system-level contract. Firmware must use those permitted widths.
+
+The selected environment contract requires each expected data response to be
+a completion/ordering boundary. A store's addressed effect must be completed
+or guaranteed observable before a subsequent CPU data transaction is observed
+in the applicable memory/I/O domain, including accelerator/DMA observers of
+published buffers. Merely accepting a write into an adapter buffer is
+insufficient if a later access could overtake its effect. Loads
+return the addressed completed access. The core waits for this response,
+not just `gnt`, before allowing another data transaction.
+
+`FENCE` conservatively enforces IORW-to-IORW ordering, even when a narrower
+set is encoded. With one outstanding data transaction and the above response
+semantics, older accesses have completed before a younger access can issue;
+`FENCE` needs no extra bus transaction or serialized-control ownership. It still
+passes through the pipeline as a live non-writing instruction. No memory-type
+sideband is required because all data accesses receive the stronger ordering.
+This behavior must be revisited if a cache, posted store, multiple outstanding
+requests, or early bridge acknowledgement is introduced.
+
+A mapped MMIO operation completes the addressed register access according to
+its peripheral contract, not an independently running computation. A responder
+must not hold a normal control access until a long accelerator job finishes.
+Peripheral register maps, job interfaces and data movement are not chosen by
+BASE. CI job control and optional completion IRQ belong to the extensions.
+
+Integration must preserve byte lanes, response matching, one-outstanding limits
+and data completion/ordering. Executable fetch storage must remain accessible
+and side-effect-free, including wrong-path/prefetch requests. Map/AXI adaptation,
+external error policy and system-level clock/reset recovery require project
+review. No CPU access-fault pin or PMA/range checker is added by this contract.
+FENCE orders CPU accesses; it does not complete an independent DMA engine.
 
 ### OBI response validity and reset
 
@@ -534,11 +685,10 @@ For a load or store, MEM presents the request only from registered EX/MEM state 
 
 WB has no independent downstream backpressure in the baseline, but it is held by the unresolved-MEM interlock. If an older instruction occupies WB while the data transaction waits, its MEM/WB valid and payload remain stable and it does not retire repeatedly. When `data_response_fire` occurs, that older instruction retires on the same edge that the completed memory instruction advances from MEM into WB. Consequently, MEM/WB is the storage reserved for the response-completed instruction and no separate data-response FIFO or buffer exists. A later design with multiple data transactions, independently returning cache responses, or WB backpressure must revisit data-side readiness and response buffering. The subordinate may apply an accepted store at any point after the request transfer permitted by its interface contract, including before returning its response. The core assumes neither an exact physical-memory update cycle nor rollback after the transfer.
 
-The separation between store acceptance and older WB retirement is specific to
-this baseline, which has no precise exception, trap, interrupt, or debug
-retirement semantics. Revisit this policy, the full-pipeline MEM-wait freeze,
-and reset/recovery behavior before adding any of those semantics or any stronger
-rollback requirement.
+Store acceptance remains separate from older WB retirement. Before adding
+synchronous exceptions, early interrupt entry, debug retirement or rollback,
+revisit this policy, full-MEM freeze and reset/recovery. The selected IRQ
+extension instead drains surviving work without rollback.
 
 ### MEM data formatting and MEM/WB boundary
 
@@ -581,17 +731,19 @@ wb_from_mem
 rd, reg_write
 ```
 
-`wb_from_mem=1` only for a load and selects `load_result`; every other instruction uses `wb_from_mem=0`, so a register-writing non-load selects `ex_result`. Every live instruction leaving MEM, including a branch or completed store, passes through MEM/WB with `valid=1`; instructions that do not write the register file carry `reg_write=0`. Payload not selected or consumed by that instruction is unspecified. Memory controls, store data, and data-port protocol ownership end in MEM and do not cross MEM/WB.
+`wb_from_mem=1` only for a load and selects `load_result`; a register-writing
+non-load selects `ex_result`. Every live instruction leaving MEM, including a
+branch, response-completed store or FENCE, passes through MEM/WB with `valid=1`.
+Non-writing instructions carry `reg_write=0`; unused payload is unspecified.
+Memory controls, store data and data-port protocol ownership end in MEM.
 
 ### Stale instruction responses after redirect
 
-When `redirect_fire` occurs, every younger Fetch Buffer entry allocated before
-the redirect is stale and wrong-path, regardless of whether its stored PC
-happens to equal `redirect_target`. No such entry is reused based on a matching
-PC. The Fetch Controller Unit selects `redirect_target` as the new next fetch
-address and always allocates it as a fresh `QUEUED` entry with new allocation
-ownership. Redirect controls architectural validity but does not undo an OBI
-handshake that occurs on the same edge:
+An EX branch/jump `redirect_fire` makes every younger Fetch Buffer entry
+allocated before it stale, regardless of matching PC. No stale entry is reused
+by matching PC. The Fetch Controller selects the target as next fetch address
+and allocates it freshly as QUEUED with new ownership. Recovery does not
+undo an OBI handshake that occurs on the same edge:
 
 - A wrong-path `READY` entry is freed and cannot create IF/ID valid, even if IF/ID would otherwise accept it on that edge.
 - A wrong-path `OUTSTANDING` entry for which `instr_response_fire` occurs on that edge accepts and discards the expected response, then becomes `FREE` rather than `READY`.
@@ -602,7 +754,7 @@ A protocol-committed queued request that is not granted on the redirect edge rem
 
 With `OBI_OUTSTANDING_MAX=1`, the fresh redirected fetch may occupy a slot reclaimed from a dropped, uncommitted queued entry but cannot become a second outstanding transaction. It remains queued until the stale outstanding transaction has been drained and the instruction-memory model can accept the redirected request. This is a consequence of the current memory configuration, not a permanent restriction of the three-entry Fetch Buffer architecture.
 
-The baseline has no `redirect_pending` state. With three Fetch Buffer entries, at most one entry can be `OUTSTANDING` and at most one other entry can be the single protocol-committed queued request currently presented on OBI. The remaining entry is already free or can be reclaimed from stale `READY` or unpresented `QUEUED` state on redirect. The Fetch Controller therefore allocates the redirect target through the normal selected-PC path as a fresh `QUEUED` entry on the redirect edge, then advances its registered next-fetch state to the following sequential PC. The target request can first be presented in the following cycle; there is no combinational EX-to-OBI request path.
+The baseline has no `redirect_pending` state. With three Fetch Buffer entries, at most one entry can be `OUTSTANDING` and at most one other entry can be the single protocol-committed queued request currently presented on OBI. The remaining entry is already free or can be reclaimed from stale `READY` or unpresented `QUEUED` state on redirect. The Fetch Controller therefore allocates the EX redirect target through its registered PC path as a fresh `QUEUED` entry on the redirect edge, then advances its registered next-fetch state to the following sequential PC. The target request can first be presented in the following cycle if ordinary issue conditions allow it; there is no combinational redirect-to-OBI request path.
 
 Request/outstanding ownership and killed state are control-plane state and are reset. Fetch-entry PC payload is not reset and has meaning only while its entry is valid. Constant instruction-side `rready=1'b1` drains a killed expected response on `instr_response_fire`; stale work cannot block forward progress merely because it will be discarded. A future configuration that cannot guarantee a reclaimable entry on redirect must revisit whether pending-target state is required.
 
@@ -620,12 +772,25 @@ address independently of `gnt`; an out-of-range request immediately fails the
 test instead of being left waiting for grant. This is a harness/program
 requirement and does not add a range checker or exception mechanism to the core.
 
+MMIO test fixtures may decode documented test-local addresses in the data
+region, disjoint from ordinary fixture data and TEST_STATUS. They check
+peripheral load/store side effects and ordering. No IRQ source, pending/ACK
+controller or accelerator-management frontend is required for BASE acceptance.
+Fixture addresses are not a SoC register map or real DMA implementation.
+
 These testbench responders verify core behavior, not DDR timing or performance. The later system may place code and data in distinct regions of the same physical DDR; its memory map, OBI-to-AXI path, and shared arbitration belong to the project-level integration contract.
 
 ## Verification strategy and ownership
 
 Baseline verification uses a layered, self-checking oracle rather than requiring
 a full instruction-set simulator or retire-stream comparison.
+
+BASE acceptance also checks the common-top configuration contract: all CI
+outputs remain tied off, varying unused ci_cmd_ready/ci_cmd_result or
+irq_external cannot stall/redirect/change execution, and CI/CSR/IRQ feature
+logic/state is absent in the elaborated design. Unsupported CORE_PROFILE
+values must fail configuration/elaboration checks. Extended builds apply
+their own enabled-port rules and inherit the remaining BASE checks.
 
 The primary directed layer uses Python, cocotb, and pytest. Directed instruction
 tests calculate expected results independently from this semantic contract; they
@@ -635,7 +800,7 @@ Pipeline and OBI monitors combine testbench observation with SystemVerilog
 assertions for temporal and protocol invariants. Their scope includes pipeline
 valid, hold, bubble, and flush behavior; request stability through grant;
 outstanding limits and transaction ordering; and the prohibition on any
-architectural or externally visible side effect from invalid state.
+instruction-originated side effect from invalid state.
 
 Short integration programs check final register and data-memory signatures and
 use the [harness completion and timeout contract](#harness-completion-and-timeout-contract)
@@ -643,15 +808,16 @@ below.
 
 A RISC-V architectural or ISA test suite provides an additional independent
 architectural-correctness layer. The selected tests and harness adaptation must
-respect the explicitly supported 37-instruction subset and the baseline's
-unsupported exception, trap, privileged, and misalignment behavior. Passing
+respect the 37 integer operations plus FENCE and BASE's unsupported
+exception, privileged, extension and misalignment behavior. Passing
 that suite does not establish full RV32I compliance and does not replace
 microarchitectural stress tests for pipeline, redirect, stall, forwarding,
 reset, or OBI concurrency behavior.
 
-Mandatory directed verification is organized around six scenario groups:
+Mandatory directed verification is organized around seven scenario groups:
 
-1. **Instruction semantics.** Cover all 37 supported instructions, immediate
+1. **Integer instruction semantics.** Cover all 37 supported integer
+   instructions, immediate
    sign extension, signed and unsigned comparison, shift amounts 0, 1, and 31,
    `x0` behavior, `JALR` bit-zero clearing, forward and backward control-flow
    targets, every legal byte and halfword lane, and load sign and zero
@@ -688,6 +854,12 @@ Mandatory directed verification is organized around six scenario groups:
    both subordinates flush pre-reset protocol state, that invalid state creates
    no side effect, and that the core does not treat a store accepted before
    reset as rolled back.
+7. **MMIO and conservative FENCE.** Use an independently specified emulated
+   peripheral to check one side effect per valid MMIO access, response-based
+   completion and CPU program-order observation. Cover predecessor/successor
+   variants and ignored rs1/rd/fm fields: FENCE has no RF write, extra data-port
+   transaction or serialized-control admission. Neither external IRQ nor a
+   real accelerator-management frontend is part of this BASE scenario group.
 
 Every semantic distinction and simultaneous-event case named above requires at
 least one directed self-checking test. The contract does not require the full
@@ -838,4 +1010,14 @@ operation, timing closure, area, or power.
 
 ## Contract closure
 
-None within the five-stage baseline scope.
+The owner-selected BASE scope is complete at the CPU/test-harness boundary.
+Extension requirements are owned by their linked contracts and are not BASE
+acceptance obligations. BASE R1 final owner review is complete; the accepted
+snapshot must be recorded in version control. Project milestone scope/acceptance
+must be recorded in the root ROADMAP before feature implementation under the
+project workflow.
+
+Real shared-memory publication, DMA/reset recovery, accelerator descriptors,
+register maps and SoC integration remain project/IP-owner responsibilities.
+These dependencies do not require inventing a real-IP implementation to design
+or verify BASE with its specified harness. No RTL capability is claimed here.
