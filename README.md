@@ -14,6 +14,11 @@ The system consists of three main components:
 - TinyLLM hardware accelerator
 - Dilithium hardware accelerator
 
+## Target Platform
+
+The target platform for the complete project is the VCU118 FPGA board.
+The project aims to generate a bitstream, program the board, and demonstrate the integrated SoC on this platform.
+
 ## Status
 
 Project under active development.
