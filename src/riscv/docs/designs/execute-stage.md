@@ -285,6 +285,13 @@ low five shift bits but different upper bits. For example:
 | SRL(0x80000000, 0x00000001) | 0x40000000 |
 | SLL(0x00000001, 0x00000020) | 0x00000001 |
 
+ALU-related verification uses only 0/1 inputs, both in isolation and at EX
+integration; X/Z tests and dedicated unknown-input checkers are outside scope.
+Test all six unassigned binary selectors against the fallback in the
+[ALU contract](alu.md#4-input-validity-and-exceptional-conditions). At EX
+integration, a valid instruction using one of those codes must cause checker
+FAIL; arbitrary selector payload in an invalid entry must not trigger that check.
+
 **Complete EX feature:** verify leaf contracts and their composition. Important
 cases include conflicting forwarding producers, x0, unavailable EX/MEM loads,
 both branch operands forwarded, simultaneous compare/target generation,
@@ -329,12 +336,13 @@ yet constitute a complete pin/encoding specification for every leaf.
 
 | Remaining choice | Scope and effect | Owner / next recommendation |
 | --- | --- | --- |
-| `alu_op` representation | Width, exact symbolic names, numeric codes and location of the shared definition must agree between ID and ALU | Việt; recommend a shared typed `alu_op_t` enum with the ten semantic cases, rather than passing raw funct bits. This remains a proposal |
-| Unsupported ALU selector values | Must determine the input precondition, output expectation and checker obligation before freezing ALU RTL/tests; no CPU trap is implied | Việt; resolve together with the representation, without adding an ISA operation or silently treating another code as ADD |
+| `alu_op` representation | Resolved for ALU; ID and ALU consume the same shared definition | See the accepted [ALU interface](alu.md#2-interface-timing-and-state) and operation mapping; this row does not independently define the encoding |
+| Unsupported ALU selector values | Resolved: leaf contract owns fallback behavior; section 6 owns checker requirements | See [ALU input validity](alu.md#4-input-validity-and-exceptional-conditions) |
 | Remaining EX control/interface encoding | Operand selectors, decoded branch/jump/result intent, producer metadata grouping and advance-permission wiring must agree at integration | Việt; preserve the semantic boundaries above and the parent's single ID decode; finalize before implementing the affected leaves or wrapper |
 
-The last row does not block isolated ALU design. The first two rows must be
-resolved before ALU implementation can claim a decision-complete contract.
+The first two rows are resolved by the accepted ALU contract. The last row
+does not block the isolated ALU increment; it must be resolved before
+implementing the affected leaves or wrapper.
 No deadline pressure, selected module name or passing test substitutes for
 these choices. Ordinary equivalent coding style is not a new architecture
 decision. There is no RTL implementation delegation, new project milestone
