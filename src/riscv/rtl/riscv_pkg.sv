@@ -21,4 +21,13 @@ package riscv_pkg;
         ALU_SLT = 4'h8,
         ALU_SLTU= 4'h9
     } alu_op_t;
+
+    typedef enum logic [2:0] {
+        BR_EQ           = 3'h0,
+        BR_NE           = 3'h1,
+        BR_LT_SIGNED    = 3'h4,
+        BR_GE_SIGNED    = 3'h5,
+        BR_LT_UNSIGNED  = 3'h6,
+        BR_GE_UNSIGNED  = 3'h7
+    } branch_kind_t;
 endpackage : riscv_pkg
