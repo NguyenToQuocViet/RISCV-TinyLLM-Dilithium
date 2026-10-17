@@ -24,6 +24,8 @@ module branch_comparator
             BR_GE_SIGNED:   branch_condition = ($signed(operand_a) >= $signed(operand_b)) ? 1'b1 : 1'b0;
             BR_LT_UNSIGNED: branch_condition = (operand_a < operand_b) ? 1'b1 : 1'b0;
             BR_GE_UNSIGNED: branch_condition = (operand_a >= operand_b) ? 1'b1 : 1'b0;
+
+            default: branch_condition = 1'b0;
         endcase
     end
 endmodule
