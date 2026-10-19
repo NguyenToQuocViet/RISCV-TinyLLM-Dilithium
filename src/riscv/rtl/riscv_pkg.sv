@@ -30,4 +30,9 @@ package riscv_pkg;
         BR_LT_UNSIGNED  = 3'h6,
         BR_GE_UNSIGNED  = 3'h7
     } branch_kind_t;
+
+    typedef enum logic {
+        RESULT_ALU      = 1'h0,
+        RESULT_PC_PLUS_4= 1'h1
+    } result_src_t;
 endpackage : riscv_pkg
