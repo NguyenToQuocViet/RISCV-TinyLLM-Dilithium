@@ -4,7 +4,8 @@
 Nguyễn Tô Quốc Việt on 2026-10-15. RTL interface details listed in
 [section 8](#8-remaining-interface-decisions) are not yet accepted.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** EX D1 / 2026-10-15; refines BASE R1 without revising it.
+**Design revision:** EX D2 / 2026-10-19; width clarification accepted by Việt;
+refines BASE R1 without revising it.
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md).
 **RTL mapping:** Planned; this document is not implementation or verification evidence.
 
@@ -76,9 +77,37 @@ parent's valid, reset, hold, bubble and flush rules.
 Inputs comprise the registered
 [ID/EX semantic payload](5-stage-baseline-core.md#idex-boundary), producer
 information from EX/MEM and MEM/WB, and the permission for the current EX
-instruction to advance. Addresses, PC, register values, immediate and execution
-results are 32 bits; register identifiers are 5 bits; predicates are 1 bit.
-Control encodings remain subject to section 8.
+instruction to advance. Width ownership is defined below; register identifiers
+are 5 bits and predicates are 1 bit. Control encodings remain subject to section 8.
+
+### Width domains
+
+| Domain | Package constant | EX values |
+| --- | --- | --- |
+| Register / arithmetic datapath | `DATA_WIDTH` | GPR values, canonical immediate, ALU operands/result, forwarded producer values, `ex_result` and store data |
+| PC / redirect address | `ADDR_WIDTH` | Instruction PC, `pc_plus_4` and `redirect_target` |
+
+`DATA_WIDTH` describes the GPR/ALU width (XLEN for this core), not a generic
+memory-bus width. `ADDR_WIDTH` describes this design's PC/redirect address
+domain; it does not define a future virtual/physical address mapping.
+
+The supported configuration is fixed at `DATA_WIDTH = ADDR_WIDTH = 32`, as
+required by BASE. The names distinguish roles; they do not promise independent
+width configuration or RV64 support. Crossing between these domains preserves
+all bits in this configuration:
+
+| Boundary | Source | Destination |
+| --- | --- | --- |
+| Operand mux PC selection | `pc`: `ADDR_WIDTH` | `operand_a`: `DATA_WIDTH` |
+| Result mux link selection | `pc_plus_4`: `ADDR_WIDTH` | `result`: `DATA_WIDTH` |
+| Redirect target formatting | `alu_result`: `DATA_WIDTH` | `redirect_target`: `ADDR_WIDTH` |
+
+No widening, narrowing or address-translation policy is defined at these
+boundaries. Unequal widths require an owner-approved contract update before
+implementation; implicit assignment conversion is not an accepted policy.
+The ALU remains a datapath-width producer even when its result contains a
+computed address. RV32 shift semantics, instruction length and diagnostic
+fallback values remain unchanged by this width clarification.
 
 ID exclusively decodes instructions. Raw instruction, opcode, funct fields and
 immediate-format selection do not enter this hierarchy. The incoming immediate
@@ -114,6 +143,10 @@ Inputs are the two source identifiers and values from ID/EX, EX/MEM producer
 destination/valid/write intent/result availability and result, and MEM/WB
 producer destination/valid/write intent and selected `wb_data`.
 Outputs are `fwd_rs1` and `fwd_rs2`.
+
+All source/producer values and forwarded outputs belong to `DATA_WIDTH`,
+including a jump link already selected into `ex_result`; identifiers remain
+5 bits. The [width domains](#width-domains) apply to this planned interface.
 
 For each source independently, select the youngest eligible producer using the
 parent's [forwarding rules](5-stage-baseline-core.md#forwarding-and-load-use-hazards).
@@ -223,8 +256,10 @@ and the core's permission for EX to advance. Outputs are `redirect_fire` and
 - The request becomes `redirect_fire` only for a valid instruction permitted to
   advance. Core permission incorporates reset/hold control; it must not depend
   circularly on the redirect output it qualifies.
-- Branch/JAL target is the ALU result. JALR target keeps bits 31:1 of that result
-  and forces bit 0 to zero by wiring; there is no second ALU operation.
+- Branch/JAL target preserves the complete ALU result. JALR likewise preserves
+  every bit except bit 0, which is forced to zero by wiring; there is no second
+  ALU operation. This datapath-to-address boundary follows the equal-width
+  requirement in [Width domains](#width-domains).
 
 The leaf does not itself flush registers or update fetch PC. Core/frontend
 control consumes its outputs under the parent's

@@ -1,7 +1,7 @@
 # Branch Comparator — Block Design
 
 **Status:** Proposed for final owner acceptance; all local decisions resolved.
-**Revision:** BC D1 draft / 2026-10-16.
+**Revision:** BC D2 draft / 2026-10-19; width clarification accepted by Việt.
 **Owner:** Viet Nguyen To Quoc.
 **Parent:** [EX stage](execute-stage.md#44-branch-comparator),
 [BASE execution semantics](5-stage-baseline-core.md#ex-computation-contract).
@@ -22,16 +22,17 @@ a redirect or decide whether the current instruction is a branch.
 
 | Port | Direction | Type / width | Meaning |
 | --- | --- | --- | --- |
-| `operand_a` | Input | Unsigned 32-bit logic vector | First comparison operand |
-| `operand_b` | Input | Unsigned 32-bit logic vector | Second comparison operand |
+| `operand_a` | Input | Unsigned `logic [DATA_WIDTH-1:0]` | First comparison operand |
+| `operand_b` | Input | Unsigned `logic [DATA_WIDTH-1:0]` | Second comparison operand |
 | `branch_kind` | Input | `riscv_pkg::branch_kind_t`, `enum logic [2:0]` | Decoded comparison condition |
 | `branch_condition` | Output | 1-bit logic | Selected comparison predicate |
 
 At EX integration, `operand_a` is connected to `fwd_rs1` and `operand_b` to
 `fwd_rs2`; forwarding is performed outside this leaf.
 
-The datapath is fixed at 32 bits. The block is combinational: no clock, reset,
-storage, handshake or stall ownership. The output follows current inputs after
+The operands belong to the register/datapath domain under the parent's
+[width contract](execute-stage.md#width-domains). The block is combinational:
+no clock, reset, storage, handshake or stall ownership. The output follows current inputs after
 combinational settling and is consumed only for a conditional branch. Parent
 control prevents invalid or held instructions from authorizing a redirect.
 

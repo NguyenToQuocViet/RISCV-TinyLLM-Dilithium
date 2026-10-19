@@ -1,7 +1,7 @@
 # Operand Mux — Block Design
 
 **Status:** Accepted by Việt on 2026-10-19.
-**Revision:** OM D1 / 2026-10-19.
+**Revision:** OM D2 / 2026-10-19; width clarification accepted by Việt.
 **Owner:** Viet Nguyen To Quoc.
 **Parent:** [EX stage](execute-stage.md#42-operand-mux).
 **Mapping:** Planned module `operand_mux` in `src/riscv/rtl/operand_mux.sv`;
@@ -24,14 +24,18 @@ the store's register data. Instruction-class selections are owned by the parent.
 
 | Port | Direction | Type / width | Meaning |
 | --- | --- | --- | --- |
-| `rs1_value` | Input | Unsigned 32-bit logic vector | First register value |
-| `rs2_value` | Input | Unsigned 32-bit logic vector | Second register value |
-| `pc` | Input | Unsigned 32-bit logic vector | Instruction byte address |
-| `imm` | Input | Unsigned 32-bit logic vector | Canonical immediate from ID |
+| `rs1_value` | Input | Unsigned `logic [DATA_WIDTH-1:0]` | First register value |
+| `rs2_value` | Input | Unsigned `logic [DATA_WIDTH-1:0]` | Second register value |
+| `pc` | Input | Unsigned `logic [ADDR_WIDTH-1:0]` | Instruction byte address |
+| `imm` | Input | Unsigned `logic [DATA_WIDTH-1:0]` | Canonical immediate from ID |
 | `alu_src_a` | Input | `riscv_pkg::alu_src_a_t`, 2-bit enum (planned) | Decoded source for operand A |
 | `alu_src_b` | Input | `riscv_pkg::alu_src_b_t`, 1-bit enum (planned) | Decoded source for operand B |
-| `operand_a` | Output | 32-bit logic vector | First ALU operand |
-| `operand_b` | Output | 32-bit logic vector | Second ALU operand |
+| `operand_a` | Output | `logic [DATA_WIDTH-1:0]` | First ALU operand |
+| `operand_b` | Output | `logic [DATA_WIDTH-1:0]` | Second ALU operand |
+
+PC selection crosses from the address domain to the register/datapath domain
+under the parent's [width contract](execute-stage.md#width-domains).
+All bits are preserved; unequal-width conversion is not supported.
 
 At EX integration, the register inputs connect to `fwd_rs1` and `fwd_rs2`.
 The PC and immediate belong to the instruction in ID/EX; ID produces both

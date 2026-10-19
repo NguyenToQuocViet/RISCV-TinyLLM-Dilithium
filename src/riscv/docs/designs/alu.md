@@ -1,7 +1,7 @@
 # ALU — Block Design
 
 **Status:** Accepted by Việt on 2026-10-15.
-**Revision:** ALU D3 / 2026-10-15.
+**Revision:** ALU D4 / 2026-10-19; width clarification accepted by Việt.
 **Owner:** Viet Nguyen To Quoc.
 **Parent:** [EX stage](execute-stage.md#43-alu),
 [BASE execution semantics](5-stage-baseline-core.md#ex-computation-contract).
@@ -22,12 +22,14 @@ outside this block, as defined by the parent EX contract.
 
 | Port | Direction | Type / width | Meaning |
 | --- | --- | --- | --- |
-| `operand_a` | Input | Unsigned 32-bit logic vector | Operand A |
-| `operand_b` | Input | Unsigned 32-bit logic vector | Operand B |
+| `operand_a` | Input | Unsigned `logic [DATA_WIDTH-1:0]` | Operand A |
+| `operand_b` | Input | Unsigned `logic [DATA_WIDTH-1:0]` | Operand B |
 | `alu_op` | Input | `riscv_pkg::alu_op_t`, `enum logic [3:0]` | Operation selector |
-| `alu_result` | Output | 32-bit logic vector | Selected result |
+| `alu_result` | Output | `logic [DATA_WIDTH-1:0]` | Selected result, including computed addresses |
 
-`riscv_pkg::DATA_WIDTH` is fixed at 32 for this design. The ALU is combinational:
+The parent's [width domains](execute-stage.md#width-domains) apply;
+`alu_result` remains a datapath-width value when consumed as an address.
+The ALU is combinational:
 no clock, reset, storage, handshake, stall ownership or registered latency.
 The output follows current inputs after combinational settling, without retaining
 an earlier result. Parent pipeline control determines when it is used.

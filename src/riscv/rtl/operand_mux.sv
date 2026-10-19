@@ -11,7 +11,7 @@ module operand_mux
     input logic [DATA_WIDTH-1:0] rs1_value,
     input logic [DATA_WIDTH-1:0] rs2_value,
 
-    input logic [DATA_WIDTH-1:0] pc,
+    input logic [ADDR_WIDTH-1:0] pc,
     input logic [DATA_WIDTH-1:0] imm,
 
     input alu_src_a_t alu_src_a,

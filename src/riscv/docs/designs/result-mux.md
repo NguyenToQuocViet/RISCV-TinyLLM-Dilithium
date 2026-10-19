@@ -1,7 +1,7 @@
 # Result Mux — Block Design
 
 **Status:** Accepted by Việt on 2026-10-19.
-**Revision:** RM D1 / 2026-10-19.
+**Revision:** RM D2 / 2026-10-19; width clarification accepted by Việt.
 **Owner:** Viet Nguyen To Quoc.
 **Parent:** [EX stage](execute-stage.md#46-result-mux).
 **Mapping:** Planned module `result_mux` in `src/riscv/rtl/result_mux.sv`;
@@ -20,10 +20,14 @@ outside this block.
 
 | Port | Direction | Type / width | Meaning |
 | --- | --- | --- | --- |
-| `alu_result` | Input | Unsigned 32-bit logic vector | ALU result or effective byte address |
-| `pc_plus_4` | Input | Unsigned 32-bit logic vector | Jump-link value |
+| `alu_result` | Input | Unsigned `logic [DATA_WIDTH-1:0]` | ALU result or effective byte address |
+| `pc_plus_4` | Input | Unsigned `logic [ADDR_WIDTH-1:0]` | Jump-link address |
 | `result_src` | Input | `riscv_pkg::result_src_t`, `enum logic [0:0]` (planned) | Decoded EX result source |
-| `result` | Output | 32-bit logic vector | Selected EX result |
+| `result` | Output | `logic [DATA_WIDTH-1:0]` | Selected EX result |
+
+Link selection crosses from the address domain to the register/datapath domain
+under the parent's [width contract](execute-stage.md#width-domains).
+All bits are preserved; unequal-width conversion is not supported.
 
 The shared selector type belongs in [riscv_pkg](../../rtl/riscv_pkg.sv).
 ID produces `result_src`; ID/EX carries it to this leaf. It is separate from
