@@ -1,10 +1,10 @@
 # Execute Stage — Decomposition and Submodule Boundaries
 
 **Status:** Accepted decomposition, naming and semantic boundaries, confirmed by
-Nguyễn Tô Quốc Việt on 2026-10-15. RTL interface details listed in
-[section 8](#8-remaining-interface-decisions) are not yet accepted.
+Nguyễn Tô Quốc Việt on 2026-10-15. Flat wrapper interface and core-owned
+metadata bypass accepted by Việt on 2026-10-19.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** EX D2 / 2026-10-19; width clarification accepted by Việt;
+**Design revision:** EX D3 / 2026-10-19; wrapper boundary accepted by Việt;
 refines BASE R1 without revising it.
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md).
 **RTL mapping:** Planned; this document is not implementation or verification evidence.
@@ -19,10 +19,9 @@ memory ordering and architectural side-effect rules. This design refines
 those requirements; it does not override them.
 
 The first complete RTL feature to deliver is the BASE execute stage. The
-2026-10-15 implementation target is only its ALU leaf, including independent
-block verification. This is an internal subsystem increment, not a project
-release or evidence that BASE executes programs. The full stage is a later
-integration boundary; finishing ALU does not finish EX.
+initial 2026-10-15 increment was its ALU leaf; the current integration target
+is the wrapper and composition of its seven leaves. This is an internal
+subsystem increment, not a project release or evidence that BASE executes programs.
 
 This task authorizes recording the design, not writing RTL, test infrastructure,
 or build scripts. Core RTL remains human-authored unless Việt explicitly
@@ -65,7 +64,7 @@ ex_stage : execute_stage
 ```
 
 These are module/file basenames, not a decision to create a new RTL directory
-tree. No files or modules in this table are claimed to exist yet.
+tree. Their mapping does not establish implementation or verification status.
 
 ## 3. Stage boundary and storage ownership
 
@@ -74,11 +73,12 @@ pipeline registers, transaction state, clock or reset input. The core owns the
 clocked ID/EX and EX/MEM registers outside this hierarchy and applies the
 parent's valid, reset, hold, bubble and flush rules.
 
-Inputs comprise the registered
+Inputs comprise the required computation fields from the registered
 [ID/EX semantic payload](5-stage-baseline-core.md#idex-boundary), producer
 information from EX/MEM and MEM/WB, and the permission for the current EX
 instruction to advance. Width ownership is defined below; register identifiers
-are 5 bits and predicates are 1 bit. Control encodings remain subject to section 8.
+are 5 bits and predicates are 1 bit. Shared controls retain their leaf-defined
+types and encodings; the wrapper introduces no new selector.
 
 ### Width domains
 
@@ -119,23 +119,70 @@ There are two distinct output paths:
 
 | Output path | Consumer and meaning |
 | --- | --- |
-| `ex_result`, `store_data`, destination and memory intent | Core-owned EX/MEM register; capture only according to parent pipeline control |
+| `ex_result`, `store_data` | Core-owned EX/MEM register; capture only according to parent pipeline control |
 | `redirect_fire`, `redirect_target` | Core/frontend control; target is meaningful when redirect fires |
 
 The exact carried fields are owned by the parent's
 [EX/MEM boundary](5-stage-baseline-core.md#exmem-boundary-and-data-request-ownership).
-The wrapper passes metadata and wiring; functional decisions belong to the
-named leaves. No EX output directly writes the register file or issues OBI.
+Current-instruction destination and memory metadata (`rd`, `reg_write`,
+`mem_en`, `mem_write`, `mem_type`) bypass this wrapper: the core connects
+ID/EX metadata directly to the corresponding EX/MEM inputs. Pipeline valid and
+the parent's writeback-selection information likewise remain core-owned.
+The core keeps metadata, validity and computed data associated with the same
+instruction under normal capture, hold, bubble, flush and reset. Bypassing the
+wrapper does not bypass the EX/MEM register or its control.
+
+These pass-through fields are not wrapper ports and require no memory-type
+encoding decision within EX. Producer `mem_reg_write` and `wb_reg_write` are
+still wrapper inputs because forwarding consumes them. The wrapper wires its
+leaves; functional decisions belong to the named leaves. No EX output directly
+writes the register file or issues OBI.
 In particular, EX computes a store address and data but MEM owns the request.
 
 Unused datapath outputs need not have architectural meaning. Invalid payload
 must never authorize a redirect or another side effect. Combinational results
 do not imply stage acceptance, retirement or a fixed physical propagation delay.
 
+### Flat wrapper interface
+
+All ports are individual signals, grouped by role; no packed payload struct,
+clock, reset, stall output or output-valid port is introduced. Package names
+below refer to `riscv_pkg`; leaf contracts own their enum encodings.
+
+| Group | Port(s) | Direction | Type / width | Meaning |
+| --- | --- | --- | --- | --- |
+| Current instruction | `pc` | Input | `logic [ADDR_WIDTH-1:0]` | Instruction PC from ID/EX |
+| Current instruction | `imm` | Input | `logic [DATA_WIDTH-1:0]` | Canonical immediate from ID |
+| Current instruction | `rs1_id`, `rs2_id` | Input | `logic [4:0]` each | Consumer register identifiers |
+| Current instruction | `rs1_value`, `rs2_value` | Input | `logic [DATA_WIDTH-1:0]` each | Carried register values after ID's WB bypass |
+| Decoded control | `alu_op` | Input | `alu_op_t` | ALU operation |
+| Decoded control | `alu_src_a` | Input | `alu_src_a_t` | First ALU operand source |
+| Decoded control | `alu_src_b` | Input | `alu_src_b_t` | Second ALU operand source |
+| Decoded control | `branch_kind` | Input | `branch_kind_t` | Conditional-branch comparison |
+| Decoded control | `result_src` | Input | `result_src_t` | ALU result or link selection |
+| Decoded control | `control_flow` | Input | `control_flow_t` | NONE / BRANCH / JAL / JALR intent |
+| Pipeline control | `instruction_valid` | Input | 1-bit logic | ID/EX valid |
+| Pipeline control | `advance_allowed` | Input | 1-bit logic | Core permits the current instruction to leave EX |
+| EX/MEM producer | `mem_rd` | Input | `logic [4:0]` | Producer destination |
+| EX/MEM producer | `mem_result` | Input | `logic [DATA_WIDTH-1:0]` | Producer's selected EX result |
+| EX/MEM producer | `mem_valid`, `mem_reg_write`, `mem_wb_from_mem` | Input | 1-bit logic each | Liveness, write intent and load-result source |
+| MEM/WB producer | `wb_rd` | Input | `logic [4:0]` | Producer destination |
+| MEM/WB producer | `wb_data` | Input | `logic [DATA_WIDTH-1:0]` | Selected architectural WB value |
+| MEM/WB producer | `wb_valid`, `wb_reg_write` | Input | 1-bit logic each | Liveness and semantic write intent |
+| Computed data | `ex_result`, `store_data` | Output | `logic [DATA_WIDTH-1:0]` each | Selected EX result and forwarded store data |
+| Redirect | `redirect_fire` | Output | 1-bit logic | Qualified control-flow event |
+| Redirect | `redirect_target` | Output | `logic [ADDR_WIDTH-1:0]` | Formatted target |
+
+`instruction_valid` and `advance_allowed` connect unchanged to `ex_redirect`.
+The core derives advance permission from pipeline reset/hold control, without
+a circular dependency on `redirect_fire`. They do not gate computation or force
+data outputs to zero. Invalid or unused data is ignored by parent control;
+`redirect_target` still follows its leaf contract when `redirect_fire=0`.
+
 ## 4. Child semantic contracts
 
-Names below identify logical fields and responsibilities. They do not silently
-freeze an unreviewed packed struct, port suffix convention or numeric encoding.
+The following composition responsibilities use the shared types and interfaces
+defined in the linked leaf contracts; numeric encodings are not redefined here.
 
 ### 4.1 Forwarding unit
 
@@ -198,8 +245,8 @@ The output is 32-bit `alu_result`. The selected operation set is exactly:
 | SLT | Signed less-than comparison; 32-bit one when true, otherwise zero |
 | SLTU | Unsigned less-than comparison; 32-bit one when true, otherwise zero |
 
-Operation names describe semantic choices, not accepted enum identifiers or bit
-patterns. Addition/subtraction do not produce overflow traps or architectural
+The [ALU contract](alu.md) owns the shared operation encoding and fallback.
+Addition/subtraction do not produce overflow traps or architectural
 flags. The ALU does not decode an instruction, choose operands, perform
 forwarding, select a link result or authorize redirect.
 
@@ -286,7 +333,21 @@ ID/EX.pc ----> link_adder ----------------------> result_mux
 ```
 
 Decoded intent and valid/advance control feed the leaves described above; the
-diagram shows datapath connections, not a complete physical port declaration.
+diagram shows datapath connections. The flat interface above owns wrapper ports.
+
+| Instance | Data inputs | Data output connections |
+| --- | --- | --- |
+| `ex_forwarding` | Wrapper register sources and both producer groups, unchanged | `fwd_rs1`, `fwd_rs2` remain internal |
+| `ex_operand_mux` | `rs1_value=fwd_rs1`, `rs2_value=fwd_rs2`, wrapper `pc` and `imm` | Internal `operand_a`, `operand_b` feed ALU |
+| `ex_alu` | Internal `operand_a`, `operand_b` | Internal `alu_result` feeds result mux and redirect unit |
+| `ex_branch_comparator` | `operand_a=fwd_rs1`, `operand_b=fwd_rs2` | Internal `branch_condition` feeds redirect unit |
+| `ex_link_adder` | Wrapper `pc` | Internal `pc_plus_4` feeds result mux |
+| `ex_result_mux` | Internal `alu_result`, `pc_plus_4` | Leaf `result` connects to wrapper `ex_result` |
+| `ex_redirect` | Internal `alu_result`, `branch_condition` | Leaf outputs connect to wrapper `redirect_fire`, `redirect_target` |
+
+Decoded controls connect to their same-named leaf ports. Wrapper `store_data`
+connects directly to `fwd_rs2`, independently of operand and result selection.
+Intermediate values are not extra wrapper outputs.
 
 | Case | Work performed in parallel | Required observation |
 | --- | --- | --- |
@@ -359,10 +420,11 @@ none is introduced by this document.
 | Separate ALU/comparator interfaces | Clear local contracts; possible comparison-logic duplication is accepted without claiming measured area or timing |
 | `redirect_unit` name | Leaf qualifies a redirect using an existing condition/target; it covers branch and jump without owning all branch calculation |
 | EX first complete feature; ALU first increment | Establish a bounded integration target while limiting today's implementation scope |
+| Current-instruction metadata bypasses wrapper | Accepted on 2026-10-19: core preserves metadata alongside computed data at EX/MEM; wrapper exposes only computation inputs and outputs |
+| Flat wrapper ports | Accepted on 2026-10-19: group individual signals by role and reuse leaf interfaces; no new packed payload types |
 
-Naming/decomposition were accepted in the owner's request to record these
-decisions. Numeric control encoding and other open details were not implicitly
-accepted by that request. Any later material change needs owner approval and
+Naming/decomposition, leaf controls and the wrapper boundary were accepted
+in their respective owner decisions. Any later material change needs owner approval and
 an update here before implementation; change the parent only if its behavioral
 contract changes. PPA-driven sharing or moving link computation upstream requires
 evidence and explicit reconsideration, not an automatic cleanup.
@@ -370,21 +432,19 @@ evidence and explicit reconsideration, not an automatic cleanup.
 This document records local design rationale in the same requested artifact;
 it does not create a second decision ledger or copy the baseline contract.
 
-## 8. Remaining interface decisions
+## 8. Interface decision closure
 
-The decomposition and semantic responsibilities above are selected. They do not
-yet constitute a complete pin/encoding specification for every leaf.
-
-| Remaining choice | Scope and effect | Owner / next recommendation |
+| Choice | Resolution | Owning contract |
 | --- | --- | --- |
-| `alu_op` representation | Resolved for ALU; ID and ALU consume the same shared definition | See the accepted [ALU interface](alu.md#2-interface-timing-and-state) and operation mapping; this row does not independently define the encoding |
-| Unsupported ALU selector values | Resolved: leaf contract owns fallback behavior; section 6 owns checker requirements | See [ALU input validity](alu.md#4-input-validity-and-exceptional-conditions) |
-| Remaining EX control/interface encoding | Operand selectors, decoded branch/jump/result intent, producer metadata grouping and advance-permission wiring must agree at integration | Việt; preserve the semantic boundaries above and the parent's single ID decode; finalize before implementing the affected leaves or wrapper |
+| ALU control and fallback | Shared `alu_op_t`; reserved-code behavior unchanged | [ALU](alu.md) |
+| Operand controls | Shared `alu_src_a_t`, `alu_src_b_t`; reserved-code behavior unchanged | [Operand mux](operand-mux.md) |
+| Branch comparison control | Shared `branch_kind_t` | [Branch comparator](branch-comparator.md) |
+| EX result selection | Shared `result_src_t` | [Result mux](result-mux.md) |
+| Forwarding producer interface | Flat MEM/WB facts; leaf owns eligibility and priority | [Forwarding unit](forwarding-unit.md) |
+| Redirect control and qualification | Shared `control_flow_t`; valid/advance from core | [Redirect unit](redirect-unit.md) |
+| Wrapper ports and metadata routing | Flat interface; current-instruction metadata stays outside wrapper | Section 3, accepted by Việt on 2026-10-19 |
 
-The first two rows are resolved by the accepted ALU contract. The last row
-does not block the isolated ALU increment; it must be resolved before
-implementing the affected leaves or wrapper.
-No deadline pressure, selected module name or passing test substitutes for
-these choices. Ordinary equivalent coding style is not a new architecture
-decision. There is no RTL implementation delegation, new project milestone
-acceptance or hardware-verification claim in this document.
+No open design decision remains within this BASE wrapper boundary. The core's
+pipeline-control implementation and metadata storage remain outside the wrapper;
+their required behavior is inherited from BASE. This closure does not authorize
+agent-authored RTL or constitute verification or milestone acceptance.
