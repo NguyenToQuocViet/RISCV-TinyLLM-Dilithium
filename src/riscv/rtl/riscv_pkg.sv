@@ -35,4 +35,15 @@ package riscv_pkg;
         RESULT_ALU      = 1'h0,
         RESULT_PC_PLUS_4= 1'h1
     } result_src_t;
+
+    typedef enum logic [1:0] {
+        ALU_A_RS1   = 2'h0,
+        ALU_A_PC    = 2'h1,
+        ALU_A_ZERO  = 2'h2
+    } alu_src_a_t;
+
+    typedef enum logic {
+        ALU_B_RS2   = 1'h0,
+        ALU_B_IMM   = 1'h1
+    } alu_src_b_t;
 endpackage : riscv_pkg

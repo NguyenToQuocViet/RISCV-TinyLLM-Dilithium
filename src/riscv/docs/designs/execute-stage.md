@@ -292,6 +292,12 @@ Test all six unassigned binary selectors against the fallback in the
 integration, a valid instruction using one of those codes must cause checker
 FAIL; arbitrary selector payload in an invalid entry must not trigger that check.
 
+**Operand mux integration:** checker FAIL is required when a valid instruction
+that consumes operand A uses the reserved A selector defined by the
+[operand-mux contract](operand-mux.md#4-input-validity-and-exceptional-conditions).
+Bubbles and FENCE do not trigger this check. This is a verification check,
+not a hardware error port or CPU trap.
+
 **Complete EX feature:** verify leaf contracts and their composition. Important
 cases include conflicting forwarding producers, x0, unavailable EX/MEM loads,
 both branch operands forwarded, simultaneous compare/target generation,
