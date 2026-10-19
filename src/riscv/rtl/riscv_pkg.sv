@@ -46,4 +46,11 @@ package riscv_pkg;
         ALU_B_RS2   = 1'h0,
         ALU_B_IMM   = 1'h1
     } alu_src_b_t;
+
+    typedef enum logic [1:0] {
+        CF_NONE     = 2'h0,
+        CF_BRANCH   = 2'h1,
+        CF_JAL      = 2'h2,
+        CF_JALR     = 2'h3
+    } control_flow_t;
 endpackage : riscv_pkg
