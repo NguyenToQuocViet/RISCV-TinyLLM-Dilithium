@@ -1,82 +1,181 @@
-# Kế hoạch sơ bộ TinyLLM: từ reference FP32 đến VCU118
+# Kế hoạch sơ bộ TinyLLM: từ bản chạy chuẩn FP32 đến VCU118
 
-## Mục tiêu và ranh giới
+## Mục tiêu và phạm vi
 
-Mục tiêu đầu tiên là chạy **đầy đủ luồng suy luận SmolLM2-135M**, gồm prefill, decode và sinh token, bằng TinyLLM accelerator trong SoC trên VCU118. Đây là **kế hoạch kỹ thuật của subsystem**, chưa phải milestone hay cam kết phát hành của toàn dự án. Nghiên cứu model lớn hơn và họ Llama là hướng tiếp theo, sau khi nền tảng SmolLM2-135M đạt yêu cầu.
+Theo [PROJECT.md](PROJECT.md), mục tiêu đầu tiên là chạy **đầy đủ SmolLM2-135M bằng RTL trên VCU118**, gồm xử lý prompt ban đầu (prefill) và từng lượt sinh token tiếp theo (decode). Sau khi nền tảng này đạt yêu cầu, tiếp tục với model SmolLM lớn hơn và cân nhắc họ Llama nếu còn thời gian.
 
-[PROJECT.md](PROJECT.md) đề xuất phần tính toán model ở RTL, công cụ trên host chuẩn bị trọng số, còn firmware/Rocket xử lý prompt, tokenizer, vòng sinh token và detokenizer. Việc chia trách nhiệm này **chưa phải giao diện SoC đã được chấp nhận**. Memory map, interconnect, clock/reset, interrupt, giao thức điều khiển và trách nhiệm giữa các subsystem phải được project architect và các owner liên quan review trước khi tích hợp. Kế hoạch này không giao việc sửa nội bộ RISC-V hoặc Dilithium cho TinyLLM.
+Cần chọn đồng thời **quy tắc số học (numerical contract)** và cách tổ chức phần cứng. Mục tiêu là chạy nhanh hoặc dùng ít tài nguyên trong giới hạn cho phép, đồng thời giữ chất lượng model trong mức đã thống nhất.
 
 ```text
-Nguồn model cố định → FP32 chuẩn → fake-quant/PTQ → numerics contract
-                                            ↓
-                           golden model thuần số nguyên
-                                     ↓
-                      microarchitecture + RTL + kiểm chứng
-                                            ↓
-                   TinyLLM subsystem + firmware + SoC
-                                            ↓
-                             bitstream và demo VCU118
+Cố định nguồn model → Chạy bằng FP32 để lấy kết quả chuẩn
+                              ↓
+         Thử fake-quant ↔ Quy tắc số học + bản chạy số nguyên
+                              ↕
+               Thiết kế thử các khối RTL và đo chi phí
+                              ↓
+               Chọn phương án và chốt quy tắc số học
+                              ↓
+               Viết RTL đầy đủ và kiểm tra
+                              ↓
+               Ghép TinyLLM với phần mềm và SoC
+                              ↓
+               Tạo bitstream và chạy demo trên VCU118
 ```
 
 ## Các chặng thực hiện
 
-### 1. Cố định nguồn model và reference FP32
+### 1. Cố định nguồn model và tạo bản chạy chuẩn FP32
 
-**Làm gì:** Dùng checkpoint **base**, không dùng bản Instruct, từ [HuggingFaceTB/SmolLM2-135M tại revision `93efa2f097d58c2a74874c7e644dbc9b0cee75a2`](https://huggingface.co/HuggingFaceTB/SmolLM2-135M/tree/93efa2f097d58c2a74874c7e644dbc9b0cee75a2). Lấy `config.json`, `model.safetensors` và tokenizer từ **cùng revision**. Dùng Hugging Face Transformers (`AutoModelForCausalLM`, `AutoTokenizer`) ở chế độ đánh giá, thực hiện phép toán FP32 để làm chuẩn; ghi lại phiên bản thư viện và dữ liệu đầu vào. Checkpoint khai báo trọng số BF16: chuyển chúng sang FP32 để tính toán **không tạo lại độ chính xác đã mất trong trọng số gốc**.
+**Công việc:**
 
-So logits, token kế tiếp và trạng thái KV của forward cục bộ với reference Hugging Face ở cả prefill và decode; thử prompt ngắn/dài, vị trí token và trường hợp biên. Chọn và ghi ngưỡng sai số FP32 trước khi chấp nhận kết quả. Giữ bộ vector kiểm tra cố định cho các bước sau.
+- Dùng [SmolLM2-135M tại phiên bản `93efa2f097d58c2a74874c7e644dbc9b0cee75a2`](https://huggingface.co/HuggingFaceTB/SmolLM2-135M/tree/93efa2f097d58c2a74874c7e644dbc9b0cee75a2), bản **base**. Lấy `config.json`, `model.safetensors` và tokenizer từ cùng phiên bản.
+- Dùng thư viện Python Transformers của Hugging Face để nạp và chạy chính model đó bằng FP32. Đặt model ở chế độ dùng cho suy luận và giữ bản này nguyên gốc để đối chiếu. Trọng số nguồn là BF16; chuyển sang FP32 để tính toán không làm bộ trọng số gốc chính xác hơn.
+- Ghi lại phiên bản thư viện, cách chạy và token đầu vào để có thể chạy lại cùng phép kiểm tra.
+- Chọn và ghi mức chênh lệch FP32 được chấp nhận khi so hai cách chạy.
+- Kiểm tra cách dùng KV cache trên một chuỗi token cố định: so logits tại cùng vị trí khi đưa cả chuỗi vào model trong một lần với khi đưa đoạn đầu vào trước, rồi đưa từng token còn lại cùng KV cache. Thử các độ dài chuỗi khác nhau trong phạm vi hỗ trợ.
+- Lưu bộ đầu vào và kết quả chuẩn cố định để dùng lại sau mỗi lần sửa mã.
 
-**Đạt khi:** Có nguồn model/tokenizer truy vết được bằng revision, reference chạy lặp lại được và regression chứng minh forward cục bộ khớp trong ngưỡng đã công bố. Reference Hugging Face là chuẩn hành vi FP32; forward cục bộ chỉ là công cụ thí nghiệm sau khi được đối chiếu.
+**Tiêu chí hoàn thành:**
 
-### 2. Chốt bài đo và khảo sát lượng tử hóa
+- Xác định được chính xác phiên bản model, tokenizer và thư viện đã dùng.
+- Chạy lại được kết quả FP32 cho xử lý prompt (prefill) và từng lượt decode bằng KV cache.
+- Logits tại cùng vị trí của hai cách chạy chuỗi token khớp nhau trong mức chênh lệch đã chọn.
 
-**Làm gì:** Duy trì tập calibration và evaluation tách biệt, lưu token IDs, cách chọn cửa sổ, seed và phiên bản dữ liệu. Đo FP32, fake-quant từng tensor và các cấu hình kết hợp với cùng tập test; theo dõi PPL, Top-1, KL và prompt sinh văn bản. Tiếp tục từ kết quả hiện có để kiểm tra decode, KV cache, vị trí token đầu và context dài tới giới hạn model. Thử PTQ/hiệu chỉnh hoặc điều chỉnh chính sách lượng tử khi chất lượng chưa đạt; chỉ cân nhắc phương pháp phức tạp hơn nếu cần. Thống nhất **ngưỡng chất lượng cần đạt** trước khi chọn phương án cuối.
+### 2. Thống nhất cách đánh giá và thử lượng tử hóa
 
-**Đạt khi:** Có policy ứng viên, số liệu tái lập được cho cả prefill/decode và đánh đổi độ chính xác–chi phí được ghi rõ. Kết quả 512 token hiện có là đầu vào của chặng này, **chưa** chứng minh chất lượng ở 8.192 token.
+**Công việc:**
 
-### 3. Khóa numerics contract và golden model số nguyên
+- Chia dữ liệu thành ba tập riêng: tập để tính tham số lượng tử hóa, tập để so và chọn phương án, tập để kiểm tra phương án cuối cùng. Lưu token đầu vào, cách lấy đoạn văn bản, giá trị khởi tạo bộ sinh số ngẫu nhiên (seed) và phiên bản dữ liệu.
+- Thống nhất cách đo chất lượng, **mức giảm chất lượng cho phép** và phạm vi độ dài chuỗi trước khi so các phương án.
+- Khảo sát sơ bộ nhu cầu bộ nhớ, tính toán và băng thông; xác định các giả định phần cứng và ngân sách sơ bộ để sàng lọc ứng viên. Mục tiêu tốc độ và ngân sách chi tiết được tinh chỉnh ở chặng 4.
+- Chèn fake-quant có sẵn của PyTorch vào bản thí nghiệm dựa trên cùng model Transformers chạy FP32. Giữ nguyên kiến trúc và nguồn trọng số; dùng các phép tính gốc giữa các bước fake-quant.
+- Với mỗi phương án, ghi rõ vị trí lượng tử hóa, số bit, miền giá trị, cách chia scale và zero-point. Dùng tập calibration để tính tham số; cố định các tham số lượng tử hóa tĩnh trước khi đánh giá.
+- Khảo sát độ nhạy tại các điểm cần thiết để xây dựng và điều chỉnh các cấu hình kết hợp. Đánh giá chất lượng toàn model cho từng cấu hình kết hợp trên cùng tập chọn phương án.
+- Đánh giá khả năng dự đoán văn bản bằng PPL (thấp hơn là tốt hơn) và điểm trên các bài kiểm tra đã chọn. Dùng thêm tỷ lệ chọn cùng token với FP32, độ lệch phân bố dự đoán (KL) và văn bản sinh ra để tìm nguyên nhân sai khác.
+- Đánh giá cả prefill, decode dùng KV cache, token sinh đầu tiên và các độ dài chuỗi trong phạm vi đã chọn. Khi so sai số với FP32, dùng cùng token đầu vào.
+- Nếu chất lượng chưa đạt, điều chỉnh số bit, cách chọn scale hoặc áp dụng hiệu chỉnh lượng tử hóa rồi đánh giá lại cấu hình kết hợp.
+- Chọn một cấu hình lượng tử hóa nền (baseline) đạt ngưỡng chất lượng và một số ít ứng viên có lợi ích phần cứng dự kiến, xét cả dung lượng scale và thông tin đi kèm, để kiểm tra ở chặng 3–4.
 
-**Làm gì:** Từ policy đã chọn, quy định định dạng và scale của trọng số, activation, residual, KV cache, attention probabilities, RoPE, LUT và logits; định nghĩa accumulator, thứ tự phép toán, requantization, rounding, saturation, overflow và xử lý scale của embedding/LM head dùng chung trọng số. Biến Numerics Contract v0 hiện có thành bản được review với các trường hợp còn mở đã giải quyết. Chuẩn bị dữ liệu trọng số/scale/LUT ở định dạng có thể nạp lên hệ thống.
+**Tiêu chí hoàn thành:**
 
-Viết golden model **thuần số nguyên** theo contract, có vector kiểm tra cho số âm, tie khi làm tròn, giá trị cực trị, mask, residual add, KV cache và context dài. So chất lượng của golden model với FP32/fake-quant; nếu sai lệch không đạt ngưỡng, quay lại chặng 2–3.
+- Đủ điều kiện chuyển sang chặng 3–4 khi có cấu hình nền và danh sách ngắn ứng viên fake-quant kết hợp đạt ngưỡng chất lượng, kèm cấu hình đầy đủ, dung lượng dữ liệu dự kiến và kết quả có thể chạy lại; không yêu cầu tìm phương án tối ưu toàn cục.
+- Tắt fake-quant cho kết quả khớp bản Transformers gốc theo mức chênh lệch đã chọn ở chặng 1.
+- Đã kiểm tra chất lượng cho prefill và decode trong phạm vi hỗ trợ.
+- Tập kiểm tra cuối chưa được dùng để chọn phương án; chỉ dùng để xác nhận sau khi chốt.
 
-**Đạt khi:** Contract đủ chi tiết để hai cách hiện thực độc lập cho cùng đầu ra bit-exact; golden model chạy được prefill và decode, có regression và bộ vector chuẩn cho RTL. Fake-quant hiện tại chưa thay thế chặng này.
+### 3. Xác định quy tắc số học và viết bản phần mềm số nguyên
 
-### 4. Thiết kế microarchitecture và kiểm tra tính khả thi trên VCU118
+**Công việc:**
 
-**Làm gì:** Tách rõ hợp đồng số học ở chặng 3 khỏi lựa chọn triển khai: datapath GEMM/GEMV, tiling, lịch sử dụng khối tính toán qua 30 layer, bộ nhớ trọng số/KV/activation, băng thông, DMA, pipeline và điều khiển. Ước lượng tài nguyên, thời gian chạy và giới hạn bộ nhớ dựa trên cấu hình VCU118 và kết quả công cụ thực tế; thử nghiệm nhỏ nếu cần để kiểm tra giả định. Parameterize các kích thước theo model, nhưng ưu tiên nghiệm thu SmolLM2-135M trước.
+- Với các ứng viên từ chặng 2, hoàn thiện số bit và hệ số biểu diễn giá trị (scale) cho trọng số, các giá trị trung gian, dữ liệu ở nhánh residual, KV cache, xác suất attention, RoPE, bảng tra (LUT) và logits.
+- Quy định số bit của tích và bộ cộng dồn, thứ tự tính, cách chuyển kết quả về số bit và scale tiếp theo, cách làm tròn, cách giới hạn giá trị và xử lý tràn số tại từng bước.
+- Chọn và hiện thực thuật toán số nguyên cho nhân ma trận, Softmax, RMSNorm và các phép tính còn lại. Ghi rõ các bước tính và cách xấp xỉ để bản số nguyên và RTL thực hiện cùng một cách.
+- Quy định cách dùng chung trọng số giữa embedding và LM head, kể cả cách áp dụng scale ở hai nơi.
+- Chuẩn bị trọng số, scale và bảng tra theo định dạng có thể nạp lên phần cứng.
+- Viết bản phần mềm tính **thuần số nguyên** theo các quy tắc trên để làm kết quả chuẩn cho RTL (golden model).
+- Kiểm tra riêng các phép tính số nguyên trước khi đánh giá toàn model; dùng dữ liệu cho số âm, giá trị nằm đúng giữa hai mức làm tròn, giá trị cực trị, phần tử bị che trong attention, phép cộng residual, KV cache và chuỗi dài.
+- So chất lượng của bản số nguyên với bản FP32 và fake-quant. Nếu chất lượng hoặc chi phí phần cứng chưa đạt, quay lại điều chỉnh ở chặng 2–4.
 
-Song song, đề xuất register/command interface, luồng nạp trọng số, địa chỉ bộ nhớ, trạng thái hoàn tất và xử lý lỗi. Đưa phần ảnh hưởng SoC cho project architect và owner liên quan review; không coi đề xuất của subsystem là system-level contract.
+**Tiêu chí hoàn thành:**
 
-**Đạt khi:** Có kiến trúc TinyLLM khả thi theo ước lượng được kiểm chứng, kế hoạch verification và giao diện cần thiết đã được chấp nhận ở đúng cấp trước khi khóa top-level RTL.
+- Quy tắc đủ rõ để hai cách viết độc lập cho kết quả giống nhau tới từng bit.
+- Bản số nguyên chạy được prefill và decode, đạt mức chất lượng yêu cầu.
+- Có bộ đầu vào và kết quả chuẩn để kiểm tra lại sau mỗi lần sửa, đồng thời dùng để đối chiếu RTL.
+- Chưa chốt quy tắc số học trước khi kiểm tra chi phí phần cứng ở chặng 4.
 
-### 5. Hiện thực RTL theo khối và kiểm chứng từng khối
+### 4. Thiết kế microarchitecture và kiểm tra khả năng triển khai trên VCU118
 
-**Làm gì:** Hiện thực từng khối cần cho đường tính toán: nhân-cộng/requant, embedding, RMSNorm, Q/K/V và RoPE, GQA/attention/softmax, KV cache, FFN/SiLU, residual, final norm, LM head và chọn token theo chính sách demo đã duyệt. Xây testbench trong `tb/`; so kết quả và trạng thái quan sát được với golden model số nguyên, kể cả stall, reset, mask, saturation và ranh giới bộ nhớ. Sau đó ghép một decoder layer và cơ chế thực thi đủ số layer.
+Chặng 2–4 được thực hiện lặp và có thể xen kẽ. Bắt đầu khảo sát các khối RTL đại diện khi có mô tả số học ứng viên cho các khối đó; không cần hoàn thiện bản số nguyên của mọi ứng viên trước.
 
-**Đạt khi:** Các khối và một layer vượt qua regression bit-exact ở phạm vi contract, không còn lỗi giao tiếp nội bộ đã biết. Giữ các thay đổi RTL trong phạm vi TinyLLM; việc thay đổi shared interface đi qua review cấp dự án.
+**Công việc:**
 
-### 6. Hoàn chỉnh và kiểm chứng TinyLLM subsystem
+- Từ khảo sát sơ bộ ở chặng 2, xác định và tinh chỉnh mục tiêu tốc độ cùng ngân sách tài nguyên, bộ nhớ và băng thông cho workload đã chọn.
+- Thiết kế datapath của các khối tính toán, cách chia phép nhân ma trận/vector thành các phần nhỏ để xử lý và lịch dùng lại khối tính toán qua 30 layer.
+- Lập cách lưu và chuyển trọng số, KV cache và dữ liệu trung gian; xác định bộ nhớ cần có, tốc độ truyền dữ liệu, cách chia phép tính thành các tầng (pipeline) và cách điều khiển việc tính/truyền dữ liệu.
+- Ước lượng tài nguyên, thời gian chạy và bộ nhớ. Viết một số khối RTL đại diện để kiểm tra các giả định bằng kết quả tổng hợp mạch (synthesis) và kiểm tra thời gian truyền tín hiệu (timing).
+- Tính cả phần tốn thêm để tìm/lưu scale, chuyển cách biểu diễn số và lưu thông tin đi kèm dữ liệu.
+- Dùng kết quả đo để sửa quy tắc số học ở chặng 2–3 hoặc cách tổ chức phần cứng. So từng cặp **quy tắc số học + cách tổ chức phần cứng** theo chất lượng và chi phí.
+- Xác định phần giới hạn hiệu năng hoặc tài nguyên từ số đo và mô hình chi phí; đề xuất cơ chế kiến trúc cần khảo sát, xây dựng thiết kế đối chứng (baseline) và đối chiếu với nghiên cứu trước.
+- Thử cơ chế đề xuất trên các khối RTL đại diện, so với baseline theo cùng workload và các ràng buộc chất lượng, phần cứng đã chọn; tính cả chi phí bổ sung của cơ chế trước khi triển khai RTL đầy đủ.
+- Đưa các kích thước model thành tham số có thể thay đổi, nhưng ưu tiên hoàn thành SmolLM2-135M trước.
+- Đề xuất các thanh ghi/lệnh điều khiển, cách nạp trọng số, địa chỉ bộ nhớ, cách báo hoàn tất và báo lỗi.
 
-**Làm gì:** Chạy end-to-end prefill rồi nhiều lượt decode với trọng số thật, KV cache thật và chính sách sinh token đã chọn. So token/logits hoặc mã số nguyên quan sát được với golden model; kiểm tra nạp model, nhiều độ dài prompt, context gần giới hạn, EOS/giới hạn số token, reset và chạy lặp. Đo latency, throughput, băng thông và tài nguyên; sửa contract, microarchitecture hoặc RTL nếu bằng chứng yêu cầu.
+**Tiêu chí hoàn thành:**
 
-**Đạt khi:** Subsystem tái lập được kết quả chuẩn trong ngưỡng đã thống nhất, có báo cáo regression và hiệu năng/tài nguyên đủ để quyết định tích hợp.
+- Chọn được một cặp đạt yêu cầu chất lượng; ước lượng thời gian chạy và kết quả các khối RTL cho thấy có thể đáp ứng mục tiêu tốc độ và giới hạn tài nguyên.
+- Có mô tả microarchitecture đủ rõ để hiện thực RTL: các khối, kết nối, bộ nhớ, pipeline và cơ chế điều khiển.
+- Có kết quả thử nghiệm và đối chứng sơ bộ để quyết định tiếp tục hoặc điều chỉnh cơ chế kiến trúc trước khi viết RTL đầy đủ.
+- Chốt phiên bản quy tắc số học và xác nhận chất lượng trên tập kiểm tra cuối.
+- Có kế hoạch kiểm tra RTL; giao diện cần thiết được thống nhất trước khi chốt RTL cấp cao nhất.
+- Kết quả timing sau synthesis được ghi đúng mức: vẫn cần kiểm tra sau bước bố trí và nối dây mạch (place-and-route) ở chặng 8.
 
-### 7. Chuẩn bị phần mềm và tích hợp SoC
+### 5. Viết RTL và kiểm tra từng khối
 
-**Làm gì:** Hoàn thiện công cụ host đóng gói trọng số, scale và LUT; phối hợp với owner RISC-V về firmware/driver, tokenizer/detokenizer, nạp dữ liệu, yêu cầu prefill/decode và vòng sinh token. Tích hợp TinyLLM qua giao diện **đã được chấp nhận** với bộ nhớ, interconnect, clock/reset và interrupt của SoC. Kiểm tra tương tác với các subsystem khác ở mức system; mọi thay đổi vùng dùng chung hoặc nội bộ RISC-V/Dilithium do đúng owner và project architect xử lý theo quy trình review.
+**Công việc:**
 
-**Đạt khi:** Có bài test SoC từ prompt/token IDs đến token đầu ra, dữ liệu truyền và điều khiển đúng contract, không còn lỗi tích hợp chặn demo. Công việc đa subsystem dùng quy trình `integration/*` và review của dự án.
+- Viết các khối tính toán: nhân-cộng và chuyển cách biểu diễn số, embedding, RMSNorm, Q/K/V, RoPE, GQA/attention/softmax, KV cache, FFN/SiLU, cộng residual, chuẩn hóa cuối, LM head và chọn token.
+- Viết mã kiểm tra (testbench) trong `tb/`; so kết quả và trạng thái bên trong với bản phần mềm số nguyên.
+- Kiểm tra cả lúc luồng dữ liệu phải chờ, lúc reset, phần tử attention bị che, giá trị bị giới hạn và địa chỉ ở biên vùng nhớ.
+- Ghép thành một decoder layer, rồi thêm phần điều khiển để chạy đủ số layer.
 
-### 8. Triển khai, đo và demo trên VCU118
+**Tiêu chí hoàn thành:**
 
-**Làm gì:** Chạy synthesis, place-and-route, kiểm tra timing/tài nguyên/bộ nhớ, tạo bitstream và nạp board. Chạy lại các vector chuẩn và demo sinh văn bản với model/trọng số/tokenizer đã cố định; so đầu ra board với golden model và đo latency, throughput, mức sử dụng tài nguyên, điện năng nếu có cách đo đáng tin cậy. Lưu phiên bản tool, constraint, bitstream, log và kết quả để tái lập.
+- Các khối và một layer khớp bản số nguyên tới từng bit.
+- Bộ kiểm tra chạy lại đạt yêu cầu sau khi ghép hoặc sửa mã.
+- Không còn lỗi đã biết trong việc truyền dữ liệu và điều khiển giữa các khối.
 
-**Đạt khi:** SoC tích hợp chạy được prefill và decode trên VCU118, cho kết quả đúng theo tiêu chí đã thống nhất, đạt timing và có demo cùng bằng chứng đo lường. Việc coi đây là milestone/release của toàn dự án vẫn theo [PROJECT_MANAGEMENT.md](../../../docs/PROJECT_MANAGEMENT.md) và ROADMAP cấp dự án.
+### 6. Ghép và kiểm tra toàn bộ TinyLLM
 
-## Các điểm cần quyết định trước khi khóa thiết kế
+**Công việc:**
 
-1. Ngưỡng chất lượng, độ dài context và mức hiệu năng chấp nhận cho demo/nghiên cứu; không tự suy ra từ kết quả fake-quant hiện có.
-2. Numerics contract cuối cùng, đặc biệt biểu diễn scale, accumulator, softmax, LUT và hành vi decode/KV ở context dài.
-3. Ngân sách tài nguyên/băng thông và phương án lưu trọng số/KV trên VCU118 sau khi đo, không đặt số liệu FPGA giả định trong kế hoạch.
-4. Giao diện TinyLLM–SoC và phân công host/firmware/RTL được review theo quyền sở hữu; `docs/DECISIONS.md` hoặc tài liệu quyết định tương ứng cần ghi lại các lựa chọn đã được chấp nhận.
+- Chạy đầy đủ từ prefill đến nhiều lượt decode, dùng trọng số và KV cache thật cùng cách chọn token đã thống nhất.
+- So token, logits và các giá trị số nguyên quan sát được với bản phần mềm số nguyên.
+- Kiểm tra nạp model, nhiều độ dài prompt, chuỗi gần giới hạn, token kết thúc (EOS), giới hạn số token sinh, reset và chạy lặp.
+- Đo thời gian chạy, tốc độ xử lý token, lượng dữ liệu truyền và tài nguyên sử dụng.
+- Đánh giá lợi ích của cơ chế kiến trúc trên toàn TinyLLM so với baseline và kiểm tra riêng đóng góp của cơ chế đã chọn.
+- Nếu sửa quy tắc số học sau khi chốt, cập nhật phiên bản, bản số nguyên và dữ liệu kiểm tra; quay lại đánh giá chất lượng ở chặng 2–4 trước khi chốt lại. Không dùng tập kiểm tra cuối để chọn hoặc điều chỉnh phương án.
+- Với thay đổi microarchitecture giữ nguyên quy tắc số học, kiểm chứng RTL khớp bản số nguyên hiện có.
+
+**Tiêu chí hoàn thành:**
+
+- Toàn bộ TinyLLM cho kết quả khớp bản số nguyên theo quy tắc đã chốt.
+- Có báo cáo kiểm tra, tốc độ và tài nguyên đủ để quyết định chuyển sang tích hợp SoC.
+
+### 7. Chuẩn bị phần mềm và tích hợp vào SoC
+
+**Công việc:**
+
+- Hoàn thiện công cụ chạy trên máy tính để đóng gói trọng số, scale và bảng tra.
+- Phối hợp với phần RISC-V để chuẩn bị phần mềm điều khiển, tokenizer/detokenizer, nạp dữ liệu và điều khiển các lượt prefill/decode.
+- Kết nối TinyLLM với bộ nhớ, liên kết truyền dữ liệu (interconnect), clock/reset và ngắt qua giao diện đã thống nhất.
+- Kiểm tra TinyLLM khi hoạt động cùng các phần khác của SoC.
+
+**Tiêu chí hoàn thành:**
+
+- Có bài kiểm tra SoC từ prompt hoặc token đầu vào đến token đầu ra.
+- Dữ liệu truyền và lệnh điều khiển đúng giao diện, kết quả đúng quy tắc số học.
+- Không còn lỗi tích hợp ngăn việc chạy demo.
+
+### 8. Triển khai, đo và chạy demo trên VCU118
+
+**Công việc:**
+
+- Chạy synthesis và place-and-route; kiểm tra mạch đáp ứng clock đã đặt, đủ tài nguyên và đủ bộ nhớ.
+- Tạo bitstream và nạp lên board.
+- Chạy lại bộ đầu vào chuẩn và demo sinh văn bản với model/tokenizer đã cố định phiên bản.
+- So kết quả board với bản phần mềm số nguyên; đo thời gian chạy, tốc độ xử lý token và tài nguyên sử dụng. Đo điện năng nếu có phương pháp đáng tin cậy.
+- Đối chiếu lợi ích kiến trúc trên board với baseline theo cùng workload và các ràng buộc đã chọn; ghi rõ nguồn số liệu đối chứng là đo trên board hay ước lượng.
+- Lưu phiên bản công cụ, các ràng buộc thiết kế, bitstream, log và kết quả để có thể chạy lại và đối chiếu.
+
+**Tiêu chí hoàn thành:**
+
+- SoC tích hợp chạy được prefill và decode trên VCU118, cho kết quả đúng theo quy tắc đã chốt.
+- Mạch đáp ứng clock và các yêu cầu đã thống nhất.
+- Có demo và số liệu đo thực tế.
+
+## Các điểm cần quyết định trước khi chốt thiết kế
+
+1. Mức giảm chất lượng cho phép, độ dài chuỗi hỗ trợ và mục tiêu tốc độ.
+2. Quy tắc số học cuối cùng, nhất là scale, số bit bộ cộng dồn, softmax, bảng tra và cách cập nhật KV cache khi chuỗi dài.
+3. Giới hạn tài nguyên, tốc độ truyền dữ liệu và cách lưu trọng số/KV trên VCU118.
+4. Giao diện TinyLLM–SoC và phần việc của phần mềm/phần cứng, được ghi trong tài liệu quyết định tương ứng.
