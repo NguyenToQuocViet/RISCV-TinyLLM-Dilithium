@@ -9,7 +9,7 @@ from pathlib import Path
 from cocotb_tools.runner import get_runner
 
 def test_redirect_unit():
-    riscv_dir = Path(__file__).resolve().parents[1]
+    riscv_dir = Path(__file__).resolve().parents[2]
     runner = get_runner("verilator")
 
     runner.build(
@@ -26,5 +26,4 @@ def test_redirect_unit():
     runner.test(
         hdl_toplevel="redirect_unit",
         test_module="redirect_unit_cocotb",
-        test_dir=riscv_dir / "tb",
     )

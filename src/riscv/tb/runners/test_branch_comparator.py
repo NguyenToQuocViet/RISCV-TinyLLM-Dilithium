@@ -9,7 +9,7 @@ from pathlib import Path
 from cocotb_tools.runner import get_runner
 
 def test_branch_comparator():
-    riscv_dir = Path(__file__).resolve().parents[1]
+    riscv_dir = Path(__file__).resolve().parents[2]
     runner = get_runner("verilator")
 
     runner.build(
@@ -26,5 +26,4 @@ def test_branch_comparator():
     runner.test(
         hdl_toplevel="branch_comparator",
         test_module="branch_comparator_cocotb",
-        test_dir=riscv_dir / "tb",
     )

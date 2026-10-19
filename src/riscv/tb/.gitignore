@@ -1,0 +1,4 @@
+# Generated simulation output and Python bytecode.
+sim_build/
+__pycache__/
+*.result.xml
