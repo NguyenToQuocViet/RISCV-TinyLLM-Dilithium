@@ -35,6 +35,9 @@ acceptance of a concrete reset tree, PLL/clock-gate sequence, reset supervisor,
 or reset implementation for another subsystem. Those remain shared review work.
 The generic pipeline-register hold/flush interface, priority between those
 controls and payload-update policy have not been selected by this reset decision.
+The subsequent PR-D1 selection on 2026-10-21 records those choices separately
+in the [pipeline-register control contract](../designs/5-stage-baseline-core.md#pipeline-register-local-control),
+using the input name `stall`; it does not change RST-D1 or core arbitration.
 
 ## Alternatives and trade-offs
 

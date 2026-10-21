@@ -3,6 +3,8 @@
 **Status:** Accepted — BASE R1 approved by Nguyễn Tô Quốc Việt on 2026-10-15; R2 reset amendment approved on 2026-10-21.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
 **Contract revision:** R2 / 2026-10-21 (same revision as the CI and IRQ contracts; reset-only amendment).
+**Pipeline-register refinement:** PR-D1 / 2026-10-21, selected by Việt;
+local control interface and priority defined below, without changing core arbitration.
 
 **Decision record:** Việt approved `BASE → BASE_CI → BASE_CI_IRQ`, BASE with
 37 integer operations plus FENCE, and one common elaboration-selected top.
@@ -469,6 +471,39 @@ on the MEM response edge; `instr_request_fire` is recorded; an expected
 outstanding response is accepted on `instr_response_fire`; and the Fetch Buffer
 performs every state transition required by those events. MEM stall freezes
 architectural and proactive fetch progress, not protocol obligations.
+
+### Pipeline-register local control
+
+PR-D1 is a technical boundary decision selected by Việt on 2026-10-21.
+Pipeline registers use `stall` (not `hold`) and `flush` control inputs, with
+`valid_i`/`valid_o` for incoming/stored liveness. Their local priority is
+**reset > flush > stall > capture**. Reset follows the shared
+[reset architecture](#reset-architecture); flush and ordinary updates take
+effect at the rising clock edge.
+
+| First applicable condition | Stored valid | Stored payload |
+| --- | --- | --- |
+| Reset active | Asynchronously clear to zero | No reset |
+| `flush=1` | Clear to zero | Retain |
+| `stall=1` | Retain | Retain |
+| `valid_i=0` | Clear to zero | Retain |
+| Otherwise | Capture `valid_i=1` | Capture the incoming entry |
+
+Flush invalidates an entry; stall preserves an entry that is still live.
+Consequently, simultaneous flush and stall invalidate it. Parent control must
+first resolve the [core arbitration](#pipeline-control-priority) and supply
+stage-specific controls, not raw branch/hazard indications. During unresolved
+MEM wait, EX cannot advance and `redirect_fire=0`; no branch-derived flush is
+issued. On an allowed EX redirect, IF/ID and ID/EX are invalidated while
+EX/MEM captures the redirecting instruction and older work is preserved.
+
+The rationale is to keep cancellation semantics explicit in the register
+without making it arbitrate memory transactions or control-flow requests.
+This preserves the existing core priority of MEM wait over EX redirect and
+does not introduce early redirect or `redirect_sent` state. Register checks
+must cover simultaneous flush/stall, reset overriding both, invalid-entry
+capture and preservation of payload/metadata association; integration checks
+must verify the parent's per-boundary arbitration.
 
 ### Architectural side effects
 
