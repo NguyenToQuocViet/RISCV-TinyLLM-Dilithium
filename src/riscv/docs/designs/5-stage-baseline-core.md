@@ -326,6 +326,10 @@ FENCE performs neither a data request nor an EX control-flow redirect.
 
 ### EX/MEM boundary and data-request ownership
 
+The [MEM composition contract](memory-stage.md) records the selected wrapper,
+leaf decomposition, memory-type encoding and controller ownership refinement.
+The architectural and protocol requirements below remain owned here.
+
 A load or store must first become registered EX/MEM state before the data port may present its request. There is no combinational path from current EX forwarding, operand selection, or ALU output to data OBI. EX computes the result, effective address, and final store data; the clocked EX/MEM boundary then makes that instruction the MEM owner, and MEM derives the OBI request only from this held registered state.
 
 The minimum EX/MEM semantic state is:
