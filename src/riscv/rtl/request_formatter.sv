@@ -26,12 +26,12 @@ module request_formatter
         case (mem_type)
             MEM_BYTE, MEM_BYTE_U: begin
                 byte_enable = 4'b0001 << effective_address[1:0];
-                write_data  = {4{store_data[7:0]}};
+                write_data  = {(DATA_WIDTH/8){store_data[7:0]}};
             end
 
             MEM_HALF, MEM_HALF_U: begin
                 byte_enable = 4'b0011 << effective_address[1:0]; //only offsets 0/2 are supported; misaligned-access handling later
-                write_data  = {2{store_data[15:0]}};
+                write_data  = {(DATA_WIDTH/16){store_data[15:0]}};
             end
 
             MEM_WORD: begin

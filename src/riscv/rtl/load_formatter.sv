@@ -24,29 +24,29 @@ module load_formatter
         case (mem_type)
             MEM_BYTE: begin
                 if (byte_offset == 2'b00) begin
-                    load_result = {{24{read_data[7]}}, read_data[7:0]};
+                    load_result = {{(DATA_WIDTH-8){read_data[7]}}, read_data[7:0]};
                 end
 
                 if (byte_offset == 2'b01) begin
-                    load_result = {{24{read_data[15]}}, read_data[15:8]};
+                    load_result = {{(DATA_WIDTH-8){read_data[15]}}, read_data[15:8]};
                 end
 
                 if (byte_offset == 2'b10) begin
-                    load_result = {{24{read_data[23]}}, read_data[23:16]};
+                    load_result = {{(DATA_WIDTH-8){read_data[23]}}, read_data[23:16]};
                 end
 
                 if (byte_offset == 2'b11) begin
-                    load_result = {{24{read_data[31]}}, read_data[31:24]};
+                    load_result = {{(DATA_WIDTH-8){read_data[31]}}, read_data[31:24]};
                 end
             end
 
             MEM_HALF: begin
                 if (byte_offset == 2'b00) begin
-                    load_result = {{16{read_data[15]}}, read_data[15:0]};
+                    load_result = {{(DATA_WIDTH-16){read_data[15]}}, read_data[15:0]};
                 end
 
                 if (byte_offset == 2'b10) begin
-                    load_result = {{16{read_data[31]}}, read_data[31:16]};
+                    load_result = {{(DATA_WIDTH-16){read_data[31]}}, read_data[31:16]};
                 end
             end
 
@@ -56,29 +56,29 @@ module load_formatter
 
             MEM_BYTE_U: begin
                 if (byte_offset == 2'b00) begin
-                    load_result = {24'h0, read_data[7:0]};
+                    load_result = {{(DATA_WIDTH-8){1'b0}}, read_data[7:0]};
                 end
 
                 if (byte_offset == 2'b01) begin
-                    load_result = {24'h0, read_data[15:8]};
+                    load_result = {{(DATA_WIDTH-8){1'b0}}, read_data[15:8]};
                 end
 
                 if (byte_offset == 2'b10) begin
-                    load_result = {24'h0, read_data[23:16]};
+                    load_result = {{(DATA_WIDTH-8){1'b0}}, read_data[23:16]};
                 end
 
                 if (byte_offset == 2'b11) begin
-                    load_result = {24'h0, read_data[31:24]};
+                    load_result = {{(DATA_WIDTH-8){1'b0}}, read_data[31:24]};
                 end
             end
 
             MEM_HALF_U: begin
                 if (byte_offset == 2'b00) begin
-                    load_result = {16'h0, read_data[15:0]};
+                    load_result = {{(DATA_WIDTH-16){1'b0}}, read_data[15:0]};
                 end
 
                 if (byte_offset == 2'b10) begin
-                    load_result = {16'h0, read_data[31:16]};
+                    load_result = {{(DATA_WIDTH-16){1'b0}}, read_data[31:16]};
                 end
             end
 
