@@ -19,6 +19,10 @@ module request_formatter
     assign aligned_address = {effective_address[ADDR_WIDTH-1:2], 2'b00};
 
     always_comb begin : request_formatter
+        //default
+        write_data = 32'hDEAD_BEEF;
+        byte_enable = 4'b0000;
+
         case (mem_type)
             MEM_BYTE, MEM_BYTE_U: begin
                 byte_enable = 4'b0001 << effective_address[1:0];
