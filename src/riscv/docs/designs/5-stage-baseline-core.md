@@ -1,8 +1,8 @@
 # Five-Stage Baseline Core
 
-**Status:** Accepted — BASE R1 approved by Nguyễn Tô Quốc Việt on 2026-10-15.
+**Status:** Accepted — BASE R1 approved by Nguyễn Tô Quốc Việt on 2026-10-15; R2 reset amendment approved on 2026-10-21.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Contract revision:** R1 / 2026-10-15 (same revision as the CI and IRQ contracts).
+**Contract revision:** R2 / 2026-10-21 (same revision as the CI and IRQ contracts; reset-only amendment).
 
 **Decision record:** Việt approved `BASE → BASE_CI → BASE_CI_IRQ`, BASE with
 37 integer operations plus FENCE, and one common elaboration-selected top.
@@ -14,6 +14,12 @@ the BASE R1 review and accepted this contract on 2026-10-15. The CI and IRQ
 contracts remain Proposed pending their own final owner review; BASE acceptance
 does not accept those extensions or shared SoC implementation. Record this
 snapshot in version control before functional implementation.
+
+R2 records Việt's technical decision to replace synchronous reset with
+asynchronous assertion and synchronous release, retaining selective reset.
+The [RST-D1 decision record](../decisions/reset-strategy.md) preserves the
+alternatives, reasoning and accepted trade-offs. Instruction scope, profiles
+and CI ABI v1 are unchanged; shared SoC reset implementation is not accepted here.
 
 These are CPU-boundary contracts, not RTL evidence or an accepted SoC design.
 Shared platform requirements remain subject to project/IP-owner review. AI
@@ -40,7 +46,7 @@ The reset PC is the fixed constant `PC_RESET_VEC = 32'h0000_0000` defined in the
 
 ## Build profiles and contract composition
 
-This is the only normative profile matrix in the R1 bundle. `CORE_PROFILE`
+This is the only normative profile matrix in the R2 bundle. `CORE_PROFILE`
 is selected at elaboration, defaults to BASE, and has the following values.
 Any other value must fail configuration/elaboration checks.
 
@@ -51,11 +57,11 @@ Any other value must fail configuration/elaboration checks.
 | `BASE_CI_IRQ = 2` | BASE_CI | Six CSR operations, MRET, external IRQ handling | 48 | [IRQ extension](external-interrupt-extension.md) |
 
 IRQ is an architectural capability separate from CI; an IRQ-only build is not
-in the supported R1 set. Firmware and test selection must match the hardware
+in the supported set. Firmware and test selection must match the hardware
 profile. There is no runtime feature discovery or hardware-profile toggle.
 
 One common top keeps the same port names, widths and directions in all builds:
-`clk`, synchronous `rst_n`, both OBI ports, the [CI command port](asynchronous-accelerator-control-extension.md#7-native-cpumanager-control-port)
+`clk`, active-low `rst_n` under the [reset contract](#reset-architecture), both OBI ports, the [CI command port](asynchronous-accelerator-control-extension.md#7-native-cpumanager-control-port)
 and `irq_external`. Disabled feature logic must not be instantiated; a filelist
 or a masked/tied-low IRQ alone does not prove hardware absence. In BASE,
 `ci_cmd_valid`, `ci_cmd_op`, `ci_cmd_target` and `ci_cmd_desc` are tied to zero;
@@ -87,14 +93,33 @@ prerequisite for any profile above.
 
 ## Reset architecture
 
-The core input is named `rst_n`. It is an active-low synchronous reset: core state observes reset only on the rising edge of `clk`. Generation, synchronization, and distribution of the system reset that drives `rst_n` belong to the later system-level clock/reset contract. The core-level OBI manager and its test-harness subordinates share this reset.
+The core input remains `rst_n`, active-low. Required reset state is asserted
+asynchronously: it reaches its reset value without a rising edge of `clk`.
+Release must be synchronized to the core clock domain before reaching this
+input. A portable SystemVerilog `reset_synchronizer` outside the core is the
+selected implementation approach, initially using two synchronization stages;
+it is not repeated in individual pipeline registers. A source-reset assertion
+propagates without a clock; source-reset release with the clock stopped leaves
+`rst_n` asserted until the synchronization sequence completes after clock restart.
+The choice and implementation limits are recorded in [RST-D1](../decisions/reset-strategy.md).
 
-Reset is deliberately limited to the control plane. When a rising edge samples
-`rst_n=0`, the Fetch Controller's registered state takes
+Generation, source conditioning, synchronization and distribution belong to
+the system-level clock/reset boundary; the concrete SoC implementation still
+requires project-owner review. The standalone core harness must provide the
+same assertion/release behavior and share the resulting reset with both OBI
+subordinates. Source pulse-width, clock stability, recovery/removal and reset
+distribution constraints must be satisfied; RTL simulation does not establish
+metastability reliability or physical timing closure.
+
+Reset remains deliberately limited to the control plane. On assertion of
+`rst_n`, and while it is held low, the Fetch Controller's registered state takes
 `next_fetch_pc <= PC_RESET_VEC`; pipeline-valid state, OBI request/transaction
 ownership state, and any independent state capable of authorizing a redirect
-or architectural side effect return to inactive or idle values. Invalid
-pipeline stages must not write the register file, issue a memory request,
+or architectural side effect return to inactive or idle values, after reset
+propagation, without waiting for a clock edge. Reset overrides hold and all
+normal updates. No edge sampling `rst_n=0` creates a transfer, retirement or
+architectural side effect. Invalid pipeline stages must not write the register
+file, issue a memory request,
 perform a store, or redirect the PC, regardless of their payload values.
 
 The reset network does not reset datapath payload merely to give it a known waveform value. Instruction, operand, immediate, ALU-result, memory-address, store-data, and destination-register payload registers retain unspecified values while invalid. General-purpose registers `x1` through `x31` are not reset; software must initialize a register before relying on its value. `x0` always reads as zero and ignores writes. Combinational datapath logic and the memory contents are not reset by the core. Any exception to this selective-reset rule requires a correctness need that cannot be enforced by reset control state and validity gating.
@@ -374,7 +399,7 @@ The load-use bubble and variable memory wait are separate mechanisms. After the 
 
 Next-state arbitration follows this BASE priority:
 
-1. Synchronous reset.
+1. Reset (asynchronous assertion, synchronized release).
 2. Unresolved MEM wait.
 3. EX branch/jump `redirect_fire`.
 4. Load-use hazard.
@@ -405,7 +430,7 @@ ID/EX captures ID output derived from current IF/ID.
 
 | Event | MEM/WB next | EX/MEM next | ID/EX next | IF/ID next | `wb_retire_fire` |
 | --- | --- | --- | --- | --- | ---: |
-| Synchronous reset | Invalid | Invalid | Invalid | Invalid | `0` |
+| Reset asserted | Invalid | Invalid | Invalid | Invalid | `0` |
 | Unresolved MEM wait | Hold | Hold | Hold | Hold | `0` |
 | `redirect_fire` | Capture MEM output from current EX/MEM | Capture EX output from redirecting current ID/EX | Invalid | Invalid | Current MEM/WB valid |
 | Load-use hazard | Capture MEM output from current EX/MEM | Capture EX output from load in current ID/EX | Invalid bubble | Hold dependent instruction | Current MEM/WB valid |
@@ -464,7 +489,7 @@ request while an older RF-only instruction is held in WB by the unresolved MEM
 wait caused by that same store. The older instruction need not retire before
 the younger store's address phase is accepted.
 
-Synchronous reset and an unresolved MEM wait prevent WB advance and force `wb_retire_fire=0`. Redirect, load-use, normal flow, and a `data_response_fire` edge that releases a MEM wait allow WB to advance. A held WB instruction therefore cannot be counted as retiring repeatedly. The register file write is the separate side effect `rf_write_fire = wb_retire_fire && MEM/WB.reg_write && MEM/WB.rd != 0`; branch and jump link values use this ordinary WB path. Invalid, flushed, or killed pipeline state cannot write the register file, create a data request, perform a store, or redirect control flow. A valid MEM owner remains responsible for continuing its current request and response protocol while the architectural pipeline is frozen; the interlock does not suppress mandatory OBI progress.
+Active reset and an unresolved MEM wait prevent WB advance and force `wb_retire_fire=0`. Redirect, load-use, normal flow, and a `data_response_fire` edge that releases a MEM wait allow WB to advance. A held WB instruction therefore cannot be counted as retiring repeatedly. The register file write is the separate side effect `rf_write_fire = wb_retire_fire && MEM/WB.reg_write && MEM/WB.rd != 0`; branch and jump link values use this ordinary WB path. Invalid, flushed, or killed pipeline state cannot write the register file, create a data request, perform a store, or redirect control flow. A valid MEM owner remains responsible for continuing its current request and response protocol while the architectural pipeline is frozen; the interlock does not suppress mandatory OBI progress.
 
 A store address transfer on `data_request_fire`, as defined in
 [OBI response validity and reset](#obi-response-validity-and-reset), is
@@ -587,15 +612,17 @@ On an edge sampling `rst_n=0`, no request is accepted, no response creates a
 result or completion, and no new instruction side effect occurs, even if the
 pre-edge `req && gnt` or `rvalid && rready` signals are high. All three events
 above are zero, and unexpected-response checking is inactive on that edge.
-These are sampled-edge event definitions, not a requirement to gate OBI
-outputs asynchronously with `rst_n`.
+These remain sampled-edge transfer definitions. Separately, reset assertion
+clears protocol ownership asynchronously under the [reset contract](#reset-architecture);
+constant port fields such as `rready=1` retain their specified values. No
+blanket reset mux over every OBI payload/output is required.
 
 Here `outstanding` is the current pre-edge state. On an edge sampling
 `rst_n=1`, each port's accepted request and expected-response events update
 ownership as
 `next_outstanding = current_outstanding + request_fire - response_fire`, subject
-to that port's one-outstanding limit. On a reset edge, next outstanding state
-is zero instead.
+to that port's one-outstanding limit. Reset assertion clears outstanding state
+without waiting for an edge; it remains zero on edges with reset active.
 
 The instruction port therefore has `instr_request_fire` and
 `instr_response_fire`; the data port has `data_request_fire` and
@@ -621,12 +648,12 @@ Data-side `rready` is also tied to `1'b1`. With `DATA_OUTSTANDING_MAX=1`, the lo
 Reset clears pipeline-valid, Fetch Buffer entry-valid and lifecycle state, and
 per-port outstanding state. It does not reset the `pc` or `instruction` payload
 of an invalid Fetch Buffer entry. The baseline contains no separate
-data-response buffer. After a rising edge samples `rst_n=0`, the reset control
-state drives core `req=0`; the harness subordinate drives `rvalid=0` and clears
-all pending transaction and response state. This is synchronous behavior and
-does not require asynchronous combinational gating merely because `rst_n`
-becomes low between rising edges. The harness must never return a response for
-a pre-reset transaction after reset. Responses for newly accepted post-reset transactions
+data-response buffer. On reset assertion, after reset propagation and without
+requiring a clock edge, reset control state drives core `req=0`; each harness
+subordinate drives `rvalid=0` and clears all pending transaction and response
+state. Both subordinates share the core's synchronized reset release. The
+harness must never return a response for a pre-reset transaction after reset.
+Responses for newly accepted post-reset transactions
 follow the normal expected-response rules.
 
 A response received outside reset while no transaction is outstanding is
@@ -663,7 +690,7 @@ A queued entry may either be internal and not yet presented to OBI, or be drivin
 
 The OBI Interface selects the oldest eligible `QUEUED` entry by allocation age for instruction-memory issue. A numerically lower PC does not imply an older entry. An older `READY` entry does not block issue because its memory transaction is already complete. Once a queued entry has been presented with `req=1` and is waiting for `gnt`, neither a younger queued entry nor a redirect target may bypass or replace it.
 
-The next queued entry may be presented while one older instruction transaction remains `OUTSTANDING`. The subordinate holds `gnt=0` until it has capacity to accept that request. It may assert `gnt` on the same edge that the older expected response fires, but it must not create a state in which more than one instruction transaction is granted but not responded. Verification enforces `next_outstanding <= OBI_OUTSTANDING_MAX`, where `OBI_OUTSTANDING_MAX=1`. On an edge sampling `rst_n=1`, `next_outstanding = current_outstanding + instr_request_fire - instr_response_fire`; a reset edge instead clears the count to zero. A raw unexpected response does not decrement this count. The presented request exists in registered Fetch Buffer state and must not arise combinationally from the older response.
+The next queued entry may be presented while one older instruction transaction remains `OUTSTANDING`. The subordinate holds `gnt=0` until it has capacity to accept that request. It may assert `gnt` on the same edge that the older expected response fires, but it must not create a state in which more than one instruction transaction is granted but not responded. Verification enforces `next_outstanding <= OBI_OUTSTANDING_MAX`, where `OBI_OUTSTANDING_MAX=1`. On an edge sampling `rst_n=1`, `next_outstanding = current_outstanding + instr_request_fire - instr_response_fire`; reset assertion clears the count asynchronously and holds it zero while reset is active. A raw unexpected response does not decrement this count. The presented request exists in registered Fetch Buffer state and must not arise combinationally from the older response.
 
 No deasserted-`req` bubble is required between accepted instruction transactions. After `instr_request_fire` for one request on cycle N, the OBI Interface may select the next queued entry, change to its request payload after the accepting edge, and keep `req=1` during cycle N+1. Each individual entry's payload nevertheless remains stable from its first asserted `req` until its own `gnt`.
 
@@ -853,7 +880,13 @@ Mandatory directed verification is organized around seven scenario groups:
    is accepted and no response result or completion is created. Confirm that
    both subordinates flush pre-reset protocol state, that invalid state creates
    no side effect, and that the core does not treat a store accepted before
-   reset as rolled back.
+   reset as rolled back. Assert reset between clock edges and with the clock
+   stopped; verify required control state and `req`/`rvalid` clear without an
+   edge. Release the source reset while the clock remains stopped and verify
+   conditioned `rst_n` stays low until the synchronizer completes its release
+   sequence after clock restart. Test reassertion during that sequence and
+   retain selective-payload-reset checks. Digital simulation does not prove
+   MTBF, recovery/removal timing or physical reset distribution.
 7. **MMIO and conservative FENCE.** Use an independently specified emulated
    peripheral to check one side effect per valid MMIO access, response-based
    completion and CPU program-order observation. Cover predecessor/successor
@@ -1012,9 +1045,10 @@ operation, timing closure, area, or power.
 
 The owner-selected BASE scope is complete at the CPU/test-harness boundary.
 Extension requirements are owned by their linked contracts and are not BASE
-acceptance obligations. BASE R1 final owner review is complete; the accepted
-snapshot must be recorded in version control. Project milestone scope/acceptance
-must be recorded in the root ROADMAP before feature implementation under the
+acceptance obligations. BASE R1 final owner review and the R2 reset amendment
+are owner-approved; the updated snapshot must be recorded in version control.
+Project milestone scope/acceptance must be recorded in the root ROADMAP before
+feature implementation under the
 project workflow.
 
 Real shared-memory publication, DMA/reset recovery, accelerator descriptors,

@@ -9,6 +9,12 @@ refines BASE R1 without revising it.
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md).
 **RTL mapping:** Planned; this document is not implementation or verification evidence.
 
+The later [BASE R2 reset amendment](5-stage-baseline-core.md#reset-architecture)
+changes the surrounding registered control, not this combinational wrapper.
+The existing EX pipeline harness and its recorded pass use synchronous reset;
+they do not establish R2 asynchronous assertion or synchronized-release behavior.
+Harness migration and reset regression are separate implementation work.
+
 ## 1. Purpose, authority and delivery scope
 
 This document records the owner's selected EX decomposition and the semantic

@@ -1,8 +1,8 @@
 # External Interrupt Extension
 
-**Status:** Proposed — R1 freeze candidate; owner-selected CPU behavior, final text/snapshot review pending.
+**Status:** Proposed — R2 freeze candidate; owner-selected CPU behavior, final text/snapshot review pending.
 **Owner phía CPU:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Contract revision:** R1 / 2026-10-15.
+**Contract revision:** R2 / 2026-10-21 (reset-only amendment).
 **Parent:** [BASE và profile matrix](5-stage-baseline-core.md#build-profiles-and-contract-composition).
 **Composition:** [CI extension](asynchronous-accelerator-control-extension.md).
 **Authority:** [AGENT_POLICY](../AGENT_POLICY.md), [PROJECT_MANAGEMENT](../../../../docs/PROJECT_MANAGEMENT.md).
@@ -14,7 +14,7 @@ Việt approved BASE → CI/polling → IRQ and common-top build selection on
 2026-10-15. This document owns machine CSR access, interrupt entry/return,
 drain/recheck, return-PC tracking and completion notification/driver behavior.
 The supported build enabling this feature inherits BASE_CI as specified by the
-single parent profile matrix; IRQ-only is not a shipped R1 build.
+single parent profile matrix; IRQ-only is not a shipped build.
 
 The added legally encoded operations are CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI,
 CSRRCI and MRET, in M-mode only. CSR accesses are limited to the eight entries
@@ -37,7 +37,10 @@ AI assistance in extracting/refining the specification is disclosed at PR/commit
 
 ## Clock, reset and feature absence
 
-Use the common rising-edge clk and active-low synchronous rst_n of the parent.
+Use the common rising-edge clk and active-low rst_n with asynchronous assertion
+and synchronized release from the [parent reset contract](5-stage-baseline-core.md#reset-architecture).
+R2 inherits [RST-D1](../decisions/reset-strategy.md); it does not change CSR/IRQ
+semantics outside reset or accept the concrete shared reset implementation.
 CPU/manager/adapter/accelerator share that domain in the first integration
 profile; any memory-controller bridge must meet its separate platform contract.
 The fixed top exposes irq_external in all builds, but BASE/BASE_CI ignore it
@@ -46,16 +49,17 @@ is firmware behavior and does not remove hardware.
 
 The following reset additions apply only when the IRQ feature is present:
 
-Reset additionally clears interrupt-drain and system-instruction ownership,
-sets `resume_pc = PC_RESET_VEC`, and clears `mstatus.MIE`, `mstatus.MPIE`, and
+On assertion, without requiring a clock edge, reset additionally clears
+interrupt-drain and system-instruction ownership, sets `resume_pc = PC_RESET_VEC`,
+and clears `mstatus.MIE`, `mstatus.MPIE`, and
 `mie.MEIE`. Fixed CSR fields retain the values defined below. CSR address/data
 payload (`mtvec.BASE`, `mscratch`, `mepc[31:2]`, and `mcause`) is unspecified
 after reset; software must initialize a value before relying on it. In
 particular, firmware installs `mtvec` and a valid handler/stack before enabling
 interrupts. An asserted IRQ after reset is visible in `mip.MEIP` but cannot
 cause entry while masked. Reset suppresses CSR writes, `MRET`, and interrupt
-entry on the sampling edge; it does not acknowledge accelerator completion or
-promise rollback of an accepted MMIO store.
+entry on any edge with reset active; it does not acknowledge accelerator
+completion or promise rollback of an accepted MMIO store.
 
 ## Machine control and interrupt semantics
 
@@ -215,7 +219,7 @@ in WB; CI-only WB wait still obeys sole-live/no-data-outstanding ownership.
 
 Effective priority when IRQ is enabled:
 
-1. Synchronous reset.
+1. Reset (asynchronous assertion, synchronized release).
 2. irq_take_fire at an empty registered-drain boundary.
 3. Retiring MRET and its WB redirect.
 4. Unresolved MEM wait from BASE.
@@ -234,7 +238,7 @@ An older ordinary EX redirect may still kill wrong-path waiting work.
 
 | Override / event | Stage/ownership effect | Retirement / externally visible effect |
 | --- | --- | --- |
-| Reset sampled low | Clear parent, CI and IRQ validity/control ownership. | No command, RF/CSR write, MRET or IRQ entry on the edge. |
+| Reset asserted | Asynchronously clear parent, CI and IRQ validity/control ownership. | No command, RF/CSR write, MRET or IRQ entry on an edge with reset low. |
 | irq_take_fire | All pipeline stages already empty; clear drain and freshly select mtvec target. | Trap CSR/PC updates only; no instruction retirement. |
 | MRET WB retirement | Serialized owner leaves WB; no younger admission on that edge; freshly select return target. | Exactly one return/CSR effect; no CI command/data access. |
 | CI WB wait | Hold only live CI at WB, all other stages invalid; data_outstanding=0. | No CI effect until command_fire; drain can start but not enter. |
@@ -400,7 +404,10 @@ objective acceptance/harness evidence rules and CI regression, then add:
    firmware modes on the same hardware with identical CI/job semantics. Masking
    interrupts is not evidence of removing feature hardware.
 6. **Reset/completion.** Cover reset with CI handshake, CSR/MRET, drain and
-   terminal events pending. Reset wins all core effects; source/adapter memory
+   terminal events pending, including assertion between edges or while the
+   clock is stopped and synchronized release after restart. Check IRQ enables,
+   drain/serialized ownership and resume_pc reset without an edge. Reset wins
+   all core effects; source/adapter memory
    recovery and late-epoch traffic obey CI coordinated-reset obligations.
 
 The IRQ/composition gate is cumulative: BASE correctness → CI/polling
@@ -414,7 +421,7 @@ The CPU decisions above are selected, including clock-synchronous level,
 drain/recheck, WB CSR/MRET and resume_pc. No manager MMIO frontend or unselected
 interrupt controller is implied. Final owner text/snapshot review is pending;
 this document records decisions rather than independently accepting a spec.
-After R1 freeze, semantic changes require owner approval, a bundle revision
+After freeze, semantic changes require owner approval, a bundle revision
 update and matching regression obligations.
 
 The project must still accept concrete source wiring, real-IP descriptors,

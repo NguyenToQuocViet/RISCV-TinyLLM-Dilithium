@@ -1,8 +1,8 @@
 # Asynchronous Accelerator Control Extension — Contract and Roadmap
 
-**Status:** Proposed — R1 freeze candidate; owner-selected CPU/ABI decisions, final text/snapshot review pending.
+**Status:** Proposed — R2 freeze candidate; owner-selected CPU/ABI decisions, final text/snapshot review pending.
 **CPU owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Contract revision:** R1 / 2026-10-15.
+**Contract revision:** R2 / 2026-10-21 (reset-only amendment; ABI v1 unchanged).
 **Parent:** [BASE and profile matrix](5-stage-baseline-core.md#build-profiles-and-contract-composition).
 **IRQ composition:** [External Interrupt Extension](external-interrupt-extension.md).
 **Authority:** [AGENT_POLICY](../AGENT_POLICY.md), [PROJECT_MANAGEMENT](../../../../docs/PROJECT_MANAGEMENT.md).
@@ -14,6 +14,11 @@ The CPU contract and ABI choices are owner-selected; final document/snapshot
 review remains pending. Manager, adapter and platform requirements do not by
 themselves constitute an accepted SoC architecture. AI assisted reasoning,
 drafting and review; disclose this assistance in the PR/commit under AGENT_POLICY.
+
+R2 inherits the owner-selected [RST-D1 reset amendment](../decisions/reset-strategy.md):
+asynchronous assertion, synchronized release and unchanged selective reset.
+The amendment does not accept shared SoC implementation or the rest of this
+Proposed extension independently of its final review.
 
 ## 1. Objectives and limits
 
@@ -274,8 +279,11 @@ need not be reset.
 
 ## 7. Native CPU–manager control port
 
-The port uses a common rising edge and active-low synchronous `rst_n`. It is the
-profile's native port and claims no RoCC/XIF compatibility. There is one control
+The port uses a common rising edge and active-low `rst_n` with asynchronous
+assertion and synchronized release under the [BASE reset contract](5-stage-baseline-core.md#reset-architecture).
+The CPU-boundary manager fixture must share this conditioned reset; the real
+manager/adapter reset distribution remains subject to project/IP-owner review.
+It is the profile's native port and claims no RoCC/XIF compatibility. There is one control
 transaction at a time, without request/response queues or a separate commit phase.
 
 | Signal | Direction relative to CPU | Width | Validity / meaning |
@@ -368,7 +376,7 @@ accepted at the same edge; ACK of one target must not lose the other's terminal.
 | SUCCESS/ERROR | ACK | ACKED; reclaim the old completion. | IDLE |
 | IDLE | Valid SUBMIT | ACCEPTED; reserve pointer, not yet terminal. | ACTIVE |
 | One target terminal, the other ACTIVE | ACK terminal target + terminal for the other target | ACK the first target; retain the second target's completion. | IDLE + SUCCESS/ERROR |
-| Any | Reset sampled low + command/start/terminal signals high | Reset wins; no fire, retirement or publication. | Control ownership idle |
+| Any | Reset asserted, including an edge with command/start/terminal signals high | Reset wins asynchronously for control ownership; no fire, retirement or publication on an edge with reset low. | Control ownership idle |
 
 An adapter terminal while IDLE or after terminal was already accepted is a
 protocol violation. Do not add a terminal FIFO or clear-versus-set latch to
@@ -487,10 +495,11 @@ old epoch: DMA reads/writes, start/terminal/control events and bridge ownership
 pending at reset. Reset neither rolls back accepted writes nor restores
 pre-job memory contents.
 
+Reset assertion clears required slot/control ownership and terminal state
+without waiting for a clock edge, according to the inherited reset contract.
 At an edge sampling `rst_n=0`, command/start/terminal fire and CI retirement/RF
-write are all zero; slot/control ownership returns to IDLE and terminal state
-clears. Payload reset is not required to establish validity. Software restarts
-and initializes records before accepting jobs; IRQ-specific startup belongs
+write are all zero. Payload reset is not required to establish validity.
+Software restarts and initializes records before accepting jobs; IRQ-specific startup belongs
 to the IRQ contract. Old jobs are discarded in the reset epoch; normal
 completion for the previous application is not promised.
 
@@ -535,7 +544,7 @@ the core/accelerator.
 | --- | --- | --- |
 | Encoding / operands | Three operations, x0, rd aliasing a source, ID with nonzero high bits, unused-field patterns | Legal binding decodes correctly; full IDs do not alias; x0 discards the result but retains effects; unsupported patterns produce no CI command. |
 | Serialization | CI after ALU/load/store with delayed response; older branch flushes CI; back-to-back CI | Older instructions retire before issue; no younger admission until the cycle after CI retirement; no wrong-path dispatch. |
-| WB handshake | ready low for multiple cycles, reset at the handshake edge, BUSY and argument errors | Stable command; exactly-once retirement/effect; CI wait is sole-live with no data outstanding; reset wins. |
+| WB handshake | ready low for multiple cycles, reset between clock edges and at the handshake edge, BUSY and argument errors | Stable command; exactly-once retirement/effect; CI wait is sole-live with no data outstanding; asynchronous reset clears ownership and wins over fire. |
 | Progress / overlap | Accepted SUBMIT followed by delayed terminal; occupied slot; adapter not start-ready | CPU performs independent work; BUSY returns before terminal; no rejected request retained for later execution. |
 | Slot lifecycle | Submit to ACTIVE/terminal slot, repeated QUERY/ACK, asynchronous descriptor failure | One job per target; QUERY does not clear; safe ERROR retained; only terminal ACK releases. |
 | Concurrent events | ACTIVE + terminal with QUERY/ACK/SUBMIT; two completions at one edge; ACK one target | Pre-edge results match the table; new/other-target completions are not lost. |
@@ -559,7 +568,7 @@ workflow; core RTL remains human-authored unless separately delegated.
 
 | Gate | Required work / evidence | Claim boundary |
 | --- | --- | --- |
-| G0 — R1 freeze | Final owner text review, ABI v1 preservation, profile/dependency/link checks and a version-controlled snapshot. | Does not accept shared SoC design or authorize RTL implementation. |
+| G0 — Contract freeze | Final owner text review, ABI v1 preservation, profile/dependency/link checks and an R2 version-controlled snapshot including RST-D1. | Does not accept shared SoC design or authorize RTL implementation. |
 | G1 — BASE | Pass BASE regression, harness and objective acceptance gate. | Correct baseline CPU behavior in the harness; no CI/IRQ. |
 | G2 — CI/polling | Add decode/serialize/WB command, an independent manager fixture, two emulated adapters and polling binding/driver; retain BASE regression. | Correct control boundary, independent CPU work, BUSY without waiting for jobs, target overlap, ordering and generated-code evidence. |
 | G3 — IRQ/composition | Add CSR/MRET/drain/entry and terminal notification/ISR; retain G1/G2 and IRQ-contract gates. | The same IRQ-enabled hardware runs polling and interrupt firmware; not yet real-IP/FPGA proof. |
@@ -575,7 +584,7 @@ and verifying the core command boundary.
 
 ## 16. Freeze boundary and integration dependencies
 
-R1 has no remaining implicit CPU/ISA fork: the owner has selected profile
+R2 preserves the owner-selected CPU/ISA choices from R1: profile
 selection, command ABI, stage ownership/handshake and disabled-feature behavior.
 The final text still requires owner review and a Git snapshot; intent is not
 hardware proof. Post-freeze semantic changes require owner approval, a bundle
