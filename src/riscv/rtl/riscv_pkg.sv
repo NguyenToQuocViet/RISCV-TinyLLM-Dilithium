@@ -53,4 +53,12 @@ package riscv_pkg;
         CF_JAL      = 2'h2,
         CF_JALR     = 2'h3
     } control_flow_t;
+
+    typedef enum logic [2:0] {
+        MEM_BYTE    = 3'h0,
+        MEM_HALF    = 3'h1,
+        MEM_WORD    = 3'h2,
+        MEM_BYTE_U  = 3'h4,
+        MEM_HALF_U  = 3'h5
+    } mem_type_t;
 endpackage : riscv_pkg
