@@ -1,0 +1,138 @@
+[
+  {
+    "id": "wikitext2:train:2285",
+    "role": "calibration",
+    "calibration_index": 0,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:train:3935",
+    "role": "calibration",
+    "calibration_index": 1,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:train:3548",
+    "role": "calibration",
+    "calibration_index": 2,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:train:2542",
+    "role": "calibration",
+    "calibration_index": 3,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:train:4642",
+    "role": "calibration",
+    "calibration_index": 4,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:train:333",
+    "role": "calibration",
+    "calibration_index": 5,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:train:4980",
+    "role": "calibration",
+    "calibration_index": 6,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:train:3239",
+    "role": "calibration",
+    "calibration_index": 7,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  }
+]

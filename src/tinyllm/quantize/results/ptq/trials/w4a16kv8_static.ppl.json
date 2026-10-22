@@ -1,0 +1,490 @@
+{
+  "config": {
+    "name": "w4a16kv8_static",
+    "decoder_weight_bits": 4,
+    "shared_weight_bits": 8,
+    "activation_bits": 16,
+    "key_bits": 8,
+    "value_bits": 8,
+    "enabled": {
+      "W": true,
+      "A": true,
+      "K": true,
+      "V": true
+    },
+    "weight_policy": "static_per_output_row_axis0",
+    "activation_policy": "static_per_tensor",
+    "kv_policy": "static_per_native_head_axis1_BHTD",
+    "zero_point": 0,
+    "rounding": "nearest_ties_to_even",
+    "scale_dtype": "float32",
+    "shared_embedding_lm_head": "one quantized weight; embedding row lookup and head projection",
+    "fp32_remainder": [
+      "RMSNorm",
+      "RoPE arithmetic",
+      "attention QK matmul/scaling/mask/softmax/AV matmul",
+      "SiLU",
+      "FFN gate multiply",
+      "residual adds",
+      "Linear accumulators",
+      "logits"
+    ],
+    "activation_observer": "minmax",
+    "point_enabled": {}
+  },
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "cpu_capability": "AVX2",
+    "torch_build": "PyTorch built with:\n  - GCC 9.3\n  - C++ Version: 201703\n  - Intel(R) oneAPI Math Kernel Library Version 2024.2-Product Build 20240605 for Intel(R) 64 architecture applications\n  - Intel(R) MKL-DNN v3.5.3 (Git Hash 66f0cb9eb66affd2da3bf5f8d897376f04aae6af)\n  - OpenMP 201511 (a.k.a. OpenMP 4.5)\n  - LAPACK is enabled (usually provided by MKL)\n  - NNPACK is enabled\n  - CPU capability usage: AVX2\n  - Build settings: BLAS_INFO=mkl, BUILD_TYPE=Release, COMMIT_SHA=2236df1770800ffea5697b11b0bb0d910b2e59e1, CXX_COMPILER=/opt/rh/devtoolset-9/root/usr/bin/c++, CXX_FLAGS= -D_GLIBCXX_USE_CXX11_ABI=0 -fabi-version=11 -fvisibility-inlines-hidden -DUSE_PTHREADPOOL -DNDEBUG -DUSE_KINETO -DLIBKINETO_NOCUPTI -DLIBKINETO_NOROCTRACER -DLIBKINETO_NOXPUPTI=ON -DUSE_FBGEMM -DUSE_PYTORCH_QNNPACK -DUSE_XNNPACK -DSYMBOLICATE_MOBILE_DEBUG_HANDLE -O2 -fPIC -Wall -Wextra -Werror=return-type -Werror=non-virtual-dtor -Werror=bool-operation -Wnarrowing -Wno-missing-field-initializers -Wno-type-limits -Wno-array-bounds -Wno-unknown-pragmas -Wno-unused-parameter -Wno-strict-overflow -Wno-strict-aliasing -Wno-stringop-overflow -Wsuggest-override -Wno-psabi -Wno-error=old-style-cast -Wno-missing-braces -fdiagnostics-color=always -faligned-new -Wno-unused-but-set-variable -Wno-maybe-uninitialized -fno-math-errno -fno-trapping-math -Werror=format -Wno-stringop-overflow, LAPACK_INFO=mkl, PERF_WITH_AVX=1, PERF_WITH_AVX2=1, TORCH_VERSION=2.6.0, USE_CUDA=0, USE_CUDNN=OFF, USE_CUSPARSELT=OFF, USE_EXCEPTION_PTR=1, USE_GFLAGS=OFF, USE_GLOG=OFF, USE_GLOO=ON, USE_MKL=ON, USE_MKLDNN=ON, USE_MPI=OFF, USE_NCCL=OFF, USE_NNPACK=ON, USE_OPENMP=ON, USE_ROCM=OFF, USE_ROCM_KERNEL_ASSERT=OFF, \n",
+    "packages": {
+      "torch": "2.6.0+cpu",
+      "transformers": "4.49.0",
+      "numpy": "2.2.3",
+      "huggingface-hub": "0.29.1",
+      "safetensors": "0.5.3",
+      "tokenizers": "0.21.0"
+    },
+    "device": "cpu",
+    "dtype": "float32",
+    "attention": "eager",
+    "seed": 1234,
+    "threads": 1,
+    "interop_threads": 1,
+    "deterministic_algorithms": true,
+    "mkldnn": false,
+    "mkl_cbwr": "unset (default CPU dispatch)",
+    "matmul_precision": "highest",
+    "command": [
+      "/home/hoang_hung/RISCV-TinyLLM-Dilithium/src/tinyllm/quantize/.venv/bin/python",
+      "ptq_experiment.py",
+      "ppl",
+      "--offline",
+      "--config",
+      "configs/stage3/w4a16kv8_static.json",
+      "--qparams",
+      "candidates/w8a16kv8_static/qparams.safetensors",
+      "--output",
+      "results/ptq/trials/w4a16kv8_static.ppl.json"
+    ]
+  },
+  "mode": "ppl",
+  "selection_ids": [
+    "wikitext2:validation:480",
+    "wikitext2:validation:314",
+    "wikitext2:validation:416",
+    "wikitext2:validation:202",
+    "wikitext2:validation:40",
+    "wikitext2:validation:208",
+    "wikitext2:validation:275",
+    "wikitext2:validation:481",
+    "wikitext2:validation:387",
+    "wikitext2:validation:205",
+    "wikitext2:validation:507",
+    "wikitext2:validation:158",
+    "wikitext2:validation:415",
+    "wikitext2:validation:517",
+    "wikitext2:validation:319",
+    "wikitext2:validation:487",
+    "wikitext2:validation:423",
+    "wikitext2:validation:462",
+    "wikitext2:validation:288",
+    "wikitext2:validation:214",
+    "wikitext2:validation:130",
+    "wikitext2:validation:219",
+    "wikitext2:validation:268",
+    "wikitext2:validation:291",
+    "wikitext2:validation:271",
+    "wikitext2:validation:257",
+    "wikitext2:validation:21",
+    "wikitext2:validation:309",
+    "wikitext2:validation:115",
+    "wikitext2:validation:357",
+    "wikitext2:validation:256",
+    "wikitext2:validation:34",
+    "wikitext2:validation:434",
+    "wikitext2:validation:495",
+    "wikitext2:validation:226",
+    "wikitext2:validation:386",
+    "wikitext2:validation:13",
+    "wikitext2:validation:181",
+    "wikitext2:validation:172",
+    "wikitext2:validation:373",
+    "wikitext2:validation:126",
+    "wikitext2:validation:414",
+    "wikitext2:validation:99",
+    "wikitext2:validation:301",
+    "wikitext2:validation:497",
+    "wikitext2:validation:305",
+    "wikitext2:validation:201",
+    "wikitext2:validation:475",
+    "wikitext2:validation:255",
+    "wikitext2:validation:484",
+    "wikitext2:validation:306",
+    "wikitext2:validation:426",
+    "wikitext2:validation:82",
+    "wikitext2:validation:216",
+    "wikitext2:validation:470",
+    "wikitext2:validation:346",
+    "wikitext2:validation:474",
+    "wikitext2:validation:109",
+    "wikitext2:validation:75",
+    "wikitext2:validation:195",
+    "wikitext2:validation:283",
+    "wikitext2:validation:490",
+    "wikitext2:validation:369",
+    "wikitext2:validation:156"
+  ],
+  "heldout_evaluated": false,
+  "source_qparams": "candidates/w8a16kv8_static/qparams.safetensors",
+  "loaded_static_groups": [
+    "W",
+    "A",
+    "K",
+    "V"
+  ],
+  "qparams_sha256": "6a80cd99bef4ea54900a4569541b656da88b8e013b658d83c6261962211b94fb",
+  "weight_qparam_oracle": {
+    "pass": true,
+    "oracle": "NumPy max(abs(source row))/signed bound, FP32 eps floor",
+    "decoder_tensors": 210,
+    "shared_tensors": 1,
+    "rows": 204672
+  },
+  "ppl": {
+    "nll": 128815.12453206257,
+    "tokens": 32704,
+    "ppl": 51.35789286297863,
+    "windows": 64,
+    "per_window": [
+      {
+        "id": "wikitext2:validation:480",
+        "nll": 2361.889750914648,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:314",
+        "nll": 1640.4224403630942,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:416",
+        "nll": 2005.9437640998513,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:202",
+        "nll": 2023.1253248006105,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:40",
+        "nll": 1748.4408109961078,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:208",
+        "nll": 1839.1494332514703,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:275",
+        "nll": 2035.9501609890722,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:481",
+        "nll": 2154.3424155730754,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:387",
+        "nll": 1879.0901304315776,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:205",
+        "nll": 1842.2587763506453,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:507",
+        "nll": 2090.964588928269,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:158",
+        "nll": 2009.8440876058303,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:415",
+        "nll": 2006.3254398405552,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:517",
+        "nll": 1943.6539308396168,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:319",
+        "nll": 2328.1396301379427,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:487",
+        "nll": 2193.466168344952,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:423",
+        "nll": 2045.336202505976,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:462",
+        "nll": 2216.016864239704,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:288",
+        "nll": 1919.5247613070533,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:214",
+        "nll": 1897.094906596467,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:130",
+        "nll": 1822.736344512552,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:219",
+        "nll": 1872.1296110991389,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:268",
+        "nll": 1951.079507956776,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:291",
+        "nll": 2258.691919926787,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:271",
+        "nll": 1754.68979668268,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:257",
+        "nll": 2313.625566020608,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:21",
+        "nll": 1711.1795113859698,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:309",
+        "nll": 2050.390772061888,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:115",
+        "nll": 1925.9174615767988,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:357",
+        "nll": 2065.5092331622727,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:256",
+        "nll": 2238.045230265707,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:34",
+        "nll": 1834.5450778715312,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:434",
+        "nll": 1992.2682758955052,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:495",
+        "nll": 2303.50703285262,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:226",
+        "nll": 1962.1152017485583,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:386",
+        "nll": 2051.8025156878866,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:13",
+        "nll": 1731.4739147440996,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:181",
+        "nll": 1875.5200088378042,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:172",
+        "nll": 2154.1585875777528,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:373",
+        "nll": 1909.617589079775,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:126",
+        "nll": 2075.654536315473,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:414",
+        "nll": 2125.8838444426656,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:99",
+        "nll": 1912.1053211733233,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:301",
+        "nll": 2150.4877040727297,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:497",
+        "nll": 1902.779561783187,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:305",
+        "nll": 2062.2423133731354,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:201",
+        "nll": 1653.2811419442296,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:475",
+        "nll": 2127.61068565771,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:255",
+        "nll": 2145.284914144315,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:484",
+        "nll": 1957.8785987490555,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:306",
+        "nll": 1950.7313495562412,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:426",
+        "nll": 2094.3226629998535,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:82",
+        "nll": 1861.4311396381818,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:216",
+        "nll": 2143.9089345149696,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:470",
+        "nll": 1973.9811176210642,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:346",
+        "nll": 1873.576148988679,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:474",
+        "nll": 2246.46223867964,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:109",
+        "nll": 1962.0977273909375,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:75",
+        "nll": 2384.57956841588,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:195",
+        "nll": 1915.580110475421,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:283",
+        "nll": 2087.932737644587,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:490",
+        "nll": 2369.102147549391,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:369",
+        "nll": 1949.3856781655923,
+        "tokens": 511
+      },
+      {
+        "id": "wikitext2:validation:156",
+        "nll": 1928.8416017030831,
+        "tokens": 511
+      }
+    ]
+  },
+  "ppl_ratio": 2.2750185187382903,
+  "ppl_pass": false,
+  "diagnostic_only": false,
+  "quality_complete": false,
+  "static_qparams_unchanged": true,
+  "seconds": 165.195,
+  "status": "PASS"
+}

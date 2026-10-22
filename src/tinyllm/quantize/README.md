@@ -1,4 +1,4 @@
-# Bản chuẩn FP32 của SmolLM2-135M
+# Bản chuẩn FP32 và thí nghiệm PTQ của SmolLM2-135M
 
 Thư mục này thực hiện [chặng 1 của kế hoạch TinyLLM](../docs/PLAN.md#1-cố-định-nguồn-model-và-tạo-bản-chạy-chuẩn-fp32): cố định nguồn model, chạy Transformers gốc bằng FP32 và kiểm tra KV cache.
 
@@ -136,7 +136,7 @@ Tham khảo API: [KV cache trong Transformers 4.49.0](https://huggingface.co/doc
 
 ## Đánh giá PTQ v0
 
-Bộ công cụ [PTQ v0](plans/ptq_plan.md) dùng lại backend FP32 trên để chuẩn bị dữ liệu và đo chất lượng trước khi lượng tử hóa. Chặng bước 1–2 đã có dữ liệu cố định và bộ chấm PPL/PIQA/cache; kết quả, quy tắc chấm, công dụng từng module và lệnh chạy nằm trong [báo cáo chặng 1](reports/ptq_stage1.md). Bước 1–2 đã qua QA. Adapter fake-quant và calibration bước 3–4 đã hiện thực, đang chờ QA; xem [báo cáo chặng 2](reports/ptq_stage2.md) về cấu hình, tham số tĩnh và kiểm chứng model thật.
+Bộ công cụ [PTQ v0](plans/ptq_plan.md) dùng lại backend FP32 trên để chuẩn bị dữ liệu và đo chất lượng trước khi lượng tử hóa. Chặng bước 1–2 đã có dữ liệu cố định và bộ chấm PPL/PIQA/cache; kết quả, quy tắc chấm, công dụng từng module và lệnh chạy nằm trong [báo cáo chặng 1](reports/ptq_stage1.md). Bước 1–2 đã qua QA. Adapter fake-quant và calibration bước 3–4 đã QA PASS; xem [báo cáo chặng 2](reports/ptq_stage2.md) về cấu hình, tham số tĩnh và kiểm chứng model thật.
 
 ```bash
 # Lần đầu tải parquet và cố định token IDs; dùng --offline ở lần sau.
@@ -155,4 +155,29 @@ timeout 3600 .venv/bin/python ptq_calibrate.py --offline --config configs/w8a8kv
 timeout 3600 .venv/bin/python ptq_validate.py --offline
 ```
 
-Config và qparams tĩnh nằm trong `calibration/w8a8kv8_static/`; kiểm chứng trước/sau bật fake-quant và reload nằm trong `results/ptq/stage2_validation.json`. Cấu hình này chưa được đánh giá chất lượng để chọn baseline.
+Config và qparams tĩnh nằm trong `calibration/w8a8kv8_static/`; kiểm chứng trước/sau bật fake-quant và reload nằm trong `results/ptq/stage2_validation.json`. A8 MinMax này đã bị loại bởi full PPL; baseline được giữ sau bước 5–8 là W8A16KV8 tĩnh, đã QA PASS chặng 3.
+
+
+Kết quả bước 5–8 và công dụng từng module/lệnh nằm trong [báo cáo chặng 3](reports/ptq_stage3.md). Trong sweep ban đầu, đã so full64 PPL cho A8 MinMax/Histogram/percentile, A12/A16 MinMax và A8 Dynamic per-token; chỉ W8A16KV8 tĩnh vượt đủ PPL, PIQA và cả hai decode gate. W4 decoder (shared head/embedding W8) đã bị loại bởi full PPL. `candidates/` giữ năm bundle được chọn theo vai trò và trạng thái trong [shortlist](results/ptq/shortlist.json); `calibration/` giữ các kết quả trung gian. A8 SmoothQuant alpha 0,9 là mục tiêu nghiên cứu, chưa đạt ngưỡng chất lượng. Heldout chưa đánh giá.
+
+Đánh giá bổ sung A per-channel và SmoothQuant, gồm PPL đầy đủ và qualify các ứng viên qua PPL, nằm trong [báo cáo mở rộng](reports/ptq_a_extensions.md). Kết quả này giữ nguyên baseline v0 và cung cấp thêm các ứng viên đã qua đủ quality gate; tập heldout vẫn chưa dùng.
+
+Đọc lại baseline và kiểm/chấm bằng PPL đã đo, dùng cùng môi trường và dữ liệu:
+
+```bash
+timeout 300 .venv/bin/python -m pytest -q test_ptq_fake_quant.py test_ptq_stage3.py test_ptq_static_a.py
+timeout 2400 .venv/bin/python ptq_finalize.py --offline \
+    --config candidates/w8a16kv8_static/config.json \
+    --qparams candidates/w8a16kv8_static/qparams.safetensors \
+    --ppl-result results/ptq/trials/w8a16kv8_static.ppl.json \
+    --candidate-dir candidates/w8a16kv8_static \
+    --output results/ptq/trials/w8a16kv8_static.final.json
+```
+
+Bundle mới ghi bits/policy/observer/trục trong header safetensors. Load sai calibration bị từ chối; khi W bits đổi, phải yêu cầu tính lại W từ source. A Dynamic chỉ tải W/K/V tĩnh bằng nhánh tường minh, không dùng A scale lưu sẵn. Fake-quant vẫn tính FP32 giữa các điểm quantize; payload báo cáo là lý thuyết, chưa có packing/kernel integer hoặc số đo RTL.
+
+`ptq_experiment.py` (`quick`, `diagnose`, `ppl`, `full`) và `ptq_finalize.py` dùng bộ chuẩn FP32 cố định ở `results/ptq/fp32.json`. Finalizer kiểm kết quả PPL được dùng lại thuộc đúng config và qparams của ứng viên. `diagnose` hỗ trợ A per-tensor, per-input-channel (báo số scale cùng min/max) và dynamic per-token.
+
+Kiểm cấu trúc adapter, bất biến trọng số/qparams và oracle W4 chạy riêng bằng `ptq_validate.py`; `ptq_finalize.py --structural-only` giữ chế độ kiểm cấu trúc tường minh. Các lượt đo thường không lặp lại những kiểm tra này; finalizer vẫn so logits full/cache tới từng bit sau khi lưu và nạp lại bundle.
+
+Các lệnh đánh giá và calibration mặc định đọc trực tiếp `data/`; calibration chỉ ghi vào `--output-dir`. Khi chạy lại lệnh lịch sử dùng `--data-dir data/alpha_sweep_runtime`, thay bằng `--data-dir data`: ba file đầu vào cũ giống hệt dữ liệu gốc.

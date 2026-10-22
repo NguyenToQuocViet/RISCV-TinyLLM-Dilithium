@@ -1,0 +1,33 @@
+{
+  "name": "w8a16kv8_static",
+  "decoder_weight_bits": 8,
+  "shared_weight_bits": 8,
+  "activation_bits": 16,
+  "key_bits": 8,
+  "value_bits": 8,
+  "enabled": {
+    "W": true,
+    "A": true,
+    "K": true,
+    "V": true
+  },
+  "weight_policy": "static_per_output_row_axis0",
+  "activation_policy": "static_per_tensor",
+  "kv_policy": "static_per_native_head_axis1_BHTD",
+  "zero_point": 0,
+  "rounding": "nearest_ties_to_even",
+  "scale_dtype": "float32",
+  "shared_embedding_lm_head": "one quantized weight; embedding row lookup and head projection",
+  "fp32_remainder": [
+    "RMSNorm",
+    "RoPE arithmetic",
+    "attention QK matmul/scaling/mask/softmax/AV matmul",
+    "SiLU",
+    "FFN gate multiply",
+    "residual adds",
+    "Linear accumulators",
+    "logits"
+  ],
+  "activation_observer": "minmax",
+  "point_enabled": {}
+}

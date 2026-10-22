@@ -1,0 +1,63 @@
+{
+  "model_id": "HuggingFaceTB/SmolLM2-135M",
+  "model_revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+  "seed": 1234,
+  "length": 512,
+  "windows_per_split": 64,
+  "wikitext": {
+    "repo": "Salesforce/wikitext",
+    "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+    "join": "\n\n",
+    "special_tokens": false,
+    "splits": {
+      "train": {
+        "file": "wikitext-2-raw-v1/train-00000-of-00001.parquet",
+        "role": "calibration",
+        "tokens": 2567892,
+        "complete_blocks": 5015,
+        "dropped_tail_tokens": 212
+      },
+      "validation": {
+        "file": "wikitext-2-raw-v1/validation-00000-of-00001.parquet",
+        "role": "selection",
+        "tokens": 268271,
+        "complete_blocks": 523,
+        "dropped_tail_tokens": 495
+      },
+      "test": {
+        "file": "wikitext-2-raw-v1/test-00000-of-00001.parquet",
+        "role": "heldout",
+        "tokens": 304978,
+        "complete_blocks": 595,
+        "dropped_tail_tokens": 338
+      }
+    }
+  },
+  "piqa": {
+    "repo": "baber/piqa",
+    "revision": "142f6d7367fd9877f0fb3b5734ea6a545f54cdd1",
+    "task_revision": "d6de81643928d653435c431bae19945d41d32520",
+    "prompt": "Question: {goal}\nAnswer:",
+    "delimiter": " ",
+    "score": "sum continuation log likelihood; tie -> choice 0",
+    "boundary": "joint encode, split at context length; prefix equality required",
+    "overlength": "exclude entire question if either choice exceeds 512; no truncation",
+    "counts": {
+      "selection": {
+        "groups": 901,
+        "kept": 919,
+        "excluded_overlength": [],
+        "source_questions": 919
+      },
+      "heldout": {
+        "groups": 901,
+        "kept": 919,
+        "excluded_overlength": [],
+        "source_questions": 919
+      },
+      "source_rows": 1838,
+      "unique_question_groups": 1802,
+      "duplicate_question_rows": 36
+    }
+  }
+}

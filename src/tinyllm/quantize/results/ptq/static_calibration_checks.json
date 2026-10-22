@@ -1,0 +1,52 @@
+{
+  "status": "PASS",
+  "control": "calibration/w8a8kv8_static",
+  "variants": [
+    {
+      "name": "w8a8kv8_histogram",
+      "w_k_v_tensors_bitwise_equal": 542,
+      "calibration_ids_equal": true,
+      "windows": 64,
+      "cache_runs": 16,
+      "kv_tokens_per_layer": 37632,
+      "histogram_freeze_calculations_per_point": 1,
+      "scales": 205063
+    },
+    {
+      "name": "w8a12kv8_static",
+      "w_k_v_tensors_bitwise_equal": 542,
+      "calibration_ids_equal": true,
+      "windows": 64,
+      "cache_runs": 16,
+      "kv_tokens_per_layer": 37632,
+      "histogram_freeze_calculations_per_point": null,
+      "scales": 205063
+    },
+    {
+      "name": "w8a16kv8_static",
+      "w_k_v_tensors_bitwise_equal": 542,
+      "calibration_ids_equal": true,
+      "windows": 64,
+      "cache_runs": 16,
+      "kv_tokens_per_layer": 37632,
+      "histogram_freeze_calculations_per_point": null,
+      "scales": 205063
+    },
+    {
+      "name": "w8a8kv8_percentile",
+      "w_k_v_tensors_bitwise_equal": 542,
+      "calibration_ids_equal": true,
+      "windows": 64,
+      "cache_runs": 16,
+      "kv_tokens_per_layer": 37632,
+      "histogram_freeze_calculations_per_point": 1,
+      "scales": 205063
+    }
+  ],
+  "dynamic": {
+    "static_w_k_v_tensors_bitwise_equal": 542,
+    "static_a_loaded": false,
+    "current_token_only": true
+  },
+  "heldout_evaluated": false
+}

@@ -1,0 +1,865 @@
+{
+  "working_directory": "src/tinyllm/quantize",
+  "backend": "CPU/eager/FP32; model eval/inference; seed1234; compute1/interop1; MKLDNN off",
+  "commands": [
+    {
+      "label": "calibrate-w8a8kv8_histogram",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_calibrate.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_histogram.json",
+        "--output-dir",
+        "calibration/w8a8kv8_histogram"
+      ],
+      "exit": 0,
+      "scorer_seconds": 233.495
+    },
+    {
+      "label": "ppl-w8a8kv8_histogram",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_histogram.json",
+        "--qparams",
+        "calibration/w8a8kv8_histogram/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a8kv8_histogram.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 202.523
+    },
+    {
+      "label": "ppl-w8a8kv8_static",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_static.json",
+        "--qparams",
+        "calibration/w8a8kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a8kv8_static.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 224.589
+    },
+    {
+      "label": "calibrate-w8a12kv8_static",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_calibrate.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a12kv8_static.json",
+        "--output-dir",
+        "calibration/w8a12kv8_static"
+      ],
+      "exit": 0,
+      "seconds": 240.769
+    },
+    {
+      "label": "ppl-w8a12kv8_static",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a12kv8_static.json",
+        "--qparams",
+        "calibration/w8a12kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a12kv8_static.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 192.47
+    },
+    {
+      "label": "calibrate-w8a16kv8_static",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_calibrate.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a16kv8_static.json",
+        "--output-dir",
+        "calibration/w8a16kv8_static"
+      ],
+      "exit": 0,
+      "seconds": 225.576
+    },
+    {
+      "label": "ppl-w8a16kv8_static",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a16kv8_static.json",
+        "--qparams",
+        "calibration/w8a16kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a16kv8_static.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 181.093
+    },
+    {
+      "label": "calibrate-w8a8kv8_percentile",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_calibrate.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_percentile.json",
+        "--output-dir",
+        "calibration/w8a8kv8_percentile"
+      ],
+      "exit": 0,
+      "seconds": 358.281
+    },
+    {
+      "label": "ppl-w8a8kv8_percentile",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_percentile.json",
+        "--qparams",
+        "calibration/w8a8kv8_percentile/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a8kv8_percentile.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 207.592
+    },
+    {
+      "label": "ppl-w8a8kv8_dynamic",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_dynamic.json",
+        "--qparams",
+        "calibration/w8a8kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a8kv8_dynamic.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 180.441
+    },
+    {
+      "label": "diagnose-w8a8kv8_dynamic",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "diagnose",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_dynamic.json",
+        "--qparams",
+        "calibration/w8a8kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a8kv8_dynamic.diagnose.json"
+      ],
+      "exit": 0,
+      "seconds": 7.756
+    },
+    {
+      "label": "finalize-w8a8kv8_dynamic",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_dynamic.json",
+        "--qparams",
+        "calibration/w8a8kv8_static/qparams.safetensors",
+        "--candidate-dir",
+        "candidates/w8a8kv8_dynamic",
+        "--output",
+        "results/ptq/trials/w8a8kv8_dynamic.final.json",
+        "--structural-only"
+      ],
+      "exit": 1,
+      "seconds": 32.851,
+      "remediation": "Missing PTQAdapter import in ptq_finalize.py reload; import fixed; same structural command reran exit0. Full PPL unaffected."
+    },
+    {
+      "label": "finalize-w8a8kv8_dynamic",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_dynamic.json",
+        "--qparams",
+        "calibration/w8a8kv8_static/qparams.safetensors",
+        "--candidate-dir",
+        "candidates/w8a8kv8_dynamic",
+        "--output",
+        "results/ptq/trials/w8a8kv8_dynamic.final.json",
+        "--structural-only"
+      ],
+      "exit": 0,
+      "seconds": 37.458
+    },
+    {
+      "label": "diagnose-w8a8kv8_static",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "diagnose",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_static.json",
+        "--qparams",
+        "calibration/w8a8kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a8kv8_static.diagnose.json"
+      ],
+      "exit": 0,
+      "seconds": 7.482
+    },
+    {
+      "label": "finalize-w8a8kv8_static",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_static.json",
+        "--qparams",
+        "calibration/w8a8kv8_static/qparams.safetensors",
+        "--candidate-dir",
+        "candidates/w8a8kv8_static",
+        "--output",
+        "results/ptq/trials/w8a8kv8_static.final.json",
+        "--structural-only"
+      ],
+      "exit": 0,
+      "seconds": 39.106
+    },
+    {
+      "label": "diagnose-w8a8kv8_histogram",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "diagnose",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_histogram.json",
+        "--qparams",
+        "calibration/w8a8kv8_histogram/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a8kv8_histogram.diagnose.json"
+      ],
+      "exit": 0,
+      "seconds": 9.269
+    },
+    {
+      "label": "finalize-w8a8kv8_histogram",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_histogram.json",
+        "--qparams",
+        "calibration/w8a8kv8_histogram/qparams.safetensors",
+        "--candidate-dir",
+        "candidates/w8a8kv8_histogram",
+        "--output",
+        "results/ptq/trials/w8a8kv8_histogram.final.json",
+        "--structural-only"
+      ],
+      "exit": 0,
+      "seconds": 41.087
+    },
+    {
+      "label": "diagnose-w8a12kv8_static",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "diagnose",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a12kv8_static.json",
+        "--qparams",
+        "calibration/w8a12kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a12kv8_static.diagnose.json"
+      ],
+      "exit": 0,
+      "seconds": 8.808
+    },
+    {
+      "label": "finalize-w8a12kv8_static",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a12kv8_static.json",
+        "--qparams",
+        "calibration/w8a12kv8_static/qparams.safetensors",
+        "--candidate-dir",
+        "candidates/w8a12kv8_static",
+        "--output",
+        "results/ptq/trials/w8a12kv8_static.final.json",
+        "--structural-only"
+      ],
+      "exit": 0,
+      "seconds": 35.733
+    },
+    {
+      "label": "diagnose-w8a16kv8_static",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "diagnose",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a16kv8_static.json",
+        "--qparams",
+        "calibration/w8a16kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a16kv8_static.diagnose.json"
+      ],
+      "exit": 0,
+      "seconds": 7.781
+    },
+    {
+      "label": "finalize-w8a16kv8_static",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a16kv8_static.json",
+        "--qparams",
+        "calibration/w8a16kv8_static/qparams.safetensors",
+        "--candidate-dir",
+        "candidates/w8a16kv8_static",
+        "--output",
+        "results/ptq/trials/w8a16kv8_static.final.json",
+        "--ppl-result",
+        "results/ptq/trials/w8a16kv8_static.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 539.077
+    },
+    {
+      "label": "diagnose-w8a8kv8_percentile",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "diagnose",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_percentile.json",
+        "--qparams",
+        "calibration/w8a8kv8_percentile/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w8a8kv8_percentile.diagnose.json"
+      ],
+      "exit": 0,
+      "seconds": 7.445
+    },
+    {
+      "label": "finalize-w8a8kv8_percentile",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/stage3/w8a8kv8_percentile.json",
+        "--qparams",
+        "calibration/w8a8kv8_percentile/qparams.safetensors",
+        "--candidate-dir",
+        "candidates/w8a8kv8_percentile",
+        "--output",
+        "results/ptq/trials/w8a8kv8_percentile.final.json",
+        "--structural-only"
+      ],
+      "exit": 0,
+      "seconds": 35.122
+    },
+    {
+      "label": "ppl-w4a16kv8_static",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/stage3/w4a16kv8_static.json",
+        "--qparams",
+        "candidates/w8a16kv8_static/qparams.safetensors",
+        "--output",
+        "results/ptq/trials/w4a16kv8_static.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 168.859
+    },
+    {
+      "label": "unit-tests-final",
+      "command": [
+        "timeout",
+        "300",
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test_ptq_fake_quant.py",
+        "test_ptq_stage3.py",
+        "test_ptq_static_a.py"
+      ],
+      "exit": 0,
+      "passed": 35,
+      "seconds": 3.88
+    },
+    {
+      "label": "all-small-regression-final",
+      "command": [
+        "timeout",
+        "300",
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test_fp32_reference.py",
+        "test_ptq.py",
+        "test_ptq_fake_quant.py",
+        "test_ptq_stage3.py",
+        "test_ptq_static_a.py"
+      ],
+      "exit": 0,
+      "passed": 55,
+      "seconds": 8.22,
+      "scope": "Final-source regression: original FP32/scorer/data tests plus all fakequant/static/dynamic/storage tests; no model campaign replay"
+    }
+  ],
+  "heldout_evaluated": false,
+  "extension_commands": [
+    {
+      "label": "calibrate-w8a8kv8_per_input_channel",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_calibrate.py",
+        "--offline",
+        "--config",
+        "configs/extra/w8a8kv8_per_input_channel.json",
+        "--output-dir",
+        "calibration/w8a8kv8_per_input_channel"
+      ],
+      "exit": 0,
+      "seconds": 300.7,
+      "calibration_windows": 64,
+      "cache_runs": 16,
+      "heldout_evaluated": false
+    },
+    {
+      "label": "calibrate-w8a12kv8_per_input_channel",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_calibrate.py",
+        "--offline",
+        "--config",
+        "configs/extra/w8a12kv8_per_input_channel.json",
+        "--output-dir",
+        "calibration/w8a12kv8_per_input_channel"
+      ],
+      "exit": 0,
+      "seconds": 289.281,
+      "calibration_windows": 64,
+      "cache_runs": 16,
+      "heldout_evaluated": false
+    },
+    {
+      "label": "calibrate-w8a8kv8_smoothquant",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_calibrate.py",
+        "--offline",
+        "--config",
+        "configs/extra/w8a8kv8_smoothquant.json",
+        "--output-dir",
+        "calibration/w8a8kv8_smoothquant"
+      ],
+      "exit": 0,
+      "seconds": 425.297,
+      "calibration_windows": 64,
+      "cache_runs": 16,
+      "heldout_evaluated": false
+    },
+    {
+      "label": "calibrate-w8a12kv8_smoothquant",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_calibrate.py",
+        "--offline",
+        "--config",
+        "configs/extra/w8a12kv8_smoothquant.json",
+        "--output-dir",
+        "calibration/w8a12kv8_smoothquant"
+      ],
+      "exit": 0,
+      "seconds": 458.069,
+      "calibration_windows": 64,
+      "cache_runs": 16,
+      "heldout_evaluated": false
+    },
+    {
+      "label": "ppl-w8a8kv8_per_input_channel",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/extra/w8a8kv8_per_input_channel.json",
+        "--qparams",
+        "calibration/w8a8kv8_per_input_channel/qparams.safetensors",
+        "--output",
+        "results/ptq/extra/w8a8kv8_per_input_channel.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 205.831,
+      "windows": 64,
+      "targets": 32704,
+      "ppl": 23.11617089960494,
+      "ppl_ratio": 1.02398509649195,
+      "ppl_pass": true,
+      "heldout_evaluated": false
+    },
+    {
+      "label": "ppl-w8a12kv8_per_input_channel",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/extra/w8a12kv8_per_input_channel.json",
+        "--qparams",
+        "calibration/w8a12kv8_per_input_channel/qparams.safetensors",
+        "--output",
+        "results/ptq/extra/w8a12kv8_per_input_channel.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 203.384,
+      "windows": 64,
+      "targets": 32704,
+      "ppl": 22.87681052001328,
+      "ppl_ratio": 1.0133820661519768,
+      "ppl_pass": true,
+      "heldout_evaluated": false
+    },
+    {
+      "label": "ppl-w8a8kv8_smoothquant",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/extra/w8a8kv8_smoothquant.json",
+        "--qparams",
+        "calibration/w8a8kv8_smoothquant/qparams.safetensors",
+        "--output",
+        "results/ptq/extra/w8a8kv8_smoothquant.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 197.068,
+      "windows": 64,
+      "targets": 32704,
+      "ppl": 1060.49873813532,
+      "ppl_ratio": 46.97728302041779,
+      "ppl_pass": false,
+      "heldout_evaluated": false
+    },
+    {
+      "label": "ppl-w8a12kv8_smoothquant",
+      "command": [
+        "timeout",
+        "1800",
+        ".venv/bin/python",
+        "ptq_experiment.py",
+        "ppl",
+        "--offline",
+        "--config",
+        "configs/extra/w8a12kv8_smoothquant.json",
+        "--qparams",
+        "calibration/w8a12kv8_smoothquant/qparams.safetensors",
+        "--output",
+        "results/ptq/extra/w8a12kv8_smoothquant.ppl.json"
+      ],
+      "exit": 0,
+      "seconds": 198.363,
+      "windows": 64,
+      "targets": 32704,
+      "ppl": 22.759422440730802,
+      "ppl_ratio": 1.008182085402002,
+      "ppl_pass": true,
+      "heldout_evaluated": false
+    },
+    {
+      "label": "finalize-w8a8kv8_per_input_channel",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/extra/w8a8kv8_per_input_channel.json",
+        "--qparams",
+        "calibration/w8a8kv8_per_input_channel/qparams.safetensors",
+        "--ppl-result",
+        "results/ptq/extra/w8a8kv8_per_input_channel.ppl.json",
+        "--candidate-dir",
+        "candidates/w8a8kv8_per_input_channel",
+        "--output",
+        "results/ptq/extra/w8a8kv8_per_input_channel.final.json"
+      ],
+      "exit": 0,
+      "seconds": 643.478,
+      "kept": true,
+      "quality_gate": {
+        "ppl_ratio": 1.02398509649195,
+        "accuracy_drop": 0.014145810663764857,
+        "ppl_pass": true,
+        "accuracy_pass": true,
+        "pass": true
+      },
+      "decode_gate": {
+        "32": {
+          "ppl_ratio": 1.024716203792641,
+          "pass": true
+        },
+        "448": {
+          "ppl_ratio": 1.0259217030311398,
+          "pass": true
+        }
+      },
+      "reload": {
+        "full_bitwise_equal": true,
+        "cache_bitwise_equal": true,
+        "length": 96,
+        "prefill": 32
+      },
+      "heldout_evaluated": false
+    },
+    {
+      "label": "finalize-w8a12kv8_per_input_channel",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/extra/w8a12kv8_per_input_channel.json",
+        "--qparams",
+        "calibration/w8a12kv8_per_input_channel/qparams.safetensors",
+        "--ppl-result",
+        "results/ptq/extra/w8a12kv8_per_input_channel.ppl.json",
+        "--candidate-dir",
+        "candidates/w8a12kv8_per_input_channel",
+        "--output",
+        "results/ptq/extra/w8a12kv8_per_input_channel.final.json"
+      ],
+      "exit": 0,
+      "seconds": 633.052,
+      "kept": true,
+      "quality_gate": {
+        "ppl_ratio": 1.0133820661519768,
+        "accuracy_drop": 0.006528835690968404,
+        "ppl_pass": true,
+        "accuracy_pass": true,
+        "pass": true
+      },
+      "decode_gate": {
+        "32": {
+          "ppl_ratio": 1.0104964330204569,
+          "pass": true
+        },
+        "448": {
+          "ppl_ratio": 1.0164056447221148,
+          "pass": true
+        }
+      },
+      "reload": {
+        "full_bitwise_equal": true,
+        "cache_bitwise_equal": true,
+        "length": 96,
+        "prefill": 32
+      },
+      "heldout_evaluated": false
+    },
+    {
+      "label": "finalize-w8a12kv8_smoothquant",
+      "command": [
+        "timeout",
+        "2400",
+        ".venv/bin/python",
+        "ptq_finalize.py",
+        "--offline",
+        "--config",
+        "configs/extra/w8a12kv8_smoothquant.json",
+        "--qparams",
+        "calibration/w8a12kv8_smoothquant/qparams.safetensors",
+        "--ppl-result",
+        "results/ptq/extra/w8a12kv8_smoothquant.ppl.json",
+        "--candidate-dir",
+        "candidates/w8a12kv8_smoothquant",
+        "--output",
+        "results/ptq/extra/w8a12kv8_smoothquant.final.json"
+      ],
+      "exit": 0,
+      "seconds": 928.194,
+      "kept": true,
+      "quality_gate": {
+        "ppl_ratio": 1.008182085402002,
+        "accuracy_drop": 0.006528835690968404,
+        "ppl_pass": true,
+        "accuracy_pass": true,
+        "pass": true
+      },
+      "decode_gate": {
+        "32": {
+          "ppl_ratio": 1.0059858258845864,
+          "pass": true
+        },
+        "448": {
+          "ppl_ratio": 1.0077900649809672,
+          "pass": true
+        }
+      },
+      "reload": {
+        "full_bitwise_equal": true,
+        "cache_bitwise_equal": true,
+        "length": 96,
+        "prefill": 32
+      },
+      "heldout_evaluated": false
+    },
+    {
+      "label": "regression-final-ptq-a-extensions",
+      "command": [
+        "timeout",
+        "300",
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test_fp32_reference.py",
+        "test_ptq.py",
+        "test_ptq_fake_quant.py",
+        "test_ptq_stage3.py",
+        "test_ptq_static_a.py",
+        "test_ptq_a_extensions.py"
+      ],
+      "exit": 0,
+      "passed": 59,
+      "seconds": 12.19,
+      "scope": "Final regression after per-input-channel A and SmoothQuant changes; includes FP32/scorer/data, quantizer and independent extension tests; no model campaign replay."
+    },
+    {
+      "label": "regression-after-qa-storage-and-loader-fixes",
+      "command": [
+        "timeout",
+        "300",
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test_fp32_reference.py",
+        "test_ptq.py",
+        "test_ptq_fake_quant.py",
+        "test_ptq_stage3.py",
+        "test_ptq_static_a.py",
+        "test_ptq_a_extensions.py"
+      ],
+      "exit": 0,
+      "passed": 59,
+      "seconds": 11.62,
+      "scope": "Final regression after SmoothQuant runtime scale accounting and qparam shape/finite/positive loader validation; no model campaign rerun."
+    }
+  ]
+}

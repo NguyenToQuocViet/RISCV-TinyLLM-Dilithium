@@ -1,0 +1,46 @@
+{
+  "heldout_evaluated": false,
+  "baseline": "w8a16kv8_static",
+  "alternatives": [],
+  "w4_attempted": true,
+  "selection_rule": "Original v0 per-tensor sweep: lowest tested static A width (8/12/16) passing full PPL, PIQA and both decode regimes",
+  "extension_evaluated": [
+    "w8a8kv8_per_input_channel",
+    "w8a12kv8_per_input_channel",
+    "w8a8kv8_smoothquant",
+    "w8a12kv8_smoothquant"
+  ],
+  "extension_qualified": [
+    "w8a8kv8_per_input_channel",
+    "w8a12kv8_per_input_channel",
+    "w8a12kv8_smoothquant"
+  ],
+  "extension_note": "Qualified extensions remain separate from the original v0 baseline. The accepted SmoothQuant development direction and current candidate roles are recorded in stage3_handoff; all measured results are selection-only fake-quant evidence.",
+  "stage3_handoff": {
+    "decision": "src/tinyllm/docs/DECISIONS.md#d02-phát-triển-datapath-số-nguyên-theo-smoothquant-ưu-tiên-w8a8",
+    "status": "Ready to begin numerical-contract development using the qualified A12 reference; A8 is a research target, not a qualified candidate or frozen integer contract.",
+    "artifact_path_base": "src/tinyllm/quantize/",
+    "qualified_reference": {
+      "name": "w8a12kv8_smoothquant",
+      "role": "Quality-qualified SmoothQuant reference and A12 fallback",
+      "config": "candidates/w8a12kv8_smoothquant/config.json",
+      "qparams": "candidates/w8a12kv8_smoothquant/qparams.safetensors",
+      "result": "results/ptq/extra/w8a12kv8_smoothquant.final.json",
+      "quality_qualified": true
+    },
+    "research_target": {
+      "name": "w8a8kv8_smoothquant_a09",
+      "role": "Starting A8 SmoothQuant experiment; alpha is not fixed for the final design",
+      "config": "candidates/w8a8kv8_smoothquant_a09/config.json",
+      "qparams": "candidates/w8a8kv8_smoothquant_a09/qparams.safetensors",
+      "result": "results/ptq/extra/w8a8kv8_smoothquant_a09.ppl.json",
+      "quality_qualified": false,
+      "remaining_qualification": "Full PPL exceeds the unchanged gate; PIQA, decode quality, structural/reload finalization and candidate storage inventory have not been evaluated for this configuration."
+    },
+    "software_control": "w8a16kv8_static",
+    "other_qualified_evidence": [
+      "w8a8kv8_per_input_channel",
+      "w8a12kv8_per_input_channel"
+    ]
+  }
+}

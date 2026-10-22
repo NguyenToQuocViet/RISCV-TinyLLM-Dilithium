@@ -1,5 +1,6 @@
 .cache/
 __pycache__/
-results/*.log
+/results/**/*.log
 .venv/
 .pytest_cache/
+/calibration/

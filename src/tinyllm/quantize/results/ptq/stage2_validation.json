@@ -1,0 +1,2838 @@
+{
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "cpu_capability": "AVX2",
+    "torch_build": "PyTorch built with:\n  - GCC 9.3\n  - C++ Version: 201703\n  - Intel(R) oneAPI Math Kernel Library Version 2024.2-Product Build 20240605 for Intel(R) 64 architecture applications\n  - Intel(R) MKL-DNN v3.5.3 (Git Hash 66f0cb9eb66affd2da3bf5f8d897376f04aae6af)\n  - OpenMP 201511 (a.k.a. OpenMP 4.5)\n  - LAPACK is enabled (usually provided by MKL)\n  - NNPACK is enabled\n  - CPU capability usage: AVX2\n  - Build settings: BLAS_INFO=mkl, BUILD_TYPE=Release, COMMIT_SHA=2236df1770800ffea5697b11b0bb0d910b2e59e1, CXX_COMPILER=/opt/rh/devtoolset-9/root/usr/bin/c++, CXX_FLAGS= -D_GLIBCXX_USE_CXX11_ABI=0 -fabi-version=11 -fvisibility-inlines-hidden -DUSE_PTHREADPOOL -DNDEBUG -DUSE_KINETO -DLIBKINETO_NOCUPTI -DLIBKINETO_NOROCTRACER -DLIBKINETO_NOXPUPTI=ON -DUSE_FBGEMM -DUSE_PYTORCH_QNNPACK -DUSE_XNNPACK -DSYMBOLICATE_MOBILE_DEBUG_HANDLE -O2 -fPIC -Wall -Wextra -Werror=return-type -Werror=non-virtual-dtor -Werror=bool-operation -Wnarrowing -Wno-missing-field-initializers -Wno-type-limits -Wno-array-bounds -Wno-unknown-pragmas -Wno-unused-parameter -Wno-strict-overflow -Wno-strict-aliasing -Wno-stringop-overflow -Wsuggest-override -Wno-psabi -Wno-error=old-style-cast -Wno-missing-braces -fdiagnostics-color=always -faligned-new -Wno-unused-but-set-variable -Wno-maybe-uninitialized -fno-math-errno -fno-trapping-math -Werror=format -Wno-stringop-overflow, LAPACK_INFO=mkl, PERF_WITH_AVX=1, PERF_WITH_AVX2=1, TORCH_VERSION=2.6.0, USE_CUDA=0, USE_CUDNN=OFF, USE_CUSPARSELT=OFF, USE_EXCEPTION_PTR=1, USE_GFLAGS=OFF, USE_GLOG=OFF, USE_GLOO=ON, USE_MKL=ON, USE_MKLDNN=ON, USE_MPI=OFF, USE_NCCL=OFF, USE_NNPACK=ON, USE_OPENMP=ON, USE_ROCM=OFF, USE_ROCM_KERNEL_ASSERT=OFF, \n",
+    "packages": {
+      "torch": "2.6.0+cpu",
+      "transformers": "4.49.0",
+      "numpy": "2.2.3",
+      "huggingface-hub": "0.29.1",
+      "safetensors": "0.5.3",
+      "tokenizers": "0.21.0"
+    },
+    "device": "cpu",
+    "dtype": "float32",
+    "attention": "eager",
+    "seed": 1234,
+    "threads": 1,
+    "interop_threads": 1,
+    "deterministic_algorithms": true,
+    "mkldnn": false,
+    "mkl_cbwr": "unset (default CPU dispatch)",
+    "matmul_precision": "highest",
+    "command": [
+      "/home/hoang_hung/RISCV-TinyLLM-Dilithium/src/tinyllm/quantize/.venv/bin/python",
+      "ptq_validate.py",
+      "--offline"
+    ]
+  },
+  "heldout_evaluated": false,
+  "quality_search_performed": false,
+  "calibration_dir": "/home/hoang_hung/RISCV-TinyLLM-Dilithium/src/tinyllm/quantize/calibration/w8a8kv8_static",
+  "before": {
+    "phase": "before",
+    "cases": [
+      {
+        "id": "one_token",
+        "input_length": 1,
+        "full": {
+          "elements": 49152,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 1,
+            "elements": 49152,
+            "max_abs_error": 0.0,
+            "mean_abs_error": 0.0,
+            "max_tolerance_ratio": 0.0,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "short_text",
+        "input_length": 8,
+        "full": {
+          "elements": 393216,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 1,
+            "elements": 393216,
+            "max_abs_error": 0.00015115737915039062,
+            "mean_abs_error": 1.4318207831820473e-05,
+            "max_tolerance_ratio": 0.7082953453063965,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 4,
+            "elements": 393216,
+            "max_abs_error": 4.00543212890625e-05,
+            "mean_abs_error": 4.188438197161304e-06,
+            "max_tolerance_ratio": 0.15217122435569763,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 7,
+            "elements": 393216,
+            "max_abs_error": 2.288818359375e-05,
+            "mean_abs_error": 2.9097993774485076e-06,
+            "max_tolerance_ratio": 0.10407518595457077,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "mixed_text",
+        "input_length": 32,
+        "full": {
+          "elements": 1572864,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 1,
+            "elements": 1572864,
+            "max_abs_error": 7.2479248046875e-05,
+            "mean_abs_error": 8.213757610064931e-06,
+            "max_tolerance_ratio": 0.23006024956703186,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 16,
+            "elements": 1572864,
+            "max_abs_error": 5.1975250244140625e-05,
+            "mean_abs_error": 3.3774092571547953e-06,
+            "max_tolerance_ratio": 0.21591347455978394,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 31,
+            "elements": 1572864,
+            "max_abs_error": 2.288818359375e-05,
+            "mean_abs_error": 1.8546766966665018e-07,
+            "max_tolerance_ratio": 0.10062984377145767,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "long_text",
+        "input_length": 256,
+        "full": {
+          "elements": 12582912,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 1,
+            "elements": 12582912,
+            "max_abs_error": 8.96453857421875e-05,
+            "mean_abs_error": 8.303871254611295e-06,
+            "max_tolerance_ratio": 0.32378464937210083,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 128,
+            "elements": 12582912,
+            "max_abs_error": 5.817413330078125e-05,
+            "mean_abs_error": 3.3278099635936087e-06,
+            "max_tolerance_ratio": 0.27019619941711426,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 255,
+            "elements": 12582912,
+            "max_abs_error": 2.765655517578125e-05,
+            "mean_abs_error": 2.4248865315712465e-07,
+            "max_tolerance_ratio": 0.12416509538888931,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:480:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.00014781951904296875,
+            "mean_abs_error": 8.317220817843918e-06,
+            "max_tolerance_ratio": 0.4998027980327606,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:480:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 8.58306884765625e-05,
+            "mean_abs_error": 2.840421302607865e-06,
+            "max_tolerance_ratio": 0.41728299856185913,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:314:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 9.822845458984375e-05,
+            "mean_abs_error": 6.7328137447475456e-06,
+            "max_tolerance_ratio": 0.3669312298297882,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:314:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 5.054473876953125e-05,
+            "mean_abs_error": 3.080319629589212e-06,
+            "max_tolerance_ratio": 0.21660661697387695,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:416:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.00014209747314453125,
+            "mean_abs_error": 6.848212251497898e-06,
+            "max_tolerance_ratio": 0.3970756530761719,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:416:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 7.581710815429688e-05,
+            "mean_abs_error": 2.993931047967635e-06,
+            "max_tolerance_ratio": 0.3493204116821289,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:202:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.0001163482666015625,
+            "mean_abs_error": 6.367820333252894e-06,
+            "max_tolerance_ratio": 0.34050434827804565,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:202:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 9.107589721679688e-05,
+            "mean_abs_error": 2.8829529128415743e-06,
+            "max_tolerance_ratio": 0.39822253584861755,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:40:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.0001125335693359375,
+            "mean_abs_error": 6.728457265126053e-06,
+            "max_tolerance_ratio": 0.3500972390174866,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:40:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 5.054473876953125e-05,
+            "mean_abs_error": 2.950772113763378e-06,
+            "max_tolerance_ratio": 0.21104422211647034,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:208:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.0001373291015625,
+            "mean_abs_error": 7.041744538582861e-06,
+            "max_tolerance_ratio": 0.39793717861175537,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:208:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 5.817413330078125e-05,
+            "mean_abs_error": 3.2760015074018156e-06,
+            "max_tolerance_ratio": 0.2648445963859558,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:275:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 8.7738037109375e-05,
+            "mean_abs_error": 6.2297822296386585e-06,
+            "max_tolerance_ratio": 0.3139934241771698,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:275:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 4.7206878662109375e-05,
+            "mean_abs_error": 2.928664798673708e-06,
+            "max_tolerance_ratio": 0.21958890557289124,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:481:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 8.96453857421875e-05,
+            "mean_abs_error": 6.426662366720848e-06,
+            "max_tolerance_ratio": 0.2743432819843292,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:481:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 7.832050323486328e-05,
+            "mean_abs_error": 2.904671191572561e-06,
+            "max_tolerance_ratio": 0.35705050826072693,
+            "failed_elements": 0
+          }
+        ]
+      }
+    ],
+    "elements": 536444928,
+    "cache_splits": 26
+  },
+  "candidate": {
+    "selection_ids": [
+      "wikitext2:validation:480",
+      "wikitext2:validation:314"
+    ],
+    "full_no_cache_coverage": {
+      "model.layers.0.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.0.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.1.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.1.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.2.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.2.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.3.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.3.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.4.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.4.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.5.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.5.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.6.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.6.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.7.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.7.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.8.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.8.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.9.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.9.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.10.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.10.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.11.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.11.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.12.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.12.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.13.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.13.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.14.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.14.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.15.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.15.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.16.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.16.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.17.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.17.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.18.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.18.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.19.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.19.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.20.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.20.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.21.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.21.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.22.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.22.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.23.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.23.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.24.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.24.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.25.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.25.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.26.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.26.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.27.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.27.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.28.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.28.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.29.self_attn.key_post_rope": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      },
+      "model.layers.29.self_attn.value_post_projection": {
+        "calls": 2,
+        "tokens": 1024,
+        "last_shape": [
+          1,
+          3,
+          512,
+          64
+        ]
+      }
+    },
+    "cache_probes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96,
+        "native_heads": 3,
+        "query_heads": 9,
+        "head_dim": 64,
+        "new_tensors": 3900,
+        "unchanged_prefix_tensors": 3840,
+        "post_rope_checks": 65,
+        "post_projection_checks": 65,
+        "points": {
+          "model.layers.0.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.0.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.1.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.1.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.2.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.2.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.3.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.3.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.4.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.4.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.5.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.5.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.6.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.6.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.7.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.7.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.8.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.8.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.9.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.9.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.10.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.10.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.11.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.11.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.12.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.12.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.13.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.13.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.14.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.14.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.15.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.15.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.16.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.16.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.17.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.17.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.18.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.18.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.19.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.19.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.20.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.20.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.21.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.21.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.22.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.22.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.23.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.23.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.24.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.24.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.25.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.25.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.26.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.26.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.27.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.27.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.28.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.28.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.29.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.29.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 96,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          }
+        }
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512,
+        "native_heads": 3,
+        "query_heads": 9,
+        "head_dim": 64,
+        "new_tensors": 3900,
+        "unchanged_prefix_tensors": 3840,
+        "post_rope_checks": 65,
+        "post_projection_checks": 65,
+        "points": {
+          "model.layers.0.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.0.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.1.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.1.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.2.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.2.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.3.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.3.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.4.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.4.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.5.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.5.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.6.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.6.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.7.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.7.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.8.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.8.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.9.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.9.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.10.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.10.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.11.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.11.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.12.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.12.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.13.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.13.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.14.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.14.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.15.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.15.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.16.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.16.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.17.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.17.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.18.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.18.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.19.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.19.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.20.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.20.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.21.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.21.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.22.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.22.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.23.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.23.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.24.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.24.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.25.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.25.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.26.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.26.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.27.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.27.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.28.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.28.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.29.self_attn.key_post_rope": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          },
+          "model.layers.29.self_attn.value_post_projection": {
+            "calls": 65,
+            "tokens": 512,
+            "last_shape": [
+              1,
+              3,
+              1,
+              64
+            ]
+          }
+        }
+      }
+    ],
+    "static_qparams_unchanged": true,
+    "shared_weight_materializations": 1,
+    "weight_tying": true,
+    "embedding_lookup_and_head_use_same_quantized_weight": true
+  },
+  "after": {
+    "phase": "after",
+    "cases": [
+      {
+        "id": "one_token",
+        "input_length": 1,
+        "full": {
+          "elements": 49152,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 1,
+            "elements": 49152,
+            "max_abs_error": 0.0,
+            "mean_abs_error": 0.0,
+            "max_tolerance_ratio": 0.0,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "short_text",
+        "input_length": 8,
+        "full": {
+          "elements": 393216,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 1,
+            "elements": 393216,
+            "max_abs_error": 0.00015115737915039062,
+            "mean_abs_error": 1.4318207831820473e-05,
+            "max_tolerance_ratio": 0.7082953453063965,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 4,
+            "elements": 393216,
+            "max_abs_error": 4.00543212890625e-05,
+            "mean_abs_error": 4.188438197161304e-06,
+            "max_tolerance_ratio": 0.15217122435569763,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 7,
+            "elements": 393216,
+            "max_abs_error": 2.288818359375e-05,
+            "mean_abs_error": 2.9097993774485076e-06,
+            "max_tolerance_ratio": 0.10407518595457077,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "mixed_text",
+        "input_length": 32,
+        "full": {
+          "elements": 1572864,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 1,
+            "elements": 1572864,
+            "max_abs_error": 7.2479248046875e-05,
+            "mean_abs_error": 8.213757610064931e-06,
+            "max_tolerance_ratio": 0.23006024956703186,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 16,
+            "elements": 1572864,
+            "max_abs_error": 5.1975250244140625e-05,
+            "mean_abs_error": 3.3774092571547953e-06,
+            "max_tolerance_ratio": 0.21591347455978394,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 31,
+            "elements": 1572864,
+            "max_abs_error": 2.288818359375e-05,
+            "mean_abs_error": 1.8546766966665018e-07,
+            "max_tolerance_ratio": 0.10062984377145767,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "long_text",
+        "input_length": 256,
+        "full": {
+          "elements": 12582912,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 1,
+            "elements": 12582912,
+            "max_abs_error": 8.96453857421875e-05,
+            "mean_abs_error": 8.303871254611295e-06,
+            "max_tolerance_ratio": 0.32378464937210083,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 128,
+            "elements": 12582912,
+            "max_abs_error": 5.817413330078125e-05,
+            "mean_abs_error": 3.3278099635936087e-06,
+            "max_tolerance_ratio": 0.27019619941711426,
+            "failed_elements": 0
+          },
+          {
+            "prefill": 255,
+            "elements": 12582912,
+            "max_abs_error": 2.765655517578125e-05,
+            "mean_abs_error": 2.4248865315712465e-07,
+            "max_tolerance_ratio": 0.12416509538888931,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:480:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.00014781951904296875,
+            "mean_abs_error": 8.317220817843918e-06,
+            "max_tolerance_ratio": 0.4998027980327606,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:480:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 8.58306884765625e-05,
+            "mean_abs_error": 2.840421302607865e-06,
+            "max_tolerance_ratio": 0.41728299856185913,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:314:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 9.822845458984375e-05,
+            "mean_abs_error": 6.7328137447475456e-06,
+            "max_tolerance_ratio": 0.3669312298297882,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:314:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 5.054473876953125e-05,
+            "mean_abs_error": 3.080319629589212e-06,
+            "max_tolerance_ratio": 0.21660661697387695,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:416:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.00014209747314453125,
+            "mean_abs_error": 6.848212251497898e-06,
+            "max_tolerance_ratio": 0.3970756530761719,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:416:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 7.581710815429688e-05,
+            "mean_abs_error": 2.993931047967635e-06,
+            "max_tolerance_ratio": 0.3493204116821289,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:202:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.0001163482666015625,
+            "mean_abs_error": 6.367820333252894e-06,
+            "max_tolerance_ratio": 0.34050434827804565,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:202:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 9.107589721679688e-05,
+            "mean_abs_error": 2.8829529128415743e-06,
+            "max_tolerance_ratio": 0.39822253584861755,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:40:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.0001125335693359375,
+            "mean_abs_error": 6.728457265126053e-06,
+            "max_tolerance_ratio": 0.3500972390174866,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:40:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 5.054473876953125e-05,
+            "mean_abs_error": 2.950772113763378e-06,
+            "max_tolerance_ratio": 0.21104422211647034,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:208:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 0.0001373291015625,
+            "mean_abs_error": 7.041744538582861e-06,
+            "max_tolerance_ratio": 0.39793717861175537,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:208:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 5.817413330078125e-05,
+            "mean_abs_error": 3.2760015074018156e-06,
+            "max_tolerance_ratio": 0.2648445963859558,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:275:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 8.7738037109375e-05,
+            "mean_abs_error": 6.2297822296386585e-06,
+            "max_tolerance_ratio": 0.3139934241771698,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:275:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 4.7206878662109375e-05,
+            "mean_abs_error": 2.928664798673708e-06,
+            "max_tolerance_ratio": 0.21958890557289124,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:481:prefill32",
+        "input_length": 96,
+        "full": {
+          "elements": 4718592,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 32,
+            "elements": 4718592,
+            "max_abs_error": 8.96453857421875e-05,
+            "mean_abs_error": 6.426662366720848e-06,
+            "max_tolerance_ratio": 0.2743432819843292,
+            "failed_elements": 0
+          }
+        ]
+      },
+      {
+        "id": "wikitext2:validation:481:prefill448",
+        "input_length": 512,
+        "full": {
+          "elements": 25165824,
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "failed_elements": 0
+        },
+        "cache": [
+          {
+            "prefill": 448,
+            "elements": 25165824,
+            "max_abs_error": 7.832050323486328e-05,
+            "mean_abs_error": 2.904671191572561e-06,
+            "max_tolerance_ratio": 0.35705050826072693,
+            "failed_elements": 0
+          }
+        ]
+      }
+    ],
+    "elements": 536444928,
+    "cache_splits": 26
+  },
+  "source_weights_unchanged": true,
+  "reload": {
+    "bitwise_equal": true,
+    "elements": 25165824,
+    "max_abs_error": 0.0,
+    "mean_abs_error": 0.0,
+    "max_tolerance_ratio": 0.0,
+    "failed_elements": 0
+  },
+  "status": "PASS",
+  "seconds": 315.868
+}

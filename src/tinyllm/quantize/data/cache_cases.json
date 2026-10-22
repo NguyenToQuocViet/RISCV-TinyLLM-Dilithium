@@ -1,0 +1,130 @@
+[
+  {
+    "id": "wikitext2:validation:480",
+    "selection_index": 0,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:validation:314",
+    "selection_index": 1,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:validation:416",
+    "selection_index": 2,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:validation:202",
+    "selection_index": 3,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:validation:40",
+    "selection_index": 4,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:validation:208",
+    "selection_index": 5,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:validation:275",
+    "selection_index": 6,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  },
+  {
+    "id": "wikitext2:validation:481",
+    "selection_index": 7,
+    "regimes": [
+      {
+        "prefill": 32,
+        "decode": 64,
+        "input_length": 96
+      },
+      {
+        "prefill": 448,
+        "decode": 64,
+        "input_length": 512
+      }
+    ]
+  }
+]
