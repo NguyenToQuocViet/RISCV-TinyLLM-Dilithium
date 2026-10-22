@@ -71,6 +71,12 @@ Reset does not undo accepted writes, prove DMA quiescence or make CPU-only reset
 safe with live accelerator jobs. The existing OBI shared-reset flush and CI
 coordinated-reset obligations remain in force.
 
+The 2026-10-22 [data-controller refinement DOC-D3](../designs/data-obi-controller.md#6-local-decisions)
+applies this selective-reset principle to MEM: its combinational request/wait
+outputs rely on the parent's reset EX/MEM valid rather than a direct reset gate.
+This does not change RST-D1. The leaf contract owns the required input guarantee,
+shared-reset assumption and limits of that choice.
+
 Required regression includes assertion between clock edges and with the clock
 stopped, source release while stopped, restart/release sequencing, assertion
 during stalls and pending transfers, and no stale work after reset. The existing

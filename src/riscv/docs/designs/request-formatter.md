@@ -81,6 +81,10 @@ Outputs follow current inputs after combinational settling. They do not
 authorize a bus operation; the parent determines when request fields are
 presented and holds the source payload stable while awaiting grant. Load
 requests use `we=0`; their write-data value does not cause a memory write.
+Formatter outputs may remain nonzero during reset because payload is not reset.
+Request suppression relies on the parent/controller's
+[reset-valid boundary](data-obi-controller.md#4-environment-reset-and-unexpected-responses),
+not on zero address, byte enables or write data from this leaf.
 
 ## 4. Input domain and fallback
 

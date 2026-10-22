@@ -5,6 +5,9 @@
 **Contract revision:** R2 / 2026-10-21 (same revision as the CI and IRQ contracts; reset-only amendment).
 **Pipeline-register refinement:** PR-D1 / 2026-10-21, selected by Việt;
 local control interface and priority defined below, without changing core arbitration.
+**MEM boundary clarification:** MEM D2 / 2026-10-22 records the selected
+valid-driven request/reset gating and wait-only completion interface; the
+sampled OBI events and R2 architectural behavior below are unchanged.
 
 **Decision record:** Việt approved `BASE → BASE_CI → BASE_CI_IRQ`, BASE with
 37 integer operations plus FENCE, and one common elaboration-selected top.
@@ -123,6 +126,14 @@ normal updates. No edge sampling `rst_n=0` creates a transfer, retirement or
 architectural side effect. Invalid pipeline stages must not write the register
 file, issue a memory request,
 perform a store, or redirect the PC, regardless of their payload values.
+
+In particular, EX/MEM valid is the MEM wrapper/controller's `instruction_valid`
+and must be zero throughout reset after reset propagation. The selected
+[data OBI controller](data-obi-controller.md#4-environment-reset-and-unexpected-responses)
+relies on this reset valid to suppress `req` and `mem_wait`; it does not add a
+combinational `rst_n` gate. Parent control must not derive this valid from
+unreset `mem_en` or payload. The controller, pipeline-valid state and OBI
+subordinate share reset. This is not independent or glitch-free bus isolation.
 
 The reset network does not reset datapath payload merely to give it a known waveform value. Instruction, operand, immediate, ALU-result, memory-address, store-data, and destination-register payload registers retain unspecified values while invalid. General-purpose registers `x1` through `x31` are not reset; software must initialize a register before relying on its value. `x0` always reads as zero and ignores writes. Combinational datapath logic and the memory contents are not reset by the core. Any exception to this selective-reset rule requires a correctness need that cannot be enforced by reset control state and validity gating.
 
@@ -667,17 +678,27 @@ The instruction port therefore has `instr_request_fire` and
 `instr_response_fire`; the data port has `data_request_fire` and
 `data_response_fire`. Each event uses its own port signals, and each response
 event uses that port's current outstanding state and raw response transfer.
+These names define semantic events for control and verification; they do not
+mandate named RTL signals, registered pulses or leaf ports. The selected data
+controller exposes `mem_wait` instead of a completion port. Outside reset,
+while a valid EX/MEM load/store retains ownership, its expected-response event
+can be identified as `EX/MEM.valid && EX/MEM.mem_en && !mem_wait`. This
+equivalence relies on that retained owner and the controller's pre-edge
+outstanding rule; `!mem_wait` alone is not a completion event. Reset still
+overrides all capture, retirement and transfer events as defined above.
+
 `rready` reports only whether the core can accept or
 deliberately discard a raw response transfer on the current rising edge; it
 does not report whether a transaction is outstanding. Only `response_fire` is
 an expected response and may advance a transaction lifecycle, consume its
-outstanding state, or create an architectural or pipeline result. `rdata` has
-no effect without an expected response and is ignored for a store response.
+outstanding state, or create an architectural or pipeline result. Combinational
+formatter outputs may follow `rdata` in other cycles, but no load result is
+captured or consumed without an expected response. A store ignores `rdata`.
 
 An unexpected response is
 `raw_response_transfer && !outstanding`. Because `rready=1`, it is drained, but
 it does not decrement legitimate outstanding state, resolve a MEM wait, create
-a `READY` instruction, or create a `load_result`. It only reports a protocol
+a `READY` instruction, or capture a valid `load_result`. It only reports a protocol
 violation through verification.
 
 Instruction-side `rready` is tied to `1'b1`. Every instruction transaction reserves its Fetch Buffer entry before becoming `OUTSTANDING`, so an expected response always has storage in its own entry and a killed expected response can always be discarded. IF/ID stall and redirect therefore do not backpressure instruction responses. An unexpected instruction response is still drained, discarded, and reported as a protocol violation by verification; constant readiness must not conceal the violation.
@@ -919,7 +940,10 @@ Mandatory directed verification is organized around seven scenario groups:
    is accepted and no response result or completion is created. Confirm that
    both subordinates flush pre-reset protocol state, that invalid state creates
    no side effect, and that the core does not treat a store accepted before
-   reset as rolled back. Assert reset between clock edges and with the clock
+   reset as rolled back. Confirm that EX/MEM valid drives MEM
+   `instruction_valid=0` throughout reset regardless of unreset memory controls
+   and payload, and that this suppresses data `req` and `mem_wait`. Assert reset
+   between clock edges and with the clock
    stopped; verify required control state and `req`/`rvalid` clear without an
    edge. Release the source reset while the clock remains stopped and verify
    conditioned `rst_n` stays low until the synchronizer completes its release

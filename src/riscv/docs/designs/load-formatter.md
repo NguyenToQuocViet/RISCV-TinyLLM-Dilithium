@@ -41,6 +41,12 @@ only for an expected load response under the parent's
 [completion rules](5-stage-baseline-core.md#data-transaction-completion).
 Other cycles do not require output zeroing or retention of an earlier value.
 There is no validity, load/store or response qualifier input.
+The controller has no completion output: outside reset, parent control captures
+this result when the retained live instruction is a load and `mem_wait=0`,
+subject to normal pipeline advance. An idle `mem_wait=0` does not authorize
+capture. During reset, parent clears EX/MEM valid and prevents MEM/WB capture;
+this formatter's output need not be reset. See the
+[MEM completion boundary](memory-stage.md#4-controller-state-and-payload-ownership).
 
 ## 3. Inherited formatting behavior
 

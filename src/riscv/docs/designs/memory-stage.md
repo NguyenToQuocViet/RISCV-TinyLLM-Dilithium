@@ -2,11 +2,13 @@
 
 **Status:** Composition, metadata routing, memory-type encoding, formatter
 fallbacks and controller ownership accepted by Nguyễn Tô Quốc Việt on 2026-10-21.
-Leaf interfaces and remaining local behavior are not yet finalized.
+Leaf contracts are accepted; the completion/reset boundary was refined by Việt
+on 2026-10-22. Exact wrapper ports and pipeline-register implementation remain deferred.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** MEM D1 / 2026-10-21; refines BASE R2.
+**Design revision:** MEM D2 / 2026-10-22; refines BASE R2.
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md).
-**RTL mapping:** Planned; no MEM RTL or verification result is established here.
+**RTL mapping:** The three leaves have RTL; `memory_stage` composition remains
+planned. This document does not establish functional verification.
 
 ## 1. Purpose and boundary
 
@@ -29,6 +31,12 @@ continues unchanged toward MEM/WB, with a branch into MEM for effective-address
 processing. The core owns pipeline-register validity and capture decisions;
 the wrapper does not contain EX/MEM or MEM/WB storage.
 
+`instruction_valid` is EX/MEM's valid bit. The core must clear it asynchronously
+on shared reset and keep it zero throughout reset, even though memory-control
+and data payload are not reset. The controller relies on this guarantee rather
+than gating its combinational outputs with `rst_n`; see its
+[required reset invariant](data-obi-controller.md#4-environment-reset-and-unexpected-responses).
+
 GPR data and `ex_result` use `DATA_WIDTH`; OBI addresses use `ADDR_WIDTH`.
 The supported configuration remains `DATA_WIDTH = ADDR_WIDTH = 32`.
 Interpreting `ex_result` as an address preserves all 32 bits before the required
@@ -49,7 +57,7 @@ transaction state. Byte-lane and extension equations remain in the parent.
 
 ## 3. Shared memory-type encoding and fallback
 
-The planned package definition is `riscv_pkg::mem_type_t`, an
+The package defines `riscv_pkg::mem_type_t`, an
 `enum logic [2:0]` with these accepted values:
 
 | Member | Encoding | Operations |
@@ -95,6 +103,15 @@ uses pre-edge ownership under the parent's
 [response rules](5-stage-baseline-core.md#obi-response-validity-and-reset).
 An unexpected response does not release ownership or resolve MEM wait.
 
+The controller exposes `mem_wait`, not a separate completion port. With a live
+memory owner retained and reset inactive, `mem_wait=0` means the expected
+response is available for this edge. Core control uses wait release with its
+normal valid/advance rules to capture a load into MEM/WB or advance a completed
+store. A bubble or non-memory instruction also has `mem_wait=0`, so wait alone
+is not a completion indication. The parent's `data_response_fire` remains the
+semantic event name; it does not require a same-named RTL signal. Formatter
+outputs are always combinational and do not authorize capture themselves.
+
 The bit resets to zero under the shared
 [reset contract](5-stage-baseline-core.md#reset-architecture). Global pipeline
 stall does not freeze mandatory controller protocol progress. Parent control
@@ -105,10 +122,11 @@ ownership boundary.
 
 ## 5. Deferred local decisions
 
-Exact leaf port tables, internal connections and remaining local behavior will
-be specified and accepted per block using the block-design template before
-that block's functional implementation. This composition decision does not
-select unapproved port details or authorize RTL/test implementation.
+Leaf port tables and behavior are owned by the accepted
+[request formatter](request-formatter.md), [load formatter](load-formatter.md)
+and [data OBI controller](data-obi-controller.md) contracts. Exact wrapper ports
+and composition implementation still require their own design/implementation
+step; leaf acceptance does not imply wrapper or full-pipeline verification.
 
 Pipeline-register implementation remains deferred until its downstream payload
 requirements are resolved. This document does not change the accepted reset,
