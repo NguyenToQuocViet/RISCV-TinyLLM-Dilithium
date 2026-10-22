@@ -1,3 +1,10 @@
+//------------------------------------------------------------------------------
+// Module      : data_obi_controller
+// Description : Data OBI request, transaction ownership and MEM-wait control.
+// Author      : Viet Nguyen To Quoc, Codex
+// Date        : 2026-10-21
+//------------------------------------------------------------------------------
+
 module data_obi_controller
     import riscv_pkg::*;
 (
