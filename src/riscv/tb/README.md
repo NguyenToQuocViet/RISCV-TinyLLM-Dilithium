@@ -74,3 +74,45 @@ Verilator 5.046. No functional RTL change or waived failure.
 Local [run metadata and source hashes](sim_build/execute_stage/verification.json),
 [full regression log](sim_build/execute_stage/regression.log) and
 [final EX rerun log](sim_build/execute_stage/targeted.log) are ignored artifacts.
+
+## Data OBI controller verification
+
+Việt approved the directed leaf plan on 2026-10-23 against
+[DOC D2](../docs/designs/data-obi-controller.md). The nine groups cover idle
+qualification, payload routing, grant delays of 0/3/120 cycles, delayed response
+and duplicate suppression, combinational wait release, consecutive owners,
+unexpected responses, reset during transactions and reset with a stopped clock.
+Grant delay counts rising edges with `req=1, gnt=0` before acceptance.
+
+The Python stimulus retains the parent owner/payload through completion, replaces
+it after the consuming edge, clears valid on shared reset and supplies an already
+conditioned reset release. It does not implement or verify a reset synchronizer.
+Grant stimulus is predetermined, not derived combinationally from request.
+Checks use explicit control expectations and public ports, not private RTL state.
+
+The normal simulation checks unexpected-response handling with an explicitly
+expected checker diagnostic. Four separate checker self-tests inject a response
+while idle, waiting for grant, at first grant and after completion. Each inner
+simulation must fail with the specific protocol diagnostic; pytest accepts only
+that failure, verified from its result XML. A missing diagnostic, unrelated
+failure or missing XML fails the self-test. Artifacts stay in
+`tb/sim_build/data_obi_controller/`.
+
+```bash
+rtk proxy .venv/bin/python -m pytest tb/runners/test_data_obi_controller.py
+```
+
+This scope verifies the controller leaf under supplied parent/bus obligations;
+it does not establish MEM/WB capture, full-pipeline control, memory-side grant
+generation, physical timing or system reset recovery.
+The stopped-clock test observes public output suppression and subsequent
+recovery. With parent valid held zero during reset, public outputs do not
+independently expose when the private ownership bit clears; that asynchronous
+reset structure is also checked by RTL inspection.
+
+Verification checkpoint, 2026-10-23 (Asia/Ho_Chi_Minh): the command above passed
+all five pytest entries: nine directed cocotb tests and four checker self-tests
+whose inner simulations failed with the intended diagnostic. BASE RTL revision
+was `9f1aed7`; the new tests were uncommitted. Python 3.14.8, cocotb 2.1.0,
+pytest 9.1.1 and Verilator 5.046. No RTL change or waived failure. Result XMLs
+are in the ignored artifact directory above; a full regression was not run.
