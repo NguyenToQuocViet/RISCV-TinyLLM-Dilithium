@@ -45,40 +45,40 @@ async def test_byte_formatting(dut):
     #test choosing byte enable
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x19A7_42C0,
         store_data=0xDEAD_BEEF,
         mem_type=0,
-        expected_address=0x0001_0000,
+        expected_address=0x19A7_42C0,
         expected_be=0b0001,
         expected_data=0xEFEF_EFEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0001,
+        effective_address=0xE035_6B95,
         store_data=0xDEAD_BEEF,
         mem_type=0,
-        expected_address=0x0001_0000,
+        expected_address=0xE035_6B94,
         expected_be=0b0010,
         expected_data=0xEFEF_EFEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0x724C_DA3A,
         store_data=0xDEAD_BEEF,
         mem_type=0,
-        expected_address=0x0001_0000,
+        expected_address=0x724C_DA38,
         expected_be=0b0100,
         expected_data=0xEFEF_EFEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0003,
+        effective_address=0xA86F_103F,
         store_data=0xDEAD_BEEF,
         mem_type=0,
-        expected_address=0x0001_0000,
+        expected_address=0xA86F_103C,
         expected_be=0b1000,
         expected_data=0xEFEF_EFEF,
     )
@@ -86,10 +86,10 @@ async def test_byte_formatting(dut):
     #test address + 4
     await direct_check(
         dut,
-        effective_address=0x0001_0004,
+        effective_address=0x19A7_42C4,
         store_data=0xDEAD_BEEF,
         mem_type=0,
-        expected_address=0x0001_0004,
+        expected_address=0x19A7_42C4,
         expected_be=0b0001,
         expected_data=0xEFEF_EFEF,
     )
@@ -97,10 +97,10 @@ async def test_byte_formatting(dut):
     #test data=0
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x3D92_71A4,
         store_data=0x0000_0000,
         mem_type=0,
-        expected_address=0x0001_0000,
+        expected_address=0x3D92_71A4,
         expected_be=0b0001,
         expected_data=0x0000_0000,
     )
@@ -108,10 +108,10 @@ async def test_byte_formatting(dut):
     #test data=F
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0xC407_EB18,
         store_data=0xFFFF_FFFF,
         mem_type=0,
-        expected_address=0x0001_0000,
+        expected_address=0xC407_EB18,
         expected_be=0b0001,
         expected_data=0xFFFF_FFFF,
     )
@@ -152,20 +152,20 @@ async def test_byte_formatting(dut):
     #test upper data bits do not affect byte replication
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x6AF0_932C,
         store_data=0x1234_56EF,
         mem_type=0,
-        expected_address=0x0001_0000,
+        expected_address=0x6AF0_932C,
         expected_be=0b0001,
         expected_data=0xEFEF_EFEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x91B5_0C70,
         store_data=0x0000_00EF,
         mem_type=0,
-        expected_address=0x0001_0000,
+        expected_address=0x91B5_0C70,
         expected_be=0b0001,
         expected_data=0xEFEF_EFEF,
     )
@@ -177,10 +177,10 @@ async def test_halfword_formatting(dut):
     #test choosing lower halfword
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x58E3_A6D0,
         store_data=0xDEAD_BEEF,
         mem_type=1,
-        expected_address=0x0001_0000,
+        expected_address=0x58E3_A6D0,
         expected_be=0b0011,
         expected_data=0xBEEF_BEEF,
     )
@@ -188,10 +188,10 @@ async def test_halfword_formatting(dut):
     #test choosing upper halfword
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0xB249_187A,
         store_data=0xDEAD_BEEF,
         mem_type=1,
-        expected_address=0x0001_0000,
+        expected_address=0xB249_1878,
         expected_be=0b1100,
         expected_data=0xBEEF_BEEF,
     )
@@ -199,10 +199,10 @@ async def test_halfword_formatting(dut):
     #test address + 4
     await direct_check(
         dut,
-        effective_address=0x0001_0004,
+        effective_address=0x58E3_A6D4,
         store_data=0xDEAD_BEEF,
         mem_type=1,
-        expected_address=0x0001_0004,
+        expected_address=0x58E3_A6D4,
         expected_be=0b0011,
         expected_data=0xBEEF_BEEF,
     )
@@ -210,10 +210,10 @@ async def test_halfword_formatting(dut):
     #test data=0
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x07DC_F524,
         store_data=0x0000_0000,
         mem_type=1,
-        expected_address=0x0001_0000,
+        expected_address=0x07DC_F524,
         expected_be=0b0011,
         expected_data=0x0000_0000,
     )
@@ -221,10 +221,10 @@ async def test_halfword_formatting(dut):
     #test data=F
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0xF631_8BCE,
         store_data=0xFFFF_FFFF,
         mem_type=1,
-        expected_address=0x0001_0000,
+        expected_address=0xF631_8BCC,
         expected_be=0b1100,
         expected_data=0xFFFF_FFFF,
     )
@@ -265,20 +265,20 @@ async def test_halfword_formatting(dut):
     #test upper data bits do not affect halfword replication
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0x2CA8_D152,
         store_data=0x1234_BEEF,
         mem_type=1,
-        expected_address=0x0001_0000,
+        expected_address=0x2CA8_D150,
         expected_be=0b1100,
         expected_data=0xBEEF_BEEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0xD785_406E,
         store_data=0x0000_BEEF,
         mem_type=1,
-        expected_address=0x0001_0000,
+        expected_address=0xD785_406C,
         expected_be=0b1100,
         expected_data=0xBEEF_BEEF,
     )
@@ -290,10 +290,10 @@ async def test_word_formatting(dut):
     #test full word data and byte enable
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x83BE_9728,
         store_data=0xDEAD_BEEF,
         mem_type=2,
-        expected_address=0x0001_0000,
+        expected_address=0x83BE_9728,
         expected_be=0b1111,
         expected_data=0xDEAD_BEEF,
     )
@@ -301,10 +301,10 @@ async def test_word_formatting(dut):
     #test address + 4
     await direct_check(
         dut,
-        effective_address=0x0001_0004,
+        effective_address=0x83BE_972C,
         store_data=0x1234_5678,
         mem_type=2,
-        expected_address=0x0001_0004,
+        expected_address=0x83BE_972C,
         expected_be=0b1111,
         expected_data=0x1234_5678,
     )
@@ -312,10 +312,10 @@ async def test_word_formatting(dut):
     #test data=0
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x4F10_CAE4,
         store_data=0x0000_0000,
         mem_type=2,
-        expected_address=0x0001_0000,
+        expected_address=0x4F10_CAE4,
         expected_be=0b1111,
         expected_data=0x0000_0000,
     )
@@ -323,10 +323,10 @@ async def test_word_formatting(dut):
     #test data=F
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x613A_85D8,
         store_data=0xFFFF_FFFF,
         mem_type=2,
-        expected_address=0x0001_0000,
+        expected_address=0x613A_85D8,
         expected_be=0b1111,
         expected_data=0xFFFF_FFFF,
     )
@@ -334,10 +334,10 @@ async def test_word_formatting(dut):
     #test data below bit 31 boundary
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0xAC72_8B40,
         store_data=0x7FFF_FFFF,
         mem_type=2,
-        expected_address=0x0001_0000,
+        expected_address=0xAC72_8B40,
         expected_be=0b1111,
         expected_data=0x7FFF_FFFF,
     )
@@ -345,10 +345,10 @@ async def test_word_formatting(dut):
     #test data with only bit 31 set
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x35E9_F164,
         store_data=0x8000_0000,
         mem_type=2,
-        expected_address=0x0001_0000,
+        expected_address=0x35E9_F164,
         expected_be=0b1111,
         expected_data=0x8000_0000,
     )
@@ -382,40 +382,40 @@ async def test_unsigned_byte_formatting(dut):
     #test choosing byte enable
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x19A7_42C0,
         store_data=0xDEAD_BEEF,
         mem_type=4,
-        expected_address=0x0001_0000,
+        expected_address=0x19A7_42C0,
         expected_be=0b0001,
         expected_data=0xEFEF_EFEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0001,
+        effective_address=0xE035_6B95,
         store_data=0xDEAD_BEEF,
         mem_type=4,
-        expected_address=0x0001_0000,
+        expected_address=0xE035_6B94,
         expected_be=0b0010,
         expected_data=0xEFEF_EFEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0x724C_DA3A,
         store_data=0xDEAD_BEEF,
         mem_type=4,
-        expected_address=0x0001_0000,
+        expected_address=0x724C_DA38,
         expected_be=0b0100,
         expected_data=0xEFEF_EFEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0003,
+        effective_address=0xA86F_103F,
         store_data=0xDEAD_BEEF,
         mem_type=4,
-        expected_address=0x0001_0000,
+        expected_address=0xA86F_103C,
         expected_be=0b1000,
         expected_data=0xEFEF_EFEF,
     )
@@ -423,10 +423,10 @@ async def test_unsigned_byte_formatting(dut):
     #test address + 4
     await direct_check(
         dut,
-        effective_address=0x0001_0004,
+        effective_address=0x19A7_42C4,
         store_data=0xDEAD_BEEF,
         mem_type=4,
-        expected_address=0x0001_0004,
+        expected_address=0x19A7_42C4,
         expected_be=0b0001,
         expected_data=0xEFEF_EFEF,
     )
@@ -434,10 +434,10 @@ async def test_unsigned_byte_formatting(dut):
     #test data=0
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x3D92_71A4,
         store_data=0x0000_0000,
         mem_type=4,
-        expected_address=0x0001_0000,
+        expected_address=0x3D92_71A4,
         expected_be=0b0001,
         expected_data=0x0000_0000,
     )
@@ -445,10 +445,10 @@ async def test_unsigned_byte_formatting(dut):
     #test data=F
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0xC407_EB18,
         store_data=0xFFFF_FFFF,
         mem_type=4,
-        expected_address=0x0001_0000,
+        expected_address=0xC407_EB18,
         expected_be=0b0001,
         expected_data=0xFFFF_FFFF,
     )
@@ -489,20 +489,20 @@ async def test_unsigned_byte_formatting(dut):
     #test upper data bits do not affect byte replication
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x6AF0_932C,
         store_data=0x1234_56EF,
         mem_type=4,
-        expected_address=0x0001_0000,
+        expected_address=0x6AF0_932C,
         expected_be=0b0001,
         expected_data=0xEFEF_EFEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x91B5_0C70,
         store_data=0x0000_00EF,
         mem_type=4,
-        expected_address=0x0001_0000,
+        expected_address=0x91B5_0C70,
         expected_be=0b0001,
         expected_data=0xEFEF_EFEF,
     )
@@ -514,10 +514,10 @@ async def test_unsigned_halfword_formatting(dut):
     #test choosing lower halfword
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x58E3_A6D0,
         store_data=0xDEAD_BEEF,
         mem_type=5,
-        expected_address=0x0001_0000,
+        expected_address=0x58E3_A6D0,
         expected_be=0b0011,
         expected_data=0xBEEF_BEEF,
     )
@@ -525,10 +525,10 @@ async def test_unsigned_halfword_formatting(dut):
     #test choosing upper halfword
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0xB249_187A,
         store_data=0xDEAD_BEEF,
         mem_type=5,
-        expected_address=0x0001_0000,
+        expected_address=0xB249_1878,
         expected_be=0b1100,
         expected_data=0xBEEF_BEEF,
     )
@@ -536,10 +536,10 @@ async def test_unsigned_halfword_formatting(dut):
     #test address + 4
     await direct_check(
         dut,
-        effective_address=0x0001_0004,
+        effective_address=0x58E3_A6D4,
         store_data=0xDEAD_BEEF,
         mem_type=5,
-        expected_address=0x0001_0004,
+        expected_address=0x58E3_A6D4,
         expected_be=0b0011,
         expected_data=0xBEEF_BEEF,
     )
@@ -547,10 +547,10 @@ async def test_unsigned_halfword_formatting(dut):
     #test data=0
     await direct_check(
         dut,
-        effective_address=0x0001_0000,
+        effective_address=0x07DC_F524,
         store_data=0x0000_0000,
         mem_type=5,
-        expected_address=0x0001_0000,
+        expected_address=0x07DC_F524,
         expected_be=0b0011,
         expected_data=0x0000_0000,
     )
@@ -558,10 +558,10 @@ async def test_unsigned_halfword_formatting(dut):
     #test data=F
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0xF631_8BCE,
         store_data=0xFFFF_FFFF,
         mem_type=5,
-        expected_address=0x0001_0000,
+        expected_address=0xF631_8BCC,
         expected_be=0b1100,
         expected_data=0xFFFF_FFFF,
     )
@@ -602,20 +602,20 @@ async def test_unsigned_halfword_formatting(dut):
     #test upper data bits do not affect halfword replication
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0x2CA8_D152,
         store_data=0x1234_BEEF,
         mem_type=5,
-        expected_address=0x0001_0000,
+        expected_address=0x2CA8_D150,
         expected_be=0b1100,
         expected_data=0xBEEF_BEEF,
     )
 
     await direct_check(
         dut,
-        effective_address=0x0001_0002,
+        effective_address=0xD785_406E,
         store_data=0x0000_BEEF,
         mem_type=5,
-        expected_address=0x0001_0000,
+        expected_address=0xD785_406C,
         expected_be=0b1100,
         expected_data=0xBEEF_BEEF,
     )
@@ -636,10 +636,10 @@ async def test_reserved_mem_type(dut):
 
     await direct_check(
         dut,
-        effective_address=0x0001_0001,
+        effective_address=0x9E4B_7C21,
         store_data=0xFFFF_FFFF,
         mem_type=0b011,
-        expected_address=0x0001_0000,
+        expected_address=0x9E4B_7C20,
         expected_be=0b0000,
         expected_data=0x0000_0000,
     )
@@ -677,10 +677,10 @@ async def test_reserved_mem_type(dut):
 
     await direct_check(
         dut,
-        effective_address=0x0001_0001,
+        effective_address=0x2D85_A639,
         store_data=0xFFFF_FFFF,
         mem_type=0b110,
-        expected_address=0x0001_0000,
+        expected_address=0x2D85_A638,
         expected_be=0b0000,
         expected_data=0x0000_0000,
     )
@@ -718,10 +718,10 @@ async def test_reserved_mem_type(dut):
 
     await direct_check(
         dut,
-        effective_address=0x0001_0001,
+        effective_address=0xC713_E4AD,
         store_data=0xFFFF_FFFF,
         mem_type=0b111,
-        expected_address=0x0001_0000,
+        expected_address=0xC713_E4AC,
         expected_be=0b0000,
         expected_data=0x0000_0000,
     )
