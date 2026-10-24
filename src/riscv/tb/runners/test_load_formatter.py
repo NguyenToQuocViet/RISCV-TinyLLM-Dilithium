@@ -1,7 +1,7 @@
 #------------------------------------------------------------------------------
 # Module      : test_load_formatter
 # Description : Pytest runner for the load formatter with Verilator.
-# Author      : Codex
+# Author      : Viet Nguyen To Quoc
 # Date        : 2026-10-23
 #------------------------------------------------------------------------------
 

@@ -36,6 +36,10 @@ These conventions implement the
 They govern new and edited tests; they do not claim that every historical test
 has been reviewed against them.
 
+Header authorship and Git identity follow
+[Authorship and Commit Identity](../docs/AGENT_POLICY.md#authorship-and-commit-identity);
+the local `docs/RTL_CONVENTIONS.md` defines the four-field header format.
+
 - Present a short plan with testcase name, intent, stimulus and expected
   behavior, together with the proposed helper structure. Implement the approved
   scope; adding random stimulus or a framework is a separate decision.

@@ -1,3 +1,10 @@
+//------------------------------------------------------------------------------
+// Module      : redirect_unit
+// Description : Qualify branch/jump redirects and form the redirect target.
+// Author      : Viet Nguyen To Quoc
+// Date        : 2026-10-19
+//------------------------------------------------------------------------------
+
 module redirect_unit
     import riscv_pkg::*;
 (

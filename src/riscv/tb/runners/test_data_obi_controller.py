@@ -1,7 +1,7 @@
 #------------------------------------------------------------------------------
 # Module      : test_data_obi_controller
 # Description : Pytest runner for directed data OBI controller tests.
-# Author      : Codex
+# Author      : Viet Nguyen To Quoc
 # Date        : 2026-10-23
 #------------------------------------------------------------------------------
 

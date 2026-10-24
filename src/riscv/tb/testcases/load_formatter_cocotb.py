@@ -1,7 +1,7 @@
 #------------------------------------------------------------------------------
 # Module      : load_formatter_cocotb
 # Description : Directed checks for load-lane selection and extension.
-# Author      : Viet Nguyen To Quoc, Codex
+# Author      : Viet Nguyen To Quoc
 # Date        : 2026-10-23
 #------------------------------------------------------------------------------
 

@@ -169,9 +169,44 @@ No change is acceptable merely because AI produced it and tests pass. Before app
 
 For material RTL, require a predicted cycle or transaction trace, a state-transition explanation where applicable, and at least one test capable of falsifying the intended behavior. Report exact commands and observed results. Compilation alone is not functional verification, and unit evidence is not end-to-end evidence.
 
+## Authorship and Commit Identity
+
+The RISC-V owner determines attribution. Code generation is a normal function
+of the AI tool; generating code, proposing a plan or executing a commit does
+not by itself confer authorship. Delegating implementation is not automatically
+delegating authorship.
+
+For owner-led work, including work where Việt directs, decides, resolves
+trade-offs and reviews AI-generated code, file headers use
+`Author: Viet Nguyen To Quoc`. Preserve that attribution when assisting with
+edits. Do not add an AI author or co-author without explicit owner approval.
+
+Only work explicitly outsourced by Việt with separate AI attribution approved
+uses `Author: OpenAI Codex`. Việt confirmed this classification for the existing
+EX verification suite: its runner, testcase modules, helpers and registered
+harness, not the human-authored EX RTL. Retain their existing headers and
+history; do not create retrospective attribution-only commits for that suite.
+
+For future commits containing separately attributed outsourced work, set both
+Git Author and Committer to `OpenAI Codex <noreply@openai.com>` for that command
+only. Keep owner-led work in separate commits under the owner's Git identity.
+Describe the delegated scope, validation and evidence limits in the commit
+body. Do not change global or repository-wide Git identity, rewrite old commits,
+or claim the commit is bot-authenticated or signed merely because its metadata
+names Codex. Push uses the authorized credentials actually available and still
+requires the normal owner authorization.
+
+Before committing RTL or verification sources, inspect their complete headers
+and the intended Git Author/Committer against this classification. Apply the
+header format in the local `docs/RTL_CONVENTIONS.md`. Attribution corrections
+to owner-led work do not transfer authorship of that work to the correcting tool.
+
 ## AI Transparency
 
 Disclose material AI assistance at pull-request level, or in the commit description when no pull request exists. State what the agent contributed and what the human reviewed or decided.
+
+This disclosure records tool assistance; it is distinct from authorship and
+does not authorize an AI name in a header, Git identity or co-author trailer.
 
 Assistance is material when AI substantially contributes nontrivial RTL or algorithms, a test oracle or reference model, verification strategy, a specification or ADR adopted by the project, build infrastructure, a substantial refactor, experimental analysis, or wording and reasoning used in a research claim.
 

@@ -1,7 +1,7 @@
 #------------------------------------------------------------------------------
 # Module      : data_obi_controller_cocotb
 # Description : Directed data OBI ownership, handshake, wait and reset checks.
-# Author      : Codex
+# Author      : Viet Nguyen To Quoc
 # Date        : 2026-10-23
 #------------------------------------------------------------------------------
 

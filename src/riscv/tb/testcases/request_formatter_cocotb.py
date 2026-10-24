@@ -1,7 +1,7 @@
 #------------------------------------------------------------------------------
 # Module      : request_formatter_cocotb
 # Description : Directed checks for request address, byte enables and write data.
-# Author      : Viet Nguyen To Quoc, Codex
+# Author      : Viet Nguyen To Quoc
 # Date        : 2026-10-23
 #------------------------------------------------------------------------------
 

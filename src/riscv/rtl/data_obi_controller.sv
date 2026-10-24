@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 // Module      : data_obi_controller
 // Description : Data OBI request, transaction ownership and MEM-wait control.
-// Author      : Viet Nguyen To Quoc, Codex
+// Author      : Viet Nguyen To Quoc
 // Date        : 2026-10-21
 //------------------------------------------------------------------------------
 
