@@ -133,6 +133,31 @@ These rules do not prohibit files or abstractions that the accepted design genui
 
 ## Verification and Human Accountability
 
+### Owner-readable testbenches
+
+Việt's primary role is RTL design; verification supports that work. Deliberate,
+incremental development preserves his understanding and ownership. A testbench
+must let him recall a testcase's intent, stimulus, expected behavior and timing
+within roughly 1–3 minutes, without tracing a chain of helpers. Passing tests
+alone do not satisfy this requirement.
+
+Before implementing verification for a new block or materially expanding its
+scope, present a compact test plan and the proposed testcase organization for
+owner review. Prefer explicit directed checks, or an independently reviewed
+golden model with random stimulus when approved. Use small, single-purpose
+helpers where they improve readability; keep the transaction sequence visible
+in the testcase. Repetition is acceptable when it makes that sequence easier
+to follow. A scoreboard, monitor or reusable framework needs a concrete
+verification purpose and owner approval before introduction.
+
+Follow [the testbench conventions](../tb/README.md#testbench-conventions) when
+planning, writing or reviewing tests. Simplifying organization does not waive
+accepted verification obligations. Keep DUT behavior checks distinct from
+stimulus validation and checker self-tests, and report any pending obligation
+explicitly.
+
+### Evidence and review
+
 No change is acceptable merely because AI produced it and tests pass. Before approval, the responsible human reviewer or owner must be able to explain:
 
 - the problem and why the change exists;

@@ -29,6 +29,45 @@ Leave `test_dir` unset: cocotb runs in the build directory and writes
 are ignored by [`tb/.gitignore`](.gitignore). Each rerun replaces that block's
 result XML; these files are current run output, not an archived verification report.
 
+## Testbench conventions
+
+These conventions implement the
+[owner-readable verification policy](../docs/AGENT_POLICY.md#owner-readable-testbenches).
+They govern new and edited tests; they do not claim that every historical test
+has been reviewed against them.
+
+- Present a short plan with testcase name, intent, stimulus and expected
+  behavior, together with the proposed helper structure. Implement the approved
+  scope; adding random stimulus or a framework is a separate decision.
+- Group tests by function or scenario. Use short English comments that state
+  the intent of the following stimulus; assertions must check that intent.
+- For directed tests, supply manually determined expected values explicitly at
+  the call site. A helper may drive inputs, wait for settling and compare with
+  those values; it must not generate the directed oracle from a golden model
+  or DUT outputs. Normalize bit width/signed representation when needed without
+  changing the expected bit pattern.
+- When random testing is approved, compare against a separately reviewed,
+  contract-derived golden model and preserve the seed for reproduction.
+  Direct testing remains suitable on its own when it covers the approved plan.
+- Keep helpers small and single-purpose. Reset and literal output checks are
+  useful examples, not a required helper count. Prefer explicit assignments and
+  repeated edge/check sequences over generic drivers or transaction helpers
+  that hide the scenario. Keep runners focused on build and test launch.
+- Use native cocotb `Clock` and edge/phase triggers. In clocked directed tests,
+  normally drive external stimulus at falling edges for rising-edge sampling.
+  Show combinational checks before the consuming edge and registered-result
+  checks after updates settle; `RisingEdge()` alone does not ensure settling.
+- Model a parent register's advance at its actual accepted rising edge, in
+  `ReadWrite()` when using Python-supplied parent updates, then observe settled
+  outputs with `ReadOnly()`. Holding a completed owner until the next falling
+  edge changes the modeled protocol. Make reset or other deliberate timing
+  exceptions explicit. The block contract determines the actual event timing.
+- Check observable DUT outputs and subsequent behavior. A flag supplied by the
+  testbench about its own stimulus is not independent evidence of DUT protocol
+  state. If a protocol monitor is required, derive legality from accepted
+  protocol history; keep intentional violation tests and checker self-tests
+  distinct from DUT handling tests. Record their separate results and limits.
+
 ## EX composition verification
 
 The owner approved this directed plan on 2026-10-19 against
