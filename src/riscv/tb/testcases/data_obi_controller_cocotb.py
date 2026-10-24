@@ -5,15 +5,31 @@
 # Date        : 2026-10-23
 #------------------------------------------------------------------------------
 
-import os
-
 import cocotb
-from cocotb.triggers import Timer
+from cocotb.clock import Clock
+from cocotb.triggers import FallingEdge, ReadOnly, ReadWrite, RisingEdge, Timer
 
+#ReadWrite after a rising edge models EX/MEM advance in the same timestep.
+#ReadOnly then checks the settled controller outputs for the new parent entry.
 
-def drive(dut, **signals):
-    for name, value in signals.items():
-        getattr(dut, name).value = value
+async def reset_dut(dut):
+    await FallingEdge(dut.clk)
+    dut.rst_n.value             = 0
+    dut.instruction_valid.value = 0
+    dut.mem_en.value            = 0
+    dut.mem_write.value         = 0
+    dut.aligned_address.value   = 0
+    dut.byte_enable.value       = 0
+    dut.write_data.value        = 0
+    dut.gnt.value               = 0
+    dut.rvalid.value            = 0
+    dut.rdata.value             = 0
+
+    #hold reset through a sampling edge, then release on the falling edge
+    await RisingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    dut.rst_n.value = 1
+    await Timer(1, unit="ns")
 
 
 def check_control(dut, expected_req, expected_wait):
@@ -26,398 +42,719 @@ def check_control(dut, expected_req, expected_wait):
     assert int(dut.rready.value) == 1, "rready must remain one"
 
 
-def check_payload(dut, *, addr, we, be, wdata, read_data):
-    for name, expected in (
-        ("addr", addr), ("we", we), ("be", be),
-        ("wdata", wdata), ("read_data", read_data),
-    ):
-        actual = int(getattr(dut, name).value)
-        assert actual == expected, (
-            f"{name}: expected 0x{expected:08X}, got 0x{actual:08X}"
-        )
-
-
-def check_response(dut, response_expected, context):
-    if int(dut.rst_n.value) and int(dut.rvalid.value) and int(dut.rready.value):
-        if not response_expected:
-            raise AssertionError(f"Unexpected OBI response: {context}")
-
-
-async def tick(
-    dut, expected_req, expected_wait, *, response_expected=False,
-    next_owner=None, violation=None,
-):
-    #check the consuming edge before sequential ownership changes
-    await Timer(4, unit="ns")
-    check_control(dut, expected_req, expected_wait)
-    if violation is not None and not os.environ.get("OBI_NEGATIVE_CASE"):
-        try:
-            check_response(dut, response_expected, violation)
-        except AssertionError as error:
-            assert str(error) == f"Unexpected OBI response: {violation}"
-        else:
-            raise AssertionError(f"Checker missed unexpected response: {violation}")
-    else:
-        check_response(dut, response_expected, violation or "normal traffic")
-
-    dut.clk.value = 1
-    await Timer(1, unit="ns")
-    #the supplied parent changes EX/MEM only after the consuming edge
-    if next_owner is not None:
-        drive(dut, **next_owner)
-    await Timer(4, unit="ns")
-    dut.clk.value = 0
-    await Timer(1, unit="ns")
-
-
-async def reset_controller(dut):
-    drive(
-        dut, clk=0, rst_n=1, instruction_valid=0, mem_en=0, mem_write=0,
-        aligned_address=0, byte_enable=0, write_data=0,
-        gnt=0, rvalid=0, rdata=0,
-    )
-    await Timer(1, unit="ns")
-    dut.rst_n.value = 0
-    await Timer(1, unit="ns")
-    await tick(dut, 0, 0)
-    #rst_n is already conditioned by the parent; release follows a clock edge
-    dut.clk.value = 1
-    await Timer(1, unit="ns")
-    dut.rst_n.value = 1
-    await Timer(1, unit="ns")
-    dut.clk.value = 0
-    await Timer(1, unit="ns")
-    check_control(dut, 0, 0)
-
-
-def drive_owner(
-    dut, *, mem_write=0, address=0x0001_0020,
-    byte_enable=0xF, write_data=0xA5A5_5A5A,
-):
-    drive(
-        dut, instruction_valid=1, mem_en=1, mem_write=mem_write,
-        aligned_address=address, byte_enable=byte_enable, write_data=write_data,
-    )
-
-
-async def complete_to_idle(dut, read_data=0x1234_5678):
-    drive(dut, rvalid=1, rdata=read_data)
-    await tick(
-        dut, 0, 0, response_expected=True,
-        next_owner={"instruction_valid": 0},
-    )
-    drive(dut, rvalid=0, gnt=0)
-    await Timer(1, unit="ns")
-    await tick(dut, 0, 0)
-
-
 @cocotb.test()
 async def test_idle_control(dut):
-    await reset_controller(dut)
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
+
+    await reset_dut(dut)
+    check_control(dut, expected_req=0, expected_wait=0)
 
     #grant alone must not create ownership for a bubble or non-memory instruction
-    drive(dut, instruction_valid=0, mem_en=0, gnt=1)
-    await tick(dut, 0, 0)
-    drive(dut, instruction_valid=0, mem_en=1)
-    await tick(dut, 0, 0)
-    drive(dut, instruction_valid=1, mem_en=0)
-    await tick(dut, 0, 0)
+    for valid, mem_en in ((0, 0), (0, 1), (1, 0)):
+        await FallingEdge(dut.clk)
+        dut.instruction_valid.value = valid
+        dut.mem_en.value            = mem_en
+        dut.gnt.value               = 1
 
-    #the first valid memory owner must still present a new request
-    drive_owner(dut)
-    await tick(dut, 1, 1)
-    check_control(dut, 0, 1)
-    await complete_to_idle(dut)
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=0)
+
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=0)
+
+    #the first real owner must still present a new request
+    await FallingEdge(dut.clk)
+    dut.instruction_valid.value = 1
+    dut.mem_en.value            = 1
+    dut.aligned_address.value   = 0x0001_0020
+
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=1, expected_wait=1)
+
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
+
+    #complete the accepted request, then advance the parent at that rising edge
+    await FallingEdge(dut.clk)
+    dut.gnt.value    = 0
+    dut.rvalid.value = 1
+
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    await RisingEdge(dut.clk)
+    await ReadWrite()
+    dut.instruction_valid.value = 0
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 0
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    clock.stop()
 
 
 @cocotb.test()
 async def test_payload_routing(dut):
-    await reset_controller(dut)
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
+    await reset_dut(dut)
 
-    #inactive payload is passed through, not zeroed
-    drive(
-        dut, aligned_address=0xFFFF_FFFC, mem_write=1,
-        byte_enable=0x8, write_data=0xFFFF_FFFF, rdata=0x8000_0000,
-    )
-    await tick(dut, 0, 0)
-    check_payload(
-        dut, addr=0xFFFF_FFFC, we=1, be=0x8,
-        wdata=0xFFFF_FFFF, read_data=0x8000_0000,
-    )
-
-    #load request, then its held payload while response data changes
-    drive_owner(dut, address=0x19A7_42C0, byte_enable=0x3, write_data=0xDEAD_BEEF)
-    drive(dut, rdata=0x0123_4567)
-    await tick(dut, 1, 1)
-    check_payload(
-        dut, addr=0x19A7_42C0, we=0, be=0x3,
-        wdata=0xDEAD_BEEF, read_data=0x0123_4567,
-    )
-    dut.gnt.value = 1
-    await tick(dut, 1, 1)
-    drive(dut, gnt=0, rdata=0x89AB_CDEF)
-    await tick(dut, 0, 1)
-    check_payload(
-        dut, addr=0x19A7_42C0, we=0, be=0x3,
-        wdata=0xDEAD_BEEF, read_data=0x89AB_CDEF,
-    )
-    await complete_to_idle(dut)
-
-    #store control and payload also pass through unchanged
-    drive_owner(
-        dut, mem_write=1, address=0x8000_0000,
-        byte_enable=0xC, write_data=0x8000_8000,
-    )
-    dut.gnt.value = 1
-    await tick(dut, 1, 1)
-    check_payload(
-        dut, addr=0x8000_0000, we=1, be=0xC,
-        wdata=0x8000_8000, read_data=0x1234_5678,
-    )
-    await complete_to_idle(dut, read_data=0xFFFF_FFFF)
-
-    #shared reset clears validity and ownership, not payload wires
-    drive(dut, rst_n=0, instruction_valid=0, rdata=0x7654_3210)
+    #inactive payload passes through without being zeroed
+    await FallingEdge(dut.clk)
+    dut.aligned_address.value = 0xFFFF_FFFC
+    dut.mem_write.value       = 1
+    dut.byte_enable.value     = 0b1000
+    dut.write_data.value      = 0xFFFF_FFFF
+    dut.rdata.value           = 0x8000_0000
     await Timer(1, unit="ns")
-    check_control(dut, 0, 0)
-    check_payload(
-        dut, addr=0x8000_0000, we=1, be=0xC,
-        wdata=0x8000_8000, read_data=0x7654_3210,
-    )
+    check_control(dut, expected_req=0, expected_wait=0)
+    assert int(dut.addr.value) == 0xFFFF_FFFC
+    assert int(dut.we.value) == 1
+    assert int(dut.be.value) == 0b1000
+    assert int(dut.wdata.value) == 0xFFFF_FFFF
+    assert int(dut.read_data.value) == 0x8000_0000
+
+    #load request before grant
+    await FallingEdge(dut.clk)
+    dut.instruction_valid.value = 1
+    dut.mem_en.value            = 1
+    dut.mem_write.value         = 0
+    dut.aligned_address.value   = 0x19A7_42C0
+    dut.byte_enable.value       = 0b0011
+    dut.write_data.value        = 0xDEAD_BEEF
+    dut.rdata.value             = 0x0123_4567
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=1, expected_wait=1)
+    assert int(dut.addr.value) == 0x19A7_42C0
+    assert int(dut.we.value) == 0
+    assert int(dut.be.value) == 0b0011
+    assert int(dut.wdata.value) == 0xDEAD_BEEF
+    assert int(dut.read_data.value) == 0x0123_4567
+
+    #grant the load and keep the parent payload while waiting for response
+    await FallingEdge(dut.clk)
+    dut.gnt.value = 1
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
+    await FallingEdge(dut.clk)
+    dut.gnt.value   = 0
+    dut.rdata.value = 0x89AB_CDEF
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=1)
+    assert int(dut.addr.value) == 0x19A7_42C0
+    assert int(dut.we.value) == 0
+    assert int(dut.be.value) == 0b0011
+    assert int(dut.wdata.value) == 0xDEAD_BEEF
+    assert int(dut.read_data.value) == 0x89AB_CDEF
+
+    #load response data is available before the consuming edge
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 1
+    dut.rdata.value  = 0x1234_5678
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    assert int(dut.read_data.value) == 0x1234_5678
+    await RisingEdge(dut.clk)
+
+    #replace the completed load with a store in the same edge's update phase
+    await ReadWrite()
+    dut.mem_write.value       = 1
+    dut.aligned_address.value = 0x8000_0000
+    dut.byte_enable.value     = 0b1100
+    dut.write_data.value      = 0x8000_8000
+    await ReadOnly()
+    check_control(dut, expected_req=1, expected_wait=1)
+    assert int(dut.addr.value) == 0x8000_0000
+    assert int(dut.we.value) == 1
+    assert int(dut.be.value) == 0b1100
+    assert int(dut.wdata.value) == 0x8000_8000
+
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 0
+    dut.gnt.value    = 1
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
+
+    await FallingEdge(dut.clk)
+    dut.gnt.value    = 0
+    dut.rvalid.value = 1
+    dut.rdata.value  = 0xFFFF_FFFF
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    assert int(dut.read_data.value) == 0xFFFF_FFFF
+    await RisingEdge(dut.clk)
+    await ReadWrite()
+    dut.instruction_valid.value = 0
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    #reset clears validity and ownership, not the payload wires
+    await FallingEdge(dut.clk)
+    dut.rst_n.value             = 0
+    dut.instruction_valid.value = 0
+    dut.rvalid.value            = 0
+    dut.rdata.value             = 0x7654_3210
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    assert int(dut.addr.value) == 0x8000_0000
+    assert int(dut.we.value) == 1
+    assert int(dut.be.value) == 0b1100
+    assert int(dut.wdata.value) == 0x8000_8000
+    assert int(dut.read_data.value) == 0x7654_3210
+    clock.stop()
 
 
 @cocotb.test()
 async def test_delayed_grant(dut):
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
+
     #delay counts edges with request high and grant low before acceptance
     for delay in (0, 3, 120):
-        await reset_controller(dut)
-        dut.gnt.value = int(delay == 0)
-        await Timer(1, unit="ns")
-        drive_owner(
-            dut, mem_write=1, address=0x724C_DA38,
-            byte_enable=0x2, write_data=0xEFEF_EFEF,
-        )
-        for _ in range(delay):
-            await tick(dut, 1, 1)
-            check_payload(
-                dut, addr=0x724C_DA38, we=1, be=0x2,
-                wdata=0xEFEF_EFEF, read_data=0,
-            )
+        await reset_dut(dut)
+        check_control(dut, expected_req=0, expected_wait=0)
 
-        dut.gnt.value = 1
-        await tick(dut, 1, 1)
-        check_control(dut, 0, 1)
-        await complete_to_idle(dut)
+        #drive request and predetermined grant together on the falling edge
+        await FallingEdge(dut.clk)
+        dut.gnt.value               = int(delay == 0)
+        dut.instruction_valid.value = 1
+        dut.mem_en.value            = 1
+        dut.mem_write.value         = 1
+        dut.aligned_address.value   = 0x724C_DA38
+        dut.byte_enable.value       = 0b0010
+        dut.write_data.value        = 0xEFEF_EFEF
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=1, expected_wait=1)
+        assert int(dut.addr.value) == 0x724C_DA38
+        assert int(dut.we.value) == 1
+        assert int(dut.be.value) == 0b0010
+        assert int(dut.wdata.value) == 0xEFEF_EFEF
+        assert int(dut.read_data.value) == 0
+
+        #each ungranted edge must leave the request and payload unchanged
+        for _ in range(delay):
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            check_control(dut, expected_req=1, expected_wait=1)
+            assert int(dut.addr.value) == 0x724C_DA38
+            assert int(dut.we.value) == 1
+            assert int(dut.be.value) == 0b0010
+            assert int(dut.wdata.value) == 0xEFEF_EFEF
+            assert int(dut.read_data.value) == 0
+            await FallingEdge(dut.clk)
+
+        #grant alone does not release wait; acceptance occurs at the next edge
+        #for delay zero, grant was already driven with the request
+        if delay > 0:
+            dut.gnt.value = 1
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=1, expected_wait=1)
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=1)
+
+        #after grant, the accepted store still waits for its response
+        await FallingEdge(dut.clk)
+        dut.gnt.value = 0
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=1)
+
+        #response releases wait before its consuming edge
+        await FallingEdge(dut.clk)
+        dut.rvalid.value = 1
+        dut.rdata.value  = 0x1234_5678
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=0)
+        assert int(dut.read_data.value) == 0x1234_5678
+        await RisingEdge(dut.clk)
+
+        #the parent advances to a bubble at the response edge
+        await ReadWrite()
+        dut.instruction_valid.value = 0
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=0)
+
+        await FallingEdge(dut.clk)
+        dut.rvalid.value = 0
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=0)
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=0)
+
+    clock.stop()
 
 
 @cocotb.test()
 async def test_delayed_response(dut):
-    await reset_controller(dut)
-    drive_owner(dut)
-    dut.gnt.value = 1
-    await tick(dut, 1, 1)
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
+    await reset_dut(dut)
 
-    #predetermined grant changes cannot grant another request while req is zero
+    await FallingEdge(dut.clk)
+    dut.instruction_valid.value = 1
+    dut.mem_en.value            = 1
+    dut.aligned_address.value   = 0x0001_0020
+    dut.byte_enable.value       = 0b1111
+    dut.write_data.value        = 0xA5A5_5A5A
+    dut.gnt.value               = 1
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=1, expected_wait=1)
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
+
+    #grant changes cannot accept anything while the DUT keeps req low
     for grant in (1, 0, 1, 0):
+        await FallingEdge(dut.clk)
         dut.gnt.value = grant
-        await tick(dut, 0, 1)
-        check_payload(
-            dut, addr=0x0001_0020, we=0, be=0xF,
-            wdata=0xA5A5_5A5A, read_data=0,
-        )
-    await complete_to_idle(dut)
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=1)
+        assert int(dut.addr.value) == 0x0001_0020
+        assert int(dut.we.value) == 0
+        assert int(dut.be.value) == 0b1111
+        assert int(dut.wdata.value) == 0xA5A5_5A5A
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=1)
+
+    await FallingEdge(dut.clk)
+    dut.gnt.value    = 0
+    dut.rvalid.value = 1
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    await RisingEdge(dut.clk)
+    await ReadWrite()
+    dut.instruction_valid.value = 0
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 0
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    clock.stop()
 
 
 @cocotb.test()
 async def test_completion_timing(dut):
-    #both load and store wait for a response; response data does not control wait
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
+
+    #load and store both wait for response, regardless of response data
     for mem_write in (0, 1):
         for data in (0x0000_0000, 0xFFFF_FFFF):
-            await reset_controller(dut)
-            drive_owner(dut, mem_write=mem_write)
-            dut.gnt.value = 1
-            await tick(dut, 1, 1)
-            check_control(dut, 0, 1)
-
-            #earliest supported response: cycle after the accepting edge
-            drive(dut, rvalid=1, rdata=data)
+            await reset_dut(dut)
+            await FallingEdge(dut.clk)
+            dut.instruction_valid.value = 1
+            dut.mem_en.value            = 1
+            dut.mem_write.value         = mem_write
+            dut.gnt.value               = 1
             await Timer(1, unit="ns")
-            check_control(dut, 0, 0)
+            check_control(dut, expected_req=1, expected_wait=1)
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            check_control(dut, expected_req=0, expected_wait=1)
+
+            #earliest response: falling edge after grant, before the next rising edge
+            await FallingEdge(dut.clk)
+            dut.gnt.value    = 0
+            dut.rvalid.value = 1
+            dut.rdata.value  = data
+            await Timer(1, unit="ns")
+            check_control(dut, expected_req=0, expected_wait=0)
             assert int(dut.clk.value) == 0
             assert int(dut.read_data.value) == data
-            await tick(
-                dut, 0, 0, response_expected=True,
-                next_owner={"instruction_valid": 0},
-            )
-            drive(dut, rvalid=0, gnt=0)
-            await tick(dut, 0, 0)
+            await RisingEdge(dut.clk)
+
+            await ReadWrite()
+            dut.instruction_valid.value = 0
+            await ReadOnly()
+            check_control(dut, expected_req=0, expected_wait=0)
+
+            await FallingEdge(dut.clk)
+            dut.rvalid.value = 0
+            await Timer(1, unit="ns")
+            check_control(dut, expected_req=0, expected_wait=0)
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            check_control(dut, expected_req=0, expected_wait=0)
+
+    clock.stop()
 
 
 @cocotb.test()
 async def test_consecutive_transactions(dut):
-    await reset_controller(dut)
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
+    await reset_dut(dut)
 
-    #load A is accepted exactly once
-    drive_owner(dut, address=0x1000_0020)
-    dut.gnt.value = 1
-    await tick(dut, 1, 1)
-    await tick(dut, 0, 1)
+    #load A is accepted once
+    await FallingEdge(dut.clk)
+    dut.instruction_valid.value = 1
+    dut.mem_en.value            = 1
+    dut.aligned_address.value   = 0x1000_0020
+    dut.byte_enable.value       = 0b1111
+    dut.gnt.value               = 1
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=1, expected_wait=1)
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
 
-    #no store B request at A's response edge, even with grant already high
-    drive(dut, rvalid=1, rdata=0x1111_2222)
-    await tick(
-        dut, 0, 0, response_expected=True,
-        next_owner={
-            "instruction_valid": 1, "mem_en": 1, "mem_write": 1,
-            "aligned_address": 0x2000_0040, "byte_enable": 0xC,
-            "write_data": 0xBEEF_BEEF,
-        },
-    )
+    #A's response edge must not also accept a request for B
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 1
+    dut.rdata.value  = 0x1111_2222
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    assert int(dut.read_data.value) == 0x1111_2222
+    await RisingEdge(dut.clk)
+
+    #A completes; EX/MEM changes to store B in the same timestep
+    await ReadWrite()
+    dut.instruction_valid.value = 1
+    dut.mem_en.value            = 1
+    dut.mem_write.value         = 1
+    dut.aligned_address.value   = 0x2000_0040
+    dut.byte_enable.value       = 0b1100
+    dut.write_data.value        = 0xBEEF_BEEF
+    await ReadOnly()
+    check_control(dut, expected_req=1, expected_wait=1)
+    assert int(dut.addr.value) == 0x2000_0040
+    assert int(dut.we.value) == 1
+    assert int(dut.be.value) == 0b1100
+    assert int(dut.wdata.value) == 0xBEEF_BEEF
+
+    #memory drops A's response; B is accepted on the next rising edge
+    await FallingEdge(dut.clk)
     dut.rvalid.value = 0
     await Timer(1, unit="ns")
-    check_control(dut, 1, 1)
-    check_payload(
-        dut, addr=0x2000_0040, we=1, be=0xC,
-        wdata=0xBEEF_BEEF, read_data=0x1111_2222,
-    )
-    await tick(dut, 1, 1)
-    await tick(dut, 0, 1)
-    await complete_to_idle(dut, read_data=0x3333_4444)
+    check_control(dut, expected_req=1, expected_wait=1)
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
 
-    #bubble before load C must not leave a stale owner or duplicate request
-    dut.gnt.value = 1
-    await tick(dut, 0, 0)
-    drive_owner(dut, address=0x3000_0080, byte_enable=0x1)
-    await tick(dut, 1, 1)
-    await tick(dut, 0, 1)
-    await complete_to_idle(dut, read_data=0x5555_6666)
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 1
+    dut.rdata.value  = 0x3333_4444
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    await RisingEdge(dut.clk)
+
+    #B completes; a valid non-memory instruction must not present another request
+    await ReadWrite()
+    dut.instruction_valid.value = 1
+    dut.mem_en.value            = 0
+    dut.mem_write.value         = 0
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 0
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    await RisingEdge(dut.clk)
+
+    #the non-memory instruction advances to a bubble with grant still high
+    await ReadWrite()
+    dut.instruction_valid.value = 0
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    #the following parent update admits load C with a new address and byte enable
+    await RisingEdge(dut.clk)
+    await ReadWrite()
+    dut.instruction_valid.value = 1
+    dut.mem_en.value            = 1
+    dut.mem_write.value         = 0
+    dut.aligned_address.value   = 0x3000_0080
+    dut.byte_enable.value       = 0b0001
+    await ReadOnly()
+    check_control(dut, expected_req=1, expected_wait=1)
+    assert int(dut.addr.value) == 0x3000_0080
+    assert int(dut.we.value) == 0
+    assert int(dut.be.value) == 0b0001
+
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
+
+    await FallingEdge(dut.clk)
+    dut.gnt.value    = 0
+    dut.rvalid.value = 1
+    dut.rdata.value  = 0x5555_6666
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    assert int(dut.read_data.value) == 0x5555_6666
+    await RisingEdge(dut.clk)
+    await ReadWrite()
+    dut.instruction_valid.value = 0
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 0
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    clock.stop()
 
 
 @cocotb.test()
 async def test_unexpected_response(dut):
-    selected_case = os.environ.get("OBI_NEGATIVE_CASE")
-    cases = (selected_case,) if selected_case else (
-        "idle", "waiting", "first_grant", "duplicate",
-    )
-    for case in cases:
-        await reset_controller(dut)
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
 
-        if case == "idle":
-            #raw response drains, but must not manufacture ownership
+    #these injections check DUT behavior, not a protocol monitor's diagnostic
+    for case in ("idle", "waiting", "first_grant", "duplicate"):
+        await reset_dut(dut)
+
+        #prepare an ungranted request, or a transaction to complete before duplication
+        if case in ("waiting", "first_grant", "duplicate"):
+            await FallingEdge(dut.clk)
+            dut.instruction_valid.value = 1
+            dut.mem_en.value            = 1
+            dut.aligned_address.value   = 0x0001_0020
+            dut.gnt.value               = int(case == "duplicate")
+            await Timer(1, unit="ns")
+            check_control(dut, expected_req=1, expected_wait=1)
+
+        if case == "duplicate":
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            check_control(dut, expected_req=0, expected_wait=1)
+            await FallingEdge(dut.clk)
+            dut.gnt.value    = 0
             dut.rvalid.value = 1
-            await tick(dut, 0, 0, violation=case)
-            dut.rvalid.value = 0
-            drive_owner(dut)
-            dut.gnt.value = 1
-            await tick(dut, 1, 1)
+            await Timer(1, unit="ns")
+            check_control(dut, expected_req=0, expected_wait=0)
+            await RisingEdge(dut.clk)
+            await ReadWrite()
+            dut.instruction_valid.value = 0
+            await ReadOnly()
+            check_control(dut, expected_req=0, expected_wait=0)
 
-        elif case == "waiting":
-            #ungranted request cannot be completed by an unrelated response
-            drive_owner(dut)
-            dut.rvalid.value = 1
-            await tick(dut, 1, 1, violation=case)
+            await FallingEdge(dut.clk)
             dut.rvalid.value = 0
-            await tick(dut, 1, 1)
-            dut.gnt.value = 1
-            await tick(dut, 1, 1)
+            await Timer(1, unit="ns")
+            check_control(dut, expected_req=0, expected_wait=0)
 
-        elif case == "first_grant":
-            #same-edge raw response cannot complete the newly granted request
-            drive_owner(dut)
-            drive(dut, gnt=1, rvalid=1)
-            await tick(dut, 1, 1, violation=case)
-            dut.rvalid.value = 0
-
-        elif case == "duplicate":
-            drive_owner(dut)
-            dut.gnt.value = 1
-            await tick(dut, 1, 1)
-            await complete_to_idle(dut)
-            #a second response after completion is also unexpected
-            dut.rvalid.value = 1
-            await tick(dut, 0, 0, violation=case)
-            dut.rvalid.value = 0
-            drive_owner(dut)
-            dut.gnt.value = 1
-            await tick(dut, 1, 1)
-
+        #inject the unrelated response; only first_grant also accepts a new request
+        await FallingEdge(dut.clk)
+        dut.rvalid.value = 1
+        dut.gnt.value    = int(case == "first_grant")
+        await Timer(1, unit="ns")
+        if case in ("idle", "duplicate"):
+            check_control(dut, expected_req=0, expected_wait=0)
         else:
-            raise AssertionError(f"Unknown negative case: {case}")
+            check_control(dut, expected_req=1, expected_wait=1)
+        await RisingEdge(dut.clk)
 
-        #each injected response leaves a real accepted request waiting normally
-        await tick(dut, 0, 1)
-        await complete_to_idle(dut)
+        #remove the injected response before another rising edge
+        await FallingEdge(dut.clk)
+        dut.rvalid.value = 0
+        dut.gnt.value    = 0
+        await Timer(1, unit="ns")
+        if case == "first_grant":
+            #the grant established ownership; the unrelated response did not complete it
+            check_control(dut, expected_req=0, expected_wait=1)
+        else:
+            if case == "waiting":
+                check_control(dut, expected_req=1, expected_wait=1)
+            else:
+                check_control(dut, expected_req=0, expected_wait=0)
+
+            #idle/duplicate start a fresh owner; waiting finally receives its grant
+            await FallingEdge(dut.clk)
+            dut.instruction_valid.value = 1
+            dut.mem_en.value            = 1
+            dut.aligned_address.value   = 0x0001_0020
+            dut.gnt.value               = 1
+            await Timer(1, unit="ns")
+            check_control(dut, expected_req=1, expected_wait=1)
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            check_control(dut, expected_req=0, expected_wait=1)
+
+        #all four cases must still wait normally for a genuine accepted response
+        await FallingEdge(dut.clk)
+        dut.gnt.value    = 0
+        dut.rvalid.value = 1
+        dut.rdata.value  = 0x1234_5678
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=0)
+        assert int(dut.read_data.value) == 0x1234_5678
+        await RisingEdge(dut.clk)
+        await ReadWrite()
+        dut.instruction_valid.value = 0
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=0)
+
+        await FallingEdge(dut.clk)
+        dut.rvalid.value = 0
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=0)
+
+    clock.stop()
 
 
 @cocotb.test()
 async def test_reset_during_transaction(dut):
-    for phase in ("idle", "waiting", "outstanding", "grant_edge", "response_edge"):
-        await reset_controller(dut)
-        if phase != "idle":
-            drive_owner(dut, mem_write=1)
-            await tick(dut, 1, 1)
-        if phase in ("outstanding", "response_edge"):
-            dut.gnt.value = 1
-            await tick(dut, 1, 1)
-            check_control(dut, 0, 1)
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
 
-        #prepare transfer signals before asserting shared reset
+    for phase in ("idle", "waiting", "outstanding", "grant_edge", "response_edge"):
+        await reset_dut(dut)
+        if phase != "idle":
+            await FallingEdge(dut.clk)
+            dut.instruction_valid.value = 1
+            dut.mem_en.value            = 1
+            dut.mem_write.value         = 1
+            dut.aligned_address.value   = 0x8000_0000
+            dut.byte_enable.value       = 0b1100
+            dut.write_data.value        = 0xBEEF_BEEF
+            await Timer(1, unit="ns")
+            check_control(dut, expected_req=1, expected_wait=1)
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            check_control(dut, expected_req=1, expected_wait=1)
+
+        if phase in ("outstanding", "response_edge"):
+            await FallingEdge(dut.clk)
+            dut.gnt.value = 1
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            check_control(dut, expected_req=0, expected_wait=1)
+
+        #shared reset clears parent valid; pending transfer signals cannot complete work
+        await FallingEdge(dut.clk)
+        dut.rst_n.value             = 0
+        dut.instruction_valid.value = 0
         if phase == "grant_edge":
             dut.gnt.value = 1
-            await Timer(1, unit="ns")
-            check_control(dut, 1, 1)
         if phase == "response_edge":
             dut.rvalid.value = 1
-            await Timer(1, unit="ns")
-            check_control(dut, 0, 0)
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=0)
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=0)
 
-        #parent validity clears with reset; no reset edge may accept work
-        drive(dut, rst_n=0, instruction_valid=0)
+        #the subordinate drops pre-reset bus work before reset release
+        await FallingEdge(dut.clk)
+        dut.gnt.value    = 0
+        dut.rvalid.value = 0
+        dut.rst_n.value  = 1
         await Timer(1, unit="ns")
-        check_control(dut, 0, 0)
-        await tick(dut, 0, 0)
-        #the subordinate flushes its pre-reset response before release
-        drive(dut, gnt=0, rvalid=0)
-        dut.clk.value = 1
-        await Timer(1, unit="ns")
-        dut.rst_n.value = 1
-        await Timer(1, unit="ns")
-        dut.clk.value = 0
-        await Timer(1, unit="ns")
-        await tick(dut, 0, 0)
+        check_control(dut, expected_req=0, expected_wait=0)
 
-        #a fresh post-reset request must not inherit old ownership
-        drive_owner(dut, address=0xF631_8BCC)
-        dut.gnt.value = 1
-        await tick(dut, 1, 1)
-        await tick(dut, 0, 1)
-        await complete_to_idle(dut)
+        #a fresh load must not inherit the old transaction's ownership
+        await FallingEdge(dut.clk)
+        dut.instruction_valid.value = 1
+        dut.mem_en.value            = 1
+        dut.mem_write.value         = 0
+        dut.aligned_address.value   = 0xF631_8BCC
+        dut.byte_enable.value       = 0b1111
+        dut.gnt.value               = 1
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=1, expected_wait=1)
+        assert int(dut.addr.value) == 0xF631_8BCC
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=1)
+
+        await FallingEdge(dut.clk)
+        dut.gnt.value    = 0
+        dut.rvalid.value = 1
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=0)
+        await RisingEdge(dut.clk)
+        await ReadWrite()
+        dut.instruction_valid.value = 0
+        await ReadOnly()
+        check_control(dut, expected_req=0, expected_wait=0)
+
+        await FallingEdge(dut.clk)
+        dut.rvalid.value = 0
+        await Timer(1, unit="ns")
+        check_control(dut, expected_req=0, expected_wait=0)
+
+    clock.stop()
 
 
 @cocotb.test()
 async def test_reset_without_clock(dut):
-    await reset_controller(dut)
-    drive_owner(dut)
-    dut.gnt.value = 1
-    await tick(dut, 1, 1)
-    check_control(dut, 0, 1)
+    clock = Clock(dut.clk, 10, unit="ns")
+    clock.start(start_high=False)
+    await reset_dut(dut)
 
-    #stop the clock with an outstanding request, then assert shared reset
-    drive(dut, rst_n=0, instruction_valid=0, gnt=0, rvalid=0)
+    await FallingEdge(dut.clk)
+    dut.instruction_valid.value = 1
+    dut.mem_en.value            = 1
+    dut.aligned_address.value   = 0x0001_0020
+    dut.gnt.value               = 1
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=1, expected_wait=1)
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
+
+    #stop low; asynchronous reset is deliberately asserted without any clock edge
+    await FallingEdge(dut.clk)
+    dut.gnt.value = 0
+    clock.stop()
+    await Timer(2, unit="ns")
+    dut.rst_n.value             = 0
+    dut.instruction_valid.value = 0
     await Timer(20, unit="ns")
     assert int(dut.clk.value) == 0
-    check_control(dut, 0, 0)
-
-    #keep reset conditioned low until clock restart; this leaf has no synchronizer
+    check_control(dut, expected_req=0, expected_wait=0)
     await Timer(20, unit="ns")
-    assert int(dut.rst_n.value) == 0
-    dut.clk.value = 1
-    await Timer(1, unit="ns")
+    assert int(dut.clk.value) == 0
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    #restart under reset, then release at a falling edge
+    clock.start(start_high=False)
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=0)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await Timer(1, unit="ns")
-    dut.clk.value = 0
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    #a fresh post-reset request must be accepted normally
+    await FallingEdge(dut.clk)
+    dut.instruction_valid.value = 1
+    dut.aligned_address.value   = 0x91B5_0C70
+    dut.gnt.value               = 1
     await Timer(1, unit="ns")
-    drive_owner(dut, address=0x91B5_0C70)
-    dut.gnt.value = 1
-    await tick(dut, 1, 1)
-    await complete_to_idle(dut)
+    check_control(dut, expected_req=1, expected_wait=1)
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=1)
+
+    await FallingEdge(dut.clk)
+    dut.gnt.value    = 0
+    dut.rvalid.value = 1
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    await RisingEdge(dut.clk)
+    await ReadWrite()
+    dut.instruction_valid.value = 0
+    await ReadOnly()
+    check_control(dut, expected_req=0, expected_wait=0)
+
+    await FallingEdge(dut.clk)
+    dut.rvalid.value = 0
+    await Timer(1, unit="ns")
+    check_control(dut, expected_req=0, expected_wait=0)
+    clock.stop()

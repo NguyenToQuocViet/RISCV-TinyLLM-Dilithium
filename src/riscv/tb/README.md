@@ -84,19 +84,33 @@ and duplicate suppression, combinational wait release, consecutive owners,
 unexpected responses, reset during transactions and reset with a stopped clock.
 Grant delay counts rising edges with `req=1, gnt=0` before acceptance.
 
-The Python stimulus retains the parent owner/payload through completion, replaces
-it after the consuming edge, clears valid on shared reset and supplies an already
-conditioned reset release. It does not implement or verify a reset synchronizer.
-Grant stimulus is predetermined, not derived combinationally from request.
-Checks use explicit control expectations and public ports, not private RTL state.
+Việt requested a direct-test rewrite on 2026-10-24. Only `reset_dut()` and
+`check_control()` remain as helpers. Memory-side inputs are driven on falling
+edges. Initial parent stimulus is prepared on falling edges; once a transaction
+is live, its parent owner/payload is retained through the response edge. At that
+rising edge, `ReadWrite()` models the EX/MEM register update in the same timestep,
+then `ReadOnly()` samples the settled outputs. Parent advance must not be delayed
+until the following falling edge, which would re-present the old instruction.
+Response valid still drops on a falling edge. The consecutive-instruction test
+checks a memory successor, a valid non-memory successor and a bubble.
+Grant stimulus is predetermined, not derived
+combinationally from request. Expected values are explicit; tests do not read
+private RTL state or compute expectations from DUT outputs.
 
-The normal simulation checks unexpected-response handling with an explicitly
-expected checker diagnostic. Four separate checker self-tests inject a response
-while idle, waiting for grant, at first grant and after completion. Each inner
-simulation must fail with the specific protocol diagnostic; pytest accepts only
-that failure, verified from its result XML. A missing diagnostic, unrelated
-failure or missing XML fails the self-test. Artifacts stay in
-`tb/sim_build/data_obi_controller/`.
+The stopped-clock reset test deliberately asserts reset and clears parent valid
+without an edge, as an exception to the normal stimulus discipline. Reset release
+is driven at a falling edge with the clock running; this leaf test does not
+implement or verify the parent reset synchronizer or reset-distribution timing.
+
+Unexpected-response tests directly check draining, unchanged wait/ownership and
+subsequent valid traffic for idle, waiting-for-grant, first-grant and duplicate
+responses. They do not assert/catch a protocol diagnostic. The manual
+`response_expected` checker and its four runner self-tests have been removed.
+The BASE requirement for a protocol monitor and negative self-tests
+remains pending a separately reviewed implementation; passing this directed
+suite does not close that obligation. Artifacts stay in
+`tb/sim_build/data_obi_controller/`; old negative-case XMLs are historical output,
+not evidence for the rewritten suite.
 
 ```bash
 rtk proxy .venv/bin/python -m pytest tb/runners/test_data_obi_controller.py
@@ -110,9 +124,22 @@ recovery. With parent valid held zero during reset, public outputs do not
 independently expose when the private ownership bit clears; that asynchronous
 reset structure is also checked by RTL inspection.
 
-Verification checkpoint, 2026-10-23 (Asia/Ho_Chi_Minh): the command above passed
-all five pytest entries: nine directed cocotb tests and four checker self-tests
+Historical checkpoint, 2026-10-23 (Asia/Ho_Chi_Minh), before the rewrite: the
+command above passed all five pytest entries: nine directed cocotb tests and four checker self-tests
 whose inner simulations failed with the intended diagnostic. BASE RTL revision
 was `9f1aed7`; the new tests were uncommitted. Python 3.14.8, cocotb 2.1.0,
 pytest 9.1.1 and Verilator 5.046. No RTL change or waived failure. Result XMLs
 are in the ignored artifact directory above; a full regression was not run.
+
+Rewrite checkpoint, 2026-10-24 (Asia/Ho_Chi_Minh): the same command passed one
+pytest entry running all nine directed cocotb tests. Base RTL revision:
+`82e9dc2`; the rewrite was uncommitted. Tool versions are unchanged from the
+historical checkpoint. No RTL changed. Protocol-monitor diagnostics and negative
+self-tests remain pending; this result covers directed DUT behavior only.
+
+Parent-boundary correction, 2026-10-24: the initial rewrite checkpoint above
+predates the correction from falling-edge parent replacement to same-timestep
+response-edge advance. After correcting every normal completion path, the same
+command passed all nine directed tests again. RTL is unchanged; this remains a
+Python-supplied parent boundary, not verification of real EX/MEM registers or
+full-pipeline control.
