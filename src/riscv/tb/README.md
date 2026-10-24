@@ -118,6 +118,41 @@ Local [run metadata and source hashes](sim_build/execute_stage/verification.json
 [full regression log](sim_build/execute_stage/regression.log) and
 [final EX rerun log](sim_build/execute_stage/targeted.log) are ignored artifacts.
 
+## MEM composition verification
+
+Việt approved this minimal directed wrapper plan on 2026-10-24 against
+[MEM D3](../docs/designs/memory-stage.md). The top is `memory_stage`, without
+pipeline registers or a new RTL harness. Existing leaf suites retain their
+separate corner-case coverage.
+
+| Test | Scope |
+| --- | --- |
+| `test_access_paths` | One transaction for each of LB/LBU/LH/LHU/LW/SB/SH/SW; aligned request address, byte enables, write intent/store payload, original-address load lane and extension |
+| `test_wait_and_successors` | Load → store → load; first grant delayed by three ungranted edges, response delayed by four waiting edges; stable request, no reissue and same-edge parent advance |
+| `test_idle_and_reset` | Bubble/non-memory qualification, reset while outstanding with parent valid cleared, then a fresh load |
+
+Expected values are manual literals. Helpers only reset inputs or compare
+control/request outputs. The handshake sequence stays visible in each test;
+memory inputs change on falling edges, and Python models parent replacement
+at the response rising edge using `ReadWrite()`. Load results are checked before
+that edge while the original instruction is still present. Stores have no
+required `load_result` value. No random stimulus or golden model is used.
+
+```bash
+rtk proxy .venv/bin/python -m pytest tb/runners/test_memory_stage.py
+```
+
+This scope checks wrapper wiring and coordination under supplied parent and
+bus obligations. It does not close core-level alignment/type/protocol checker
+obligations or establish MEM/WB capture, WB retirement, full-pipeline control,
+system-reset recovery or physical timing.
+
+Verification checkpoint, 2026-10-24 (Asia/Ho_Chi_Minh): the command above passed
+one pytest entry running all three cocotb tests. Base RTL revision: `fec7a2e`;
+the new tests were uncommitted at the run. Python 3.14.8, cocotb 2.1.0,
+pytest 9.1.1 and Verilator 5.046. No RTL changed; a full regression was not run.
+Result XML: `tb/sim_build/memory_stage/test_memory_stage.result.xml` (ignored).
+
 ## Data OBI controller verification
 
 Việt approved the directed leaf plan on 2026-10-23 against
