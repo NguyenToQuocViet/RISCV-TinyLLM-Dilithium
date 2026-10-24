@@ -9,6 +9,10 @@ refines BASE R1 without revising it.
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md).
 **RTL mapping:** Planned; this document is not implementation or verification evidence.
 
+The [2026-10-24 WB naming clarification](5-stage-baseline-core.md) uses
+`mem_wb_src` for the EX/MEM producer's selector. Existing RTL/tests still name
+that port `mem_wb_from_mem`; this documentation change does not migrate them.
+
 The later [BASE R2 reset amendment](5-stage-baseline-core.md#reset-architecture)
 changes the surrounding registered control, not this combinational wrapper.
 The existing EX pipeline harness and its recorded pass use synchronous reset;
@@ -171,7 +175,7 @@ below refer to `riscv_pkg`; leaf contracts own their enum encodings.
 | Pipeline control | `advance_allowed` | Input | 1-bit logic | Core permits the current instruction to leave EX |
 | EX/MEM producer | `mem_rd` | Input | `logic [4:0]` | Producer destination |
 | EX/MEM producer | `mem_result` | Input | `logic [DATA_WIDTH-1:0]` | Producer's selected EX result |
-| EX/MEM producer | `mem_valid`, `mem_reg_write`, `mem_wb_from_mem` | Input | 1-bit logic each | Liveness, write intent and load-result source |
+| EX/MEM producer | `mem_valid`, `mem_reg_write`, `mem_wb_src` | Input | 1-bit logic each | Liveness, write intent and load-result source |
 | MEM/WB producer | `wb_rd` | Input | `logic [4:0]` | Producer destination |
 | MEM/WB producer | `wb_data` | Input | `logic [DATA_WIDTH-1:0]` | Selected architectural WB value |
 | MEM/WB producer | `wb_valid`, `wb_reg_write` | Input | 1-bit logic each | Liveness and semantic write intent |

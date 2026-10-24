@@ -3,7 +3,7 @@
 **Status:** Composition, metadata routing, memory-type encoding, formatter
 fallbacks and controller ownership accepted by Nguyễn Tô Quốc Việt on 2026-10-21.
 Leaf contracts are accepted; the completion/reset boundary was refined by Việt
-on 2026-10-22. ID-owned `wb_from_mem` and its external bypass were confirmed
+on 2026-10-22. ID-owned `wb_src` and its external bypass were confirmed
 by Việt on 2026-10-22, superseding the earlier MEM-derived selector. The corrected
 wrapper interface/composition is confirmed by Việt's implementation and request
 to commit on 2026-10-22. Pipeline-register implementation remains deferred.
@@ -13,6 +13,10 @@ refines BASE R2 without changing its behavior.
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md).
 **RTL mapping:** The three leaves and `rtl/memory_stage.sv` have RTL. The wrapper
 is human-authored. This document does not establish functional verification.
+
+The [2026-10-24 WB naming clarification](5-stage-baseline-core.md) renames the
+ID-owned selector to `wb_src` without changing its encoding or routing. Earlier
+owner confirmations above retain their dates; the naming amendment is later.
 
 ## 1. Purpose and boundary
 
@@ -30,7 +34,7 @@ inputs. It produces load data, MEM-wait control and the data OBI outputs.
 The flat wrapper ports are listed below.
 
 As in EX, current-instruction metadata bypasses the wrapper: the core routes
-`rd`, `reg_write` and `wb_from_mem` directly from EX/MEM toward MEM/WB. `ex_result` also
+`rd`, `reg_write` and `wb_src` directly from EX/MEM toward MEM/WB. `ex_result` also
 continues unchanged toward MEM/WB, with a branch into MEM for effective-address
 processing. The core owns pipeline-register validity and capture decisions;
 the wrapper does not contain EX/MEM or MEM/WB storage.
@@ -78,7 +82,7 @@ There are 11 input ports and 8 output ports. Reset generation/synchronization
 belongs to the core/system boundary, not this wrapper. `rst_n` reaches the
 controller unchanged. Neither formatter has a clock or reset port.
 
-`wb_from_mem` is decoded in ID and carried unchanged through ID/EX, EX/MEM
+`wb_src` is decoded in ID and carried unchanged through ID/EX, EX/MEM
 and MEM/WB. It is neither an input nor an output of this wrapper; MEM does not
 regenerate it from `mem_en` and `mem_write`. The core retains its association
 with the instruction under stall, capture and flush. `load_result` remains
@@ -142,7 +146,7 @@ Core-owned paths bypass the wrapper:
 | Producer | Consumer |
 | --- | --- |
 | EX/MEM `ex_result` | MEM/WB `ex_result`, unchanged, in parallel with its branch into MEM |
-| EX/MEM `rd`, `reg_write`, `wb_from_mem` | Corresponding MEM/WB metadata, unchanged |
+| EX/MEM `rd`, `reg_write`, `wb_src` | Corresponding MEM/WB metadata, unchanged |
 | Wrapper `load_result` | MEM/WB `load_result` |
 
 Final WB result selection remains outside MEM. No WB mux, pipeline register,
@@ -250,7 +254,7 @@ remain owned by the [request formatter](request-formatter.md),
 [data OBI controller](data-obi-controller.md) contracts.
 
 The flat wrapper interface and wiring reuse the leaf boundaries, retain the
-ID-owned `wb_from_mem` bypass, and add no completion port, WB-selector port or
+ID-owned `wb_src` bypass, and add no completion port, WB-selector port or
 new protocol. Việt authored the wrapper and requested its commit on 2026-10-22;
 this records that owner confirmation, not functional verification.
 

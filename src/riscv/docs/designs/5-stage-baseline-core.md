@@ -8,6 +8,12 @@ local control interface and priority defined below, without changing core arbitr
 **MEM boundary clarification:** MEM D2 / 2026-10-22 records the selected
 valid-driven request/reset gating and wait-only completion interface; the
 sampled OBI events and R2 architectural behavior below are unchanged.
+**WB naming clarification:** On 2026-10-24, Việt selected `wb_src` in place of
+`wb_from_mem`, preserving the one-bit encoding: `0` selects `ex_result`, `1`
+selects `load_result`. Stage-qualified names use the same base name, such as
+`mem_wb_src`. This is a contract naming change only; existing RTL/tests still
+use the previous names. The accepted local WB refinement is
+[Writeback Stage](writeback-stage.md).
 
 **Decision record:** Việt approved `BASE → BASE_CI → BASE_CI_IRQ`, BASE with
 37 integer operations plus FENCE, and one common elaboration-selected top.
@@ -248,7 +254,7 @@ Upper-immediate and control-flow instructions decode as follows:
 
 Memory instructions decode as follows:
 
-| Instruction | Sources used | Immediate | EX output | Memory intent | `reg_write` | `wb_from_mem` |
+| Instruction | Sources used | Immediate | EX output | Memory intent | `reg_write` | `wb_src` |
 | --- | --- | --- | --- | --- | ---: | ---: |
 | `LB` | `rs1` | I | Effective byte address | Read `BYTE` | 1 | 1 |
 | `LH` | `rs1` | I | Effective byte address | Read `HALF` | 1 | 1 |
@@ -294,7 +300,7 @@ Integer register operations decode with `operand1=fwd_rs1` and `operand2=fwd_rs2
 | `OR` | `fwd_rs1 \| fwd_rs2` |
 | `AND` | `fwd_rs1 & fwd_rs2` |
 
-All nineteen integer ALU instructions decode `reg_write=1`, `wb_from_mem=0`, `mem_en=0`, and no redirect. `SRA` and `SRAI` are signed arithmetic right shifts. Addition and subtraction use 32-bit modulo arithmetic and do not trap on overflow. ID owns encoding legality and semantic operation selection; EX executes the selected `alu_op` without raw-instruction re-decode. The physical `alu_op` encoding remains an implementation choice.
+All nineteen integer ALU instructions decode `reg_write=1`, `wb_src=0`, `mem_en=0`, and no redirect. `SRA` and `SRAI` are signed arithmetic right shifts. Addition and subtraction use 32-bit modulo arithmetic and do not trap on overflow. ID owns encoding legality and semantic operation selection; EX executes the selected `alu_op` without raw-instruction re-decode. The physical `alu_op` encoding remains an implementation choice.
 
 FENCE has no RF write, data request, EX redirect or meaningful ALU result.
 It follows ordinary pipeline flow as a live non-writing instruction. Encoded
@@ -364,7 +370,7 @@ instructions carry `ex_result`; MEM formats a completed load into `load_result`.
 MEM/WB preserves result selection through WB:
 
 ```text
-wb_data = wb_from_mem ? load_result : ex_result
+wb_data = wb_src ? load_result : ex_result
 ```
 
 Load lane selection and sign/zero extension occur before MEM/WB. Forwarding
@@ -386,6 +392,11 @@ Forwarded source values cover ALU `rs1`, ALU `rs2` when the instruction does not
 During an unresolved MEM wait, MEM/WB remains valid with stable payload and therefore remains an eligible forwarding source for the instruction held in EX. On the release cycle, that same MEM/WB value is forwarded combinationally before its instruction retires at the edge, while the held EX instruction advances with the correct operands. ID/EX source-value payload is not selectively refreshed during the hold.
 
 ### Register-file timing and WB-to-ID bypass
+
+The read-port forwarding below belongs to the register file. "WB-to-ID bypass"
+describes the data path across stages, not ownership by the WB leaf. WB supplies
+the selected write data and qualified write interface; RF owns read-address
+matching and forwarding selection independently for its two read ports.
 
 The register file has 32 architectural 32-bit registers, two combinational read ports used by ID, and one rising-edge write port. `x0` always reads as zero and ignores writes. A register-file write occurs only on:
 
@@ -814,11 +825,11 @@ The minimum MEM/WB semantic state is:
 valid
 ex_result
 load_result
-wb_from_mem
+wb_src
 rd, reg_write
 ```
 
-`wb_from_mem=1` only for a load and selects `load_result`; a register-writing
+`wb_src=1` only for a load and selects `load_result`; a register-writing
 non-load selects `ex_result`. Every live instruction leaving MEM, including a
 branch, response-completed store or FENCE, passes through MEM/WB with `valid=1`.
 Non-writing instructions carry `reg_write=0`; unused payload is unspecified.

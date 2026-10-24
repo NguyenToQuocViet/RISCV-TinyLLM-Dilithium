@@ -31,7 +31,7 @@ All bits are preserved; unequal-width conversion is not supported.
 
 The shared selector type belongs in [riscv_pkg](../../rtl/riscv_pkg.sv).
 ID produces `result_src`; ID/EX carries it to this leaf. It is separate from
-`wb_from_mem`, which controls final writeback selection outside EX.
+`wb_src`, which controls final writeback selection outside EX.
 
 The block is combinational: no clock, reset, storage, handshake or stall
 ownership. The output follows current inputs after combinational settling.

@@ -8,6 +8,11 @@
 **Mapping:** Planned module `forwarding_unit` in `src/riscv/rtl/forwarding_unit.sv`;
 instance `ex_forwarding` in `execute_stage`.
 
+The [2026-10-24 WB naming clarification](5-stage-baseline-core.md) renames the
+producer selector to `mem_wb_src`, keeping `0` for EX result and `1` for load
+result. Existing RTL/tests still use `mem_wb_from_mem`. The original decision
+dates below are unchanged; only the contract naming is amended.
+
 ## 1. Purpose and boundary
 
 Select the current values of both register sources independently, using older
@@ -32,7 +37,7 @@ All data vectors belong to `DATA_WIDTH`; register identifiers are unsigned
 | `rs1_value`, `rs2_value` | Input | `logic [DATA_WIDTH-1:0]` each | Register values carried in ID/EX after ID's WB bypass |
 | `mem_valid` | Input | 1-bit logic | EX/MEM producer is live |
 | `mem_reg_write` | Input | 1-bit logic | Producer has semantic register-write intent |
-| `mem_wb_from_mem` | Input | 1-bit logic | Producer's architectural result comes from memory; excludes its EX/MEM result from forwarding |
+| `mem_wb_src` | Input | 1-bit logic | Producer's architectural result comes from memory; excludes its EX/MEM result from forwarding |
 | `mem_rd` | Input | `logic [4:0]` | EX/MEM destination register |
 | `mem_result` | Input | `logic [DATA_WIDTH-1:0]` | Selected EX result, including jump link; a load address is not load data |
 | `wb_valid` | Input | 1-bit logic | MEM/WB producer is live |
@@ -53,7 +58,7 @@ Apply it independently to each source identifier and its carried value:
 
 | Priority | Matching producer eligibility | Selected value |
 | --- | --- | --- |
-| 1 | `mem_valid && mem_reg_write && !mem_wb_from_mem && mem_rd != 0`, with destination matching the source | `mem_result` |
+| 1 | `mem_valid && mem_reg_write && !mem_wb_src && mem_rd != 0`, with destination matching the source | `mem_result` |
 | 2 | `wb_valid && wb_reg_write && wb_rd != 0`, with destination matching the source | `wb_data` |
 | 3 | No eligible matching producer | Corresponding `rs1_value` or `rs2_value` |
 
@@ -88,7 +93,7 @@ All local decisions below were accepted by Việt on 2026-10-19.
 
 | ID | Decision | Accepted choice and consequence |
 | --- | --- | --- |
-| FU-D1 | How to express EX/MEM availability | Accepted by Việt on 2026-10-19: receive `mem_wb_from_mem` with valid/write intent/destination and exclude loads inside the leaf. Parent supplies decoded semantic facts rather than a precomputed availability qualifier. |
+| FU-D1 | How to express EX/MEM availability | Accepted by Việt on 2026-10-19: receive `mem_wb_src` with valid/write intent/destination and exclude loads inside the leaf. Parent supplies decoded semantic facts rather than a precomputed availability qualifier. |
 | FU-D2 | Final interface | Accepted by Việt on 2026-10-19: use the flat ports in section 2, with mem/wb names identifying producer stages and priority. Return forwarded data directly, without public mux selectors or consumer-valid/use ports. |
 | FU-D3 | Consumer source x0 | Rely on ID/EX supplying x0=0 and use the ordinary fallback. Exclude every producer with rd=x0; do not add a separate zero-selection path. Legal standalone tests must supply the same x0 input invariant. |
 
