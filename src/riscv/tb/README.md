@@ -72,6 +72,37 @@ the local `docs/RTL_CONVENTIONS.md` defines the four-field header format.
   protocol history; keep intentional violation tests and checker self-tests
   distinct from DUT handling tests. Record their separate results and limits.
 
+## WB leaf verification
+
+Việt approved this minimal directed plan on 2026-10-27 against
+[WB D2](../docs/designs/writeback-stage.md). The top is `writeback_stage`,
+using the existing Verilator/cocotb setup.
+
+| Test | Scope |
+| --- | --- |
+| `test_result_selection` | EX/load selection, zero/all-one/MSB patterns, an EX-prepared jump link and changes to the unselected input |
+| `test_write_qualification` | All 16 valid/advance/write-intent/zero-destination combinations, `rd=31`, and allow → deny advance → allow with stable payload |
+
+Expected outputs are manual literals. One helper drives all seven inputs,
+waits 1 ns for combinational settling and checks only `wb_data` and
+`rf_write_fire`. No clock or reset is required. Data is checked even when
+RF writes are suppressed. Completion requires both cocotb tests to pass.
+
+```bash
+rtk proxy .venv/bin/python -m pytest tb/runners/test_writeback_stage.py -v -s
+```
+
+Artifacts stay in `tb/sim_build/writeback_stage/`. This scope verifies the WB
+leaf; it does not establish MEM/WB retention/capture, RF storage/forwarding,
+full-pipeline retirement or physical timing.
+
+Verification checkpoint, 2026-10-27 (Asia/Ho_Chi_Minh): the command above passed
+one pytest entry running both cocotb tests, with 10 selection vectors and 19
+qualification vectors. Base RTL revision: `198584d`; the new tests were
+uncommitted at the run. Python 3.14.8, cocotb 2.1.0, pytest 9.1.1 and Verilator
+5.046. No RTL change or waived failure; a full regression was not run.
+Result XML: `tb/sim_build/writeback_stage/test_writeback_stage.result.xml` (ignored).
+
 ## EX composition verification
 
 The owner approved this directed plan on 2026-10-19 against
