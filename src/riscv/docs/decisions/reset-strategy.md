@@ -1,5 +1,6 @@
 # RST-D1 — Asynchronous Reset Assertion with Synchronous Release
 
+**Status:** Accepted by Việt on 2026-10-21
 **Type:** Technical architecture decision, not a coding-style preference.
 **Decision owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
 **Decision:** Selected by the owner on 2026-10-21 after reviewing alternatives and trade-offs.

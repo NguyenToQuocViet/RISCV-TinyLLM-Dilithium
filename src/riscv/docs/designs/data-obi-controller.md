@@ -1,6 +1,6 @@
 # Data OBI Controller — Block Design
 
-**Status:** Accepted by Việt; interface/reset refinement accepted on 2026-10-22.
+**Status:** Accepted by Việt on 2026-10-22 (interface/reset refinement).
 **Revision:** DOC D2 / 2026-10-22.
 **Owner:** Viet Nguyen To Quoc.
 **Parent:** [MEM ownership](memory-stage.md#4-controller-state-and-payload-ownership),

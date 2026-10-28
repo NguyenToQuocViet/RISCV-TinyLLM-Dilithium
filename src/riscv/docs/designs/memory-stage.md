@@ -1,7 +1,7 @@
 # Memory Stage — Block Design
 
-**Status:** Composition, metadata routing, memory-type encoding, formatter
-fallbacks and controller ownership accepted by Nguyễn Tô Quốc Việt on 2026-10-21.
+**Status:** Accepted by Nguyễn Tô Quốc Việt on 2026-10-21 (composition, metadata
+routing, memory-type encoding, formatter fallbacks and controller ownership).
 Leaf contracts are accepted; the completion/reset boundary was refined by Việt
 on 2026-10-22. ID-owned `wb_src` and its external bypass were confirmed
 by Việt on 2026-10-22, superseding the earlier MEM-derived selector. The corrected

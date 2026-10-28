@@ -1,6 +1,6 @@
 # Five-Stage Baseline Core
 
-**Status:** Accepted — BASE R1 approved by Nguyễn Tô Quốc Việt on 2026-10-15; R2 reset amendment approved on 2026-10-21.
+**Status:** Accepted by Nguyễn Tô Quốc Việt on 2026-10-15 (BASE R1); R2 reset amendment accepted on 2026-10-21.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
 **Contract revision:** R2 / 2026-10-21 (same revision as the CI and IRQ contracts; reset-only amendment).
 **Pipeline-register refinement:** PR-D1 / 2026-10-21, selected by Việt;

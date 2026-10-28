@@ -1,6 +1,6 @@
 # Branch Comparator — Block Design
 
-**Status:** Proposed for final owner acceptance; all local decisions resolved.
+**Status:** Accepted by Việt on 2026-10-19.
 **Revision:** BC D2 draft / 2026-10-19; width clarification accepted by Việt.
 **Owner:** Viet Nguyen To Quoc.
 **Parent:** [EX stage](execute-stage.md#44-branch-comparator),

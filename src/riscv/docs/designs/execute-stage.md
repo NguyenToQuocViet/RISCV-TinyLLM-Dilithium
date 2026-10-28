@@ -1,8 +1,8 @@
 # Execute Stage — Decomposition and Submodule Boundaries
 
-**Status:** Accepted decomposition, naming and semantic boundaries, confirmed by
-Nguyễn Tô Quốc Việt on 2026-10-15. Flat wrapper interface and core-owned
-metadata bypass accepted by Việt on 2026-10-19.
+**Status:** Accepted by Nguyễn Tô Quốc Việt on 2026-10-15 (decomposition, naming
+and semantic boundaries). Flat wrapper interface and core-owned metadata bypass
+accepted by Việt on 2026-10-19.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
 **Design revision:** EX D3 / 2026-10-19; wrapper boundary accepted by Việt;
 refines BASE R1 without revising it.
