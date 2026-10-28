@@ -13,7 +13,7 @@ from ctypes import c_uint32
 async def check_forwarding_unit(
     dut, *,
     rs1_id, rs2_id, rs1_value, rs2_value,
-    mem_valid, mem_reg_write, mem_wb_from_mem, mem_rd, mem_result,
+    mem_valid, mem_reg_write, mem_wb_src, mem_rd, mem_result,
     wb_valid, wb_reg_write, wb_rd, wb_data,
     expected_rs1, expected_rs2,
 ):
@@ -24,7 +24,7 @@ async def check_forwarding_unit(
 
     dut.mem_valid.value        = mem_valid
     dut.mem_reg_write.value    = mem_reg_write
-    dut.mem_wb_from_mem.value  = mem_wb_from_mem
+    dut.mem_wb_src.value       = mem_wb_src
     dut.mem_rd.value           = mem_rd
     dut.mem_result.value       = c_uint32(mem_result).value
 
@@ -43,7 +43,7 @@ async def check_forwarding_unit(
     context = (
         f"rs1=x{rs1_id}, rs2=x{rs2_id}; "
         f"MEM(valid={mem_valid}, write={mem_reg_write}, "
-        f"load={mem_wb_from_mem}, rd=x{mem_rd}, "
+        f"load={mem_wb_src}, rd=x{mem_rd}, "
         f"data=0x{c_uint32(mem_result).value:08X}); "
         f"WB(valid={wb_valid}, write={wb_reg_write}, rd=x{wb_rd}, "
         f"data=0x{c_uint32(wb_data).value:08X}); "
@@ -73,7 +73,7 @@ async def test_mem_match(dut):
             dut,
             rs1_id=rs1, rs2_id=rs2,
             rs1_value=0x1111_1111, rs2_value=0x2222_2222,
-            mem_valid=1, mem_reg_write=1, mem_wb_from_mem=0,
+            mem_valid=1, mem_reg_write=1, mem_wb_src=0,
             mem_rd=rd, mem_result=data,
             wb_valid=0, wb_reg_write=1, wb_rd=4, wb_data=0xDDDD_DDDD,
             expected_rs1=expected_rs1, expected_rs2=expected_rs2,
@@ -97,7 +97,7 @@ async def test_wb_match(dut):
             dut,
             rs1_id=rs1, rs2_id=rs2,
             rs1_value=0x1111_1111, rs2_value=0x2222_2222,
-            mem_valid=1, mem_reg_write=1, mem_wb_from_mem=0,
+            mem_valid=1, mem_reg_write=1, mem_wb_src=0,
             mem_rd=4, mem_result=0xCCCC_CCCC,
             wb_valid=1, wb_reg_write=1, wb_rd=rd, wb_data=data,
             expected_rs1=expected_rs1, expected_rs2=expected_rs2,
@@ -129,7 +129,7 @@ async def test_no_match(dut):
             dut,
             rs1_id=rs1, rs2_id=rs2,
             rs1_value=0x1111_1111, rs2_value=0x2222_2222,
-            mem_valid=mem_valid, mem_reg_write=1, mem_wb_from_mem=0,
+            mem_valid=mem_valid, mem_reg_write=1, mem_wb_src=0,
             mem_rd=mem_rd, mem_result=0xCCCC_CCCC,
             wb_valid=wb_valid, wb_reg_write=1, wb_rd=wb_rd, wb_data=0xDDDD_DDDD,
             expected_rs1=0x1111_1111, expected_rs2=0x2222_2222,
@@ -153,7 +153,7 @@ async def test_mem_priority(dut):
             dut,
             rs1_id=rs1, rs2_id=rs2,
             rs1_value=0x1111_1111, rs2_value=0x2222_2222,
-            mem_valid=1, mem_reg_write=1, mem_wb_from_mem=0,
+            mem_valid=1, mem_reg_write=1, mem_wb_src=0,
             mem_rd=1, mem_result=0xCCCC_CCCC,
             wb_valid=1, wb_reg_write=1, wb_rd=wb_rd, wb_data=0xDDDD_DDDD,
             expected_rs1=expected_rs1, expected_rs2=expected_rs2,
@@ -173,7 +173,7 @@ async def test_zero_destination(dut):
             dut,
             rs1_id=0, rs2_id=0,
             rs1_value=0, rs2_value=0,
-            mem_valid=1, mem_reg_write=1, mem_wb_from_mem=0,
+            mem_valid=1, mem_reg_write=1, mem_wb_src=0,
             mem_rd=mem_rd, mem_result=0xCCCC_CCCC,
             wb_valid=1, wb_reg_write=1, wb_rd=wb_rd, wb_data=0xDDDD_DDDD,
             expected_rs1=0, expected_rs2=0,
@@ -208,7 +208,7 @@ async def test_mem_guards(dut):
                 dut,
                 rs1_id=rs1, rs2_id=rs2,
                 rs1_value=0x1111_1111, rs2_value=0x2222_2222,
-                mem_valid=valid, mem_reg_write=write, mem_wb_from_mem=load,
+                mem_valid=valid, mem_reg_write=write, mem_wb_src=load,
                 mem_rd=1, mem_result=0xCCCC_CCCC,
                 wb_valid=wb_valid, wb_reg_write=1, wb_rd=1, wb_data=0xDDDD_DDDD,
                 expected_rs1=expected_rs1, expected_rs2=expected_rs2,
@@ -235,7 +235,7 @@ async def test_wb_guards(dut):
                 dut,
                 rs1_id=rs1, rs2_id=rs2,
                 rs1_value=0x1111_1111, rs2_value=0x2222_2222,
-                mem_valid=0, mem_reg_write=1, mem_wb_from_mem=0,
+                mem_valid=0, mem_reg_write=1, mem_wb_src=0,
                 mem_rd=1, mem_result=0xCCCC_CCCC,
                 wb_valid=valid, wb_reg_write=write, wb_rd=1, wb_data=0xDDDD_DDDD,
                 expected_rs1=expected_rs1, expected_rs2=expected_rs2,
@@ -257,7 +257,7 @@ async def test_simultaneous_sources(dut):
             dut,
             rs1_id=rs1, rs2_id=rs2,
             rs1_value=0x1111_1111, rs2_value=rs2_value,
-            mem_valid=1, mem_reg_write=1, mem_wb_from_mem=0,
+            mem_valid=1, mem_reg_write=1, mem_wb_src=0,
             mem_rd=1, mem_result=0xCCCC_CCCC,
             wb_valid=1, wb_reg_write=1, wb_rd=2, wb_data=0xDDDD_DDDD,
             expected_rs1=expected_rs1, expected_rs2=expected_rs2,
@@ -279,7 +279,7 @@ async def test_selection_transition(dut):
             dut,
             rs1_id=1, rs2_id=1,
             rs1_value=0x1111_1111, rs2_value=0x1111_1111,
-            mem_valid=mem_valid, mem_reg_write=1, mem_wb_from_mem=0,
+            mem_valid=mem_valid, mem_reg_write=1, mem_wb_src=0,
             mem_rd=1, mem_result=0xCCCC_CCCC,
             wb_valid=wb_valid, wb_reg_write=1, wb_rd=1, wb_data=0xDDDD_DDDD,
             expected_rs1=expected_rs1, expected_rs2=expected_rs2,

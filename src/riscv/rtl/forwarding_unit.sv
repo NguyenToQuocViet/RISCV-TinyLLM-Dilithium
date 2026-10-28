@@ -17,7 +17,7 @@ module forwarding_unit
     input logic [DATA_WIDTH-1:0] mem_result,
     input logic mem_valid,
     input logic mem_reg_write,
-    input logic mem_wb_from_mem,
+    input logic mem_wb_src,
 
     input logic [4:0] wb_rd,
     input logic [DATA_WIDTH-1:0] wb_data,
@@ -32,7 +32,7 @@ module forwarding_unit
     logic mem_rs1_match, mem_rs2_match;
     logic wb_rs1_match, wb_rs2_match;
 
-    assign mem_eligible = mem_valid && mem_reg_write && !mem_wb_from_mem && (mem_rd != 5'h0);
+    assign mem_eligible = mem_valid && mem_reg_write && !mem_wb_src && (mem_rd != 5'h0);
     assign wb_eligible  = wb_valid && wb_reg_write && (wb_rd != 5'h0);
 
     assign mem_rs1_match = (mem_rd == rs1_id);

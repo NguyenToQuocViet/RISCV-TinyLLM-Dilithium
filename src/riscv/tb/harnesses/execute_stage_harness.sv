@@ -31,7 +31,7 @@ module execute_stage_harness
     input  logic [DATA_WIDTH-1:0]     mem_result,
     input  logic                      mem_valid,
     input  logic                      mem_reg_write,
-    input  logic                      mem_wb_from_mem,
+    input  logic                      mem_wb_src,
     input  logic [4:0]                wb_rd,
     input  logic [DATA_WIDTH-1:0]     wb_data,
     input  logic                      wb_valid,
@@ -73,7 +73,7 @@ module execute_stage_harness
     logic [DATA_WIDTH-1:0]     mem_result_q;
     logic                      mem_valid_q;
     logic                      mem_reg_write_q;
-    logic                      mem_wb_from_mem_q;
+    logic                      mem_wb_src_q;
     logic [4:0]                wb_rd_q;
     logic [DATA_WIDTH-1:0]     wb_data_q;
     logic                      wb_valid_q;
@@ -107,7 +107,7 @@ module execute_stage_harness
         .mem_result          (mem_result_q),
         .mem_valid           (mem_valid_q),
         .mem_reg_write       (mem_reg_write_q),
-        .mem_wb_from_mem     (mem_wb_from_mem_q),
+        .mem_wb_src          (mem_wb_src_q),
         .wb_rd               (wb_rd_q),
         .wb_data             (wb_data_q),
         .wb_valid            (wb_valid_q),
@@ -165,7 +165,7 @@ module execute_stage_harness
             mem_result_q <= mem_result;
             mem_valid_q <= mem_valid;
             mem_reg_write_q <= mem_reg_write;
-            mem_wb_from_mem_q <= mem_wb_from_mem;
+            mem_wb_src_q <= mem_wb_src;
             wb_rd_q <= wb_rd;
             wb_data_q <= wb_data;
             wb_valid_q <= wb_valid;

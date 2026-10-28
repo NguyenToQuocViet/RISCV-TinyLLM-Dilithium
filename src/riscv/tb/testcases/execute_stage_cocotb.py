@@ -229,7 +229,7 @@ async def test_forwarding_composition(dut):
         await check_execute_stage(
             dut, name="Unavailable MEM load while consumer held",
             inputs=ex_inputs(rs1_value=2, rs2_value=3, advance_allowed=0,
-                             mem_valid=1, mem_wb_from_mem=1, mem_result=0x10000,
+                             mem_valid=1, mem_wb_src=1, mem_result=0x10000,
                              wb_valid=wb_valid, wb_rd=1, wb_data=20),
             expected_result=expected, expected_store=3,
             expected_fire=0, expected_target=expected,

@@ -27,7 +27,7 @@ def ex_inputs(**changes):
         branch_kind=BR_EQ, control_flow=CF_NONE, result_src=RESULT_ALU,
         instruction_valid=1, advance_allowed=1,
         mem_rd=1, mem_result=0xCCCC_CCCC,
-        mem_valid=0, mem_reg_write=1, mem_wb_from_mem=0,
+        mem_valid=0, mem_reg_write=1, mem_wb_src=0,
         wb_rd=2, wb_data=0xDDDD_DDDD, wb_valid=0, wb_reg_write=1,
     )
     assert changes.keys() <= inputs.keys(), f"Unknown EX inputs: {changes.keys() - inputs.keys()}"

@@ -31,7 +31,7 @@ module execute_stage
     input logic [DATA_WIDTH-1:0] mem_result,
     input logic mem_valid,
     input logic mem_reg_write,
-    input logic mem_wb_from_mem,
+    input logic mem_wb_src,
 
     input logic [4:0] wb_rd,
     input logic [DATA_WIDTH-1:0] wb_data,
@@ -58,7 +58,7 @@ module execute_stage
         .mem_result     (mem_result),
         .mem_valid      (mem_valid),
         .mem_reg_write  (mem_reg_write),
-        .mem_wb_from_mem(mem_wb_from_mem),
+        .mem_wb_src     (mem_wb_src),
 
         .wb_rd          (wb_rd),
         .wb_data        (wb_data),

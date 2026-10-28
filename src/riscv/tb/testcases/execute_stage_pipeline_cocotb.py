@@ -179,7 +179,7 @@ async def test_load_unavailable_then_wb(dut):
     # The load-use bubble is supplied externally; EX must not consume the load address.
     await load_instruction(
         dut, inputs=ex_inputs(instruction_valid=0, rs1_value=2, rs2_value=3, mem_valid=1,
-                             mem_wb_from_mem=1, mem_rd=1, mem_result=0x10000,
+                             mem_wb_src=1, mem_rd=1, mem_result=0x10000,
                              wb_valid=1, wb_rd=1, wb_data=20),
         tag=41, rd=7, reg_write=1,
     )
