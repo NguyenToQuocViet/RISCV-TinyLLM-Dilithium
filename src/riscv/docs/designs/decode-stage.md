@@ -2,8 +2,9 @@
 
 **Status:** Accepted by Việt on 2026-10-29 — composition-level draft; owner decisions D1–D7 stated on
 2026-10-29 and resolutions O1–O7 are recorded here for acceptance (section 9).
+The ID D2 amendment `INSTR_WIDTH` (O7-R, section 9) is `accepted by Việt on 2026-10-29.`.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** ID D1 / 2026-10-29 (draft).
+**Design revision:** ID D2 / 2026-10-29 (draft; D2 amends O7 only).
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md), in
 particular [ID decode contract](5-stage-baseline-core.md#id-decode-contract),
 [instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table),
@@ -60,7 +61,7 @@ All ports are individual signals; no packed payload struct. Types refer to
 | Signal | Direction | Type / width | Meaning | Valid when |
 | --- | --- | --- | --- | --- |
 | `clk` | Input | 1-bit `logic` | Clock for the register-file write | Always |
-| `instruction` | Input | `logic [31:0]` | IF/ID instruction word (`IALIGN=32`) | Meaningful only for a live IF/ID entry; core owns validity |
+| `instruction` | Input | `logic [INSTR_WIDTH-1:0]` | IF/ID instruction word (`IALIGN=32`) | Meaningful only for a live IF/ID entry; core owns validity |
 | `rf_write_fire` | Input | 1-bit `logic` | WB permission to write `wb_rd` with `wb_data` at the rising edge | From the WB stage; already excludes `rd=x0` |
 | `wb_rd` | Input | `logic [4:0]` | MEM/WB destination register | When `rf_write_fire=1` |
 | `wb_data` | Input | `logic [DATA_WIDTH-1:0]` | Selected architectural WB value | When `rf_write_fire=1` |
@@ -89,8 +90,9 @@ Names `rs1_id`, `rs2_id`, `rs1_value`, `rs2_value`, `imm`, `alu_*`,
 outputs. `wb_src` stays a one-bit `logic`; no shared enum exists. `pc` and IF/ID `valid`
 are not ports; the reason is recorded in section 9 (O2).
 
-Width domains: `instruction` is the 32-bit instruction word and is the literal
-32 bits of `IALIGN=32`, with no `riscv_pkg` constant (O7). `imm`, `rs*_value` and `wb_data` belong to `DATA_WIDTH`. The
+Width domains: `instruction` is the 32-bit instruction word, typed with
+`riscv_pkg::INSTR_WIDTH` (O7-R), the width of the 32-bit base encoding
+(`IALIGN=32`); it is not ILEN and not a configuration point. `imm`, `rs*_value` and `wb_data` belong to `DATA_WIDTH`. The
 instruction-to-`imm` reconstruction follows BASE: I/S/B/J sign-extended, U in
 bits `[31:12]` with zero low bits, B/J low bit zero. No other width crossing
 exists.
@@ -313,7 +315,8 @@ Stated by the Owner on 2026-10-29, after the open items of the first draft.
 | O4 | `rd`, `reg_write`, `mem_en`, `mem_write`, `mem_type`, `wb_src` are `decode_stage` outputs | They originate in ID |
 | O5 | BASE wins: every value the BASE tables assign to a supported instruction binds, including `wb_src=0` for stores; D5 don't-care applies only to fields BASE leaves unspecified or unused for the class and to non-enable outputs of unsupported encodings. No BASE edit | BASE stays the single source for instruction semantics |
 | O6 | Reserved `alu_op` / operand-select codes may appear for unsupported encodings; no extra logic; EX checkers apply to supported instructions only | D6; unsupported encodings are outside BASE |
-| O7 | `instruction` is `logic [31:0]` per `IALIGN=32`; no new `riscv_pkg` constant | BASE fixes 32-bit instructions |
+| O7 | `instruction` is `logic [31:0]` per `IALIGN=32`; no new `riscv_pkg` constant | BASE fixes 32-bit instructions. Revised by O7-R |
+| O7-R | `riscv_pkg` gains `localparam int INSTR_WIDTH = 32`, in the style of `DATA_WIDTH` and `ADDR_WIDTH`; `instruction` is `logic [INSTR_WIDTH-1:0]`. `INSTR_WIDTH` names the width of the 32-bit base encoding (`IALIGN=32`), not ILEN, and is not a configuration point: the bit positions in [immediate-generator.md](immediate-generator.md) section 5 fix the value at 32. **was accepted by Việt on 2026-10-29.** (ID D2) | Naming consistency with `DATA_WIDTH`/`ADDR_WIDTH`; the instruction and data widths stay separate domains |
 
 **O2 reason.** No block inside ID consumes `pc` or IF/ID `valid`. ID creates no
 side effect of its own: the register-file write is authorized by WB's
