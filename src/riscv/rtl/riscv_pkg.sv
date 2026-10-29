@@ -8,6 +8,7 @@
 package riscv_pkg;
     localparam int DATA_WIDTH = 32;
     localparam int ADDR_WIDTH = 32;
+    localparam int INSTR_WIDTH= 32;
 
     typedef enum logic [3:0] {
         ALU_ADD = 4'h0,
@@ -61,4 +62,17 @@ package riscv_pkg;
         MEM_BYTE_U  = 3'h4,
         MEM_HALF_U  = 3'h5
     } mem_type_t;
+
+    typedef enum logic [4:0] {
+        OPC_LOAD     = 5'b00000,
+        OPC_MISC_MEM = 5'b00011,
+        OPC_OP_IMM   = 5'b00100,
+        OPC_AUIPC    = 5'b00101,
+        OPC_STORE    = 5'b01000,
+        OPC_OP       = 5'b01100,
+        OPC_LUI      = 5'b01101,
+        OPC_BRANCH   = 5'b11000,
+        OPC_JALR     = 5'b11001,
+        OPC_JAL      = 5'b11011
+    } opcode_t;
 endpackage : riscv_pkg
