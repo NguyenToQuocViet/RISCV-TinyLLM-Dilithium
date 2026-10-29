@@ -17,12 +17,14 @@
   ],
   "extension_note": "Qualified extensions remain separate from the original v0 baseline. The accepted SmoothQuant development direction and current candidate roles are recorded in stage3_handoff; all measured results are selection-only fake-quant evidence.",
   "stage3_handoff": {
-    "decision": "src/tinyllm/docs/DECISIONS.md#d02-phát-triển-datapath-số-nguyên-theo-smoothquant-ưu-tiên-w8a8",
-    "status": "Ready to begin numerical-contract development using the qualified A12 reference; A8 is a research target, not a qualified candidate or frozen integer contract.",
+    "decision": "src/tinyllm/docs/DECISIONS.md#d02-phát-triển-datapath-số-nguyên-theo-smoothquant",
+    "numerical_contract": "src/tinyllm/docs/design/numerical_contract.md",
+    "selected_candidate": "w8a12kv8_smoothquant",
+    "status": "A12 SmoothQuant is selected as the primary configuration for the draft numerical contract; A8 is deferred optimization work. The integer contract is not frozen.",
     "artifact_path_base": "src/tinyllm/quantize/",
     "qualified_reference": {
       "name": "w8a12kv8_smoothquant",
-      "role": "Quality-qualified SmoothQuant reference and A12 fallback",
+      "role": "Quality-qualified primary configuration for the current numerical contract",
       "config": "candidates/w8a12kv8_smoothquant/config.json",
       "qparams": "candidates/w8a12kv8_smoothquant/qparams.safetensors",
       "result": "results/ptq/extra/w8a12kv8_smoothquant.final.json",
@@ -30,12 +32,12 @@
     },
     "research_target": {
       "name": "w8a8kv8_smoothquant_a09",
-      "role": "Starting A8 SmoothQuant experiment; alpha is not fixed for the final design",
+      "role": "Deferred A8 SmoothQuant optimization candidate; not required for the initial A12 integer model",
       "config": "candidates/w8a8kv8_smoothquant_a09/config.json",
       "qparams": "candidates/w8a8kv8_smoothquant_a09/qparams.safetensors",
       "result": "results/ptq/extra/w8a8kv8_smoothquant_a09.ppl.json",
       "quality_qualified": false,
-      "remaining_qualification": "Full PPL exceeds the unchanged gate; PIQA, decode quality, structural/reload finalization and candidate storage inventory have not been evaluated for this configuration."
+      "remaining_qualification": "Full PPL exceeds the unchanged gate. PIQA, decode, structural/reload and storage were measured diagnostically after the PPL failure; the candidate remains unqualified."
     },
     "software_control": "w8a16kv8_static",
     "other_qualified_evidence": [

@@ -67,14 +67,13 @@ Cố định nguồn model → Chạy bằng FP32 để lấy kết quả chuẩ
 
 **Công việc:**
 
-- Với các ứng viên từ chặng 2, hoàn thiện số bit và hệ số biểu diễn giá trị (scale) cho trọng số, các giá trị trung gian, dữ liệu ở nhánh residual, KV cache, xác suất attention, RoPE, bảng tra (LUT) và logits.
-- Quy định số bit của tích và bộ cộng dồn, thứ tự tính, cách chuyển kết quả về số bit và scale tiếp theo, cách làm tròn, cách giới hạn giá trị và xử lý tràn số tại từng bước.
-- Chọn và hiện thực thuật toán số nguyên cho nhân ma trận, Softmax, RMSNorm và các phép tính còn lại. Ghi rõ các bước tính và cách xấp xỉ để bản số nguyên và RTL thực hiện cùng một cách.
-- Quy định cách dùng chung trọng số giữa embedding và LM head, kể cả cách áp dụng scale ở hai nơi.
-- Chuẩn bị trọng số, scale và bảng tra theo định dạng có thể nạp lên phần cứng.
-- Viết bản phần mềm tính **thuần số nguyên** theo các quy tắc trên để làm kết quả chuẩn cho RTL (golden model).
-- Kiểm tra riêng các phép tính số nguyên trước khi đánh giá toàn model; dùng dữ liệu cho số âm, giá trị nằm đúng giữa hai mức làm tròn, giá trị cực trị, phần tử bị che trong attention, phép cộng residual, KV cache và chuỗi dài.
-- So chất lượng của bản số nguyên với bản FP32 và fake-quant. Nếu chất lượng hoặc chi phí phần cứng chưa đạt, quay lại điều chỉnh ở chặng 2–4.
+1. **Xác định các biên dữ liệu.** Từ cấu hình và qparams chặng 2, điền bảng biểu diễn trọng số, activation, residual, KV, attention, RoPE, norm, LUT và logits trong contract. Phân biệt thông số đã chọn với định dạng số nguyên còn cần khảo sát; xác định đầu vào/đầu ra của các khối phi tuyến ngay từ bước này.
+2. **Định nghĩa và kiểm tra các phép tính nền.** Hoàn thiện MAC, smoothing/requantization và chuyển scale: độ rộng tích/accumulator, thứ tự cộng, hệ số nhân/dịch, rounding, saturation và overflow. Chuẩn bị W số nguyên và hệ số cần dùng; viết bản số nguyên cùng oracle độc lập cho các phép này. Đầu ra là primitive đã kiểm tra và quy tắc đủ rõ để tái hiện từng bit.
+3. **Hoàn thiện từng nhóm phép toán.** Theo các giao diện ở bước 1, chọn thuật toán và hiện thực RMSNorm; RoPE và đường attention QK–mask–Softmax–PV/KV cache; SiLU, gate multiply và residual. Với mỗi nhóm, ghi từng bước số nguyên, bảng tra/hệ số, độ rộng và scale, rồi kiểm tra riêng trước khi ghép. Bao gồm số âm, half-step, cực trị, mask, cache và giới hạn độ dài chuỗi.
+4. **Ghép golden integer.** Hoàn thiện embedding và LM head dùng chung một bộ trọng số, cách áp scale ở hai nơi và biểu diễn logits; ghép một decoder layer rồi đủ 30 layer, final norm và LM head. Chạy prefill và decode với cùng token đầu vào; đường tính model hoàn chỉnh phải thuần số nguyên theo contract.
+5. **Hoàn thiện định dạng dữ liệu và vector chuẩn.** Chốt cách biểu diễn/nạp trọng số, scale, hệ số và LUT; chuẩn bị dữ liệu, kiểm tra lưu/nạp và xuất đầu vào/kết quả số nguyên cần cho regression và đối chiếu RTL. Không tạo hai bản trọng số embedding/head ngoài quy tắc đã ghi.
+6. **Đánh giá toàn model.** Dùng lại protocol và scorer của chặng 2 để so FP32, fake-quant và golden integer trên selection, gồm PPL, PIQA, prefill, token đầu tiên và hai regime decode. Ghi chất lượng, các sai khác cần điều tra và kết quả có thể chạy lại; chưa dùng heldout để sửa hoặc chọn contract.
+7. **Đối chiếu chi phí với chặng 4.** Khảo sát các kernel RTL đại diện khi contract của chúng đã đủ rõ. Nếu chất lượng hoặc chi phí chưa đạt, sửa phần contract liên quan và chạy lại kiểm chứng bị ảnh hưởng; cập nhật golden integer và vector chuẩn cùng phiên bản. Chỉ chuyển sang chốt contract sau khi đủ bằng chứng chất lượng và phần cứng.
 
 **Tiêu chí hoàn thành:**
 

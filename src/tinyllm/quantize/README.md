@@ -181,3 +181,25 @@ Bundle mới ghi bits/policy/observer/trục trong header safetensors. Load sai 
 Kiểm cấu trúc adapter, bất biến trọng số/qparams và oracle W4 chạy riêng bằng `ptq_validate.py`; `ptq_finalize.py --structural-only` giữ chế độ kiểm cấu trúc tường minh. Các lượt đo thường không lặp lại những kiểm tra này; finalizer vẫn so logits full/cache tới từng bit sau khi lưu và nạp lại bundle.
 
 Các lệnh đánh giá và calibration mặc định đọc trực tiếp `data/`; calibration chỉ ghi vào `--output-dir`. Khi chạy lại lệnh lịch sử dùng `--data-dir data/alpha_sweep_runtime`, thay bằng `--data-dir data`: ba file đầu vào cũ giống hệt dữ liệu gốc.
+
+## Thống kê trung gian cho numerical contract
+
+[ptq_intermediate_calibrate.py](ptq_intermediate_calibrate.py) dùng candidate W8A12KV8 SmoothQuant alpha 0.5 với scale/zero-point và vector `s` đã đóng băng, mở miền clip signed đầy đủ theo [numerical contract](../docs/design/numerical_contract.md). Công cụ đo các trung gian Linear, residual, RMSNorm, RoPE, attention, Softmax, SiLU và logits trên 64 cửa sổ train cùng 16 lượt cache train; không dùng selection/heldout và không ghi lại bundle nguồn.
+
+```bash
+timeout 300 .venv/bin/python -m pytest -q test_ptq_intermediate_calibrate.py test_ptq_a_extensions.py test_ptq_fake_quant.py
+timeout 3600 .venv/bin/python ptq_intermediate_calibrate.py --offline
+```
+
+Đầu ra mặc định ở `results/numerical/`: `intermediate_calibration.json` chứa miền quan sát, phân bố, scale MinMax ứng viên theo độ rộng và zero-point 0; `intermediate_qparams.safetensors` chứa scale accumulator Linear cùng tỷ lệ chuyển V → cache tham chiếu. Histogram tuyệt đối giữ exponent và ba bit mantissa FP32; percentile là cận trên theo bin, không phải quantile chính xác. Các số đo là tham chiếu fake-quant FP32; chưa chọn độ rộng trung gian hoặc thuật toán phi tuyến số nguyên, và chưa xác nhận chất lượng golden integer.
+
+## Khảo sát numerical contract số nguyên
+
+Đọc [contract đề xuất](../docs/design/numerical_contract_proposed.md) và campaign trước khi dùng các bundle. Lệnh đầy đủ chạy tuần tự baseline, replay, đo biên/họ, tổ hợp, qualify và export; `campaign.json` giữ checkpoint. Có thể tiếp tục bằng stage tương ứng; chọn `isolated` để chạy lại replay nếu campaign dừng trước khi đo biên.
+
+```bash
+.venv/bin/python -u ptq_contract_search.py --offline \
+    --output-dir results/numerical/contract_search --stage all
+```
+
+`results/numerical/contract_search/campaign.json` là báo cáo và checkpoint; bước export tạo `weights.safetensors` cùng `config.json` và `coefficients.safetensors` theo từng candidate. Kết quả là host simulation; chưa phải integer kernel hoặc RTL.
