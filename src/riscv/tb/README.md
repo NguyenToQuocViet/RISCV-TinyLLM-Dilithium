@@ -252,3 +252,50 @@ response-edge advance. After correcting every normal completion path, the same
 command passed all nine directed tests again. RTL is unchanged; this remains a
 Python-supplied parent boundary, not verification of real EX/MEM registers or
 full-pipeline control.
+
+## ID leaf verification
+
+Việt approved the three directed leaf plans on 2026-10-31 against
+[RF D1](../docs/designs/register-file.md),
+[IMM D2](../docs/designs/immediate-generator.md) and
+[CU D2](../docs/designs/control-unit.md) (all `Accepted`). The tops are
+`register_file`, `immediate_generator` and `control_unit`, using the existing
+Verilator/cocotb setup and no harness. Depth is the happy path only.
+
+| Top | Tests |
+| --- | --- |
+| `register_file` (clocked, 10 ns) | `test_write_read_all`, `test_data_width`, `test_write_isolation`, `test_bypass_each_port`, `test_bypass_both_ports`, `test_read_during_write`, `test_no_bypass_without_fire`, `test_x0_read`, `test_x0_write_ignored`, `test_consecutive_writes` |
+| `immediate_generator` (combinational) | `test_i_format`, `test_s_format`, `test_b_format`, `test_u_format`, `test_j_format`, `test_shift_immediates` (12 section 7 vectors), plus `test_selection_other_classes` (JALR, LW, AUIPC; Owner addition beyond section 8) |
+| `control_unit` (combinational) | `test_upper_and_jump_ops`, `test_branch_ops`, `test_load_ops`, `test_store_ops`, `test_op_imm_ops`, `test_op_ops`, `test_fence` (38 operation words), `test_rejecting_words` (15 section 7 words) |
+
+Expected values are manual literals at the call site, each traced to a contract
+clause or plan row in the testcase. Enum codes in the CU tests are literals with
+the enum name in a comment, taken from the accepted leaf records. The RF drives
+inputs at falling edges and samples reads 1 ns later; a write commits at the
+rising edge. IMM and CU drive one word, wait 1 ns and compare. Don't-care
+outputs are never compared. No random stimulus, golden model or scoreboard is
+used. Completion requires all 25 cocotb tests to pass.
+
+```bash
+rtk proxy .venv/bin/python -m pytest tb/runners/test_register_file.py tb/runners/test_immediate_generator.py tb/runners/test_control_unit.py -v -s
+```
+
+Artifacts stay in `tb/sim_build/{register_file,immediate_generator,control_unit}/`.
+CU C1 (the exhaustive 2^17 sweep of the guarded enables and its predicate) is
+deferred by the Owner and stays PENDING; this pass does not close it. The L9
+rejecting row (`FENCE.I`) cannot fail at the CU leaf: the `FENCE` enables equal
+the guard values (CU sections 5.2 and 5.3), so L9 rejection is not observable
+here; the row is kept for section 7 / C2 completeness. The pass
+covers the stated vectors only: it does not exercise the not-checked fields
+(`rd`, `rs1`, `rs2`, FENCE fields, HINT, alignment), words outside the listed
+ones, `x0`-adjacent corner sweeps, unwritten-register reads or X/Z inputs. It
+does not establish `decode_stage` integration, hazards, EX/MEM/WB consumption
+of the control outputs, timing or whole-core behavior.
+
+Verification checkpoint, 2026-10-31 (Asia/Ho_Chi_Minh): the command above passed
+three pytest entries running 25 cocotb tests (10 RF, 7 IMM, 8 CU). Base RTL
+revision: `9e316b1`; the new tests were uncommitted at the run (the contract
+documents under `docs/designs/` also had uncommitted edits). Python 3.14.8,
+cocotb 2.1.0, pytest 9.1.1 and Verilator 5.046. No RTL change or waived failure;
+a full regression was not run. Result XML:
+`tb/sim_build/<block>/test_<block>.result.xml` (ignored).
