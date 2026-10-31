@@ -1,7 +1,9 @@
 # ALU — Block Design
 
-**Status:** Accepted by Việt on 2026-10-15.
-**Revision:** ALU D4 / 2026-10-19; width clarification accepted by Việt.
+**Status:** Accepted by Việt on 2026-10-15. The ALU D5 amendment (live-control
+scope per decode-stage O6) is `accepted` by Việt on 2026-10-31.
+**Revision:** ALU D5 / 2026-10-30 (D5 amends the live-control sentence in
+section 4 only); ALU D4 / 2026-10-19; width clarification accepted by Việt.
 **Owner:** Viet Nguyen To Quoc.
 **Parent:** [EX stage](execute-stage.md#43-alu),
 [BASE execution semantics](5-stage-baseline-core.md#ex-computation-contract).
@@ -67,5 +69,6 @@ All six unassigned binary selector codes, `4'hA` through `4'hF`, return
 not an additional operation or a unique error signature. No error port or CPU
 trap is introduced.
 
-Live EX instruction control must select a defined operation. An invalid pipeline
-entry may carry arbitrary payload; its result cannot authorize side effects.
+Control of a live supported EX instruction must select a defined operation
+(decode-stage.md section 9, O6). An unsupported word or an invalid pipeline entry
+may carry arbitrary payload; its result cannot authorize side effects.

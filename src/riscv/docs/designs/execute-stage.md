@@ -2,9 +2,11 @@
 
 **Status:** Accepted by Nguyễn Tô Quốc Việt on 2026-10-15 (decomposition, naming
 and semantic boundaries). Flat wrapper interface and core-owned metadata bypass
-accepted by Việt on 2026-10-19.
+accepted by Việt on 2026-10-19. The EX D4 amendment (ALU and operand-mux
+checker scope per decode-stage O6) is `accepted` by Việt on 2026-10-31.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** EX D3 / 2026-10-19; wrapper boundary accepted by Việt;
+**Design revision:** EX D4 / 2026-10-30 (D4 amends the ALU and operand-mux
+checker sentences in section 6 only); EX D3 / 2026-10-19; wrapper boundary accepted by Việt;
 refines BASE R1 without revising it.
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md).
 **RTL mapping:** Planned; this document is not implementation or verification evidence.
@@ -395,11 +397,12 @@ ALU-related verification uses only 0/1 inputs, both in isolation and at EX
 integration; X/Z tests and dedicated unknown-input checkers are outside scope.
 Test all six unassigned binary selectors against the fallback in the
 [ALU contract](alu.md#4-input-validity-and-exceptional-conditions). At EX
-integration, a valid instruction using one of those codes must cause checker
-FAIL; arbitrary selector payload in an invalid entry must not trigger that check.
+integration, a valid supported instruction (decode-stage.md section 9, O6) using
+one of those codes must cause checker FAIL; arbitrary selector payload in an
+invalid entry, or in an unsupported word, must not trigger that check.
 
-**Operand mux integration:** checker FAIL is required when a valid instruction
-that consumes operand A uses the reserved A selector defined by the
+**Operand mux integration:** checker FAIL is required when a valid supported
+instruction (decode-stage.md section 9, O6) that consumes operand A uses the reserved A selector defined by the
 [operand-mux contract](operand-mux.md#4-input-validity-and-exceptional-conditions).
 Bubbles and FENCE do not trigger this check. This is a verification check,
 not a hardware error port or CPU trap.
