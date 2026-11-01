@@ -9,6 +9,7 @@ package riscv_pkg;
     localparam int DATA_WIDTH = 32;
     localparam int ADDR_WIDTH = 32;
     localparam int INSTR_WIDTH= 32;
+    localparam logic [ADDR_WIDTH-1:0] PC_RESET_VEC = '0;
 
     typedef enum logic [3:0] {
         ALU_ADD = 4'h0,

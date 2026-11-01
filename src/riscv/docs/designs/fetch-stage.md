@@ -1,6 +1,6 @@
 # Fetch Stage — Block Design
 
-**Status:** Proposed
+**Status:** Accepted by Việt on 2026-11-01
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md), in particular
 [instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization),
@@ -391,10 +391,10 @@ Leaf-level evidence belongs to the later leaf designs.
 
 ### Dependencies
 
-- **D-1.** `PC_RESET_VEC` is not in `rtl/riscv_pkg.sv`. It is this subsystem's own package; Việt adds
-  it, as with `INSTR_WIDTH` and `opcode_t` (commit `aedcead`).
-- **D-2.** BASE amendment IF-A1 (Proposed, in `5-stage-baseline-core.md`) must be accepted with this
-  document. It also drops one clause in `external-interrupt-extension.md` (Proposed) that cited the
+- **D-1.** Resolved 2026-11-01: Việt added `PC_RESET_VEC` (`ADDR_WIDTH`, value `'0`) to
+  `rtl/riscv_pkg.sv`, as with `INSTR_WIDTH` and `opcode_t` (commit `aedcead`).
+- **D-2.** Resolved 2026-11-01: BASE amendment IF-A1 (`5-stage-baseline-core.md`) was accepted by
+  Việt together with this document. It also drops one clause in `external-interrupt-extension.md` (Proposed) that cited the
   removed first-presentation rule.
 - **D-3.** The HCU design must drive `fetch_accept` consistently with the IF/ID `stall` and `flush` it
   drives, so that IF frees an entry exactly when IF/ID captures it.
@@ -419,8 +419,8 @@ They do not change the `fetch_stage` interface.
 
 ### What can proceed and what stays blocked
 
-- Can proceed: the `fetch_obi_interface` and `fetch_controller_unit` leaf designs; the HCU design
-  (D-3).
-- Blocked: acceptance of this document waits for Việt's review and IF-A1 (D-2). The fetch RTL waits for
-  acceptance and D-1. The `fetch_buffer` design decides O2 and O3.
+- Can proceed: leaf designs in the order `fetch_obi_interface`, `fetch_buffer` (decides O2 and O3),
+  then `fetch_controller_unit`, whose entry-selection inputs depend on the O3 age encoding; the HCU
+  design (D-3).
+- Leaf RTL follows each accepted leaf design. D-1 and D-2 are resolved.
 - Verification of this stage is not established by this document; section 8 lists obligations only.

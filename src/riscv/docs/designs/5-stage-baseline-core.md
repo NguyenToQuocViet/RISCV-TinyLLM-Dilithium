@@ -14,9 +14,9 @@ selects `load_result`. Stage-qualified names use the same base name, such as
 `mem_wb_src`. This is a contract naming change only; existing RTL/tests still
 use the previous names. The accepted local WB refinement is
 [Writeback Stage](writeback-stage.md).
-**Frontend amendment:** IF-A1 / 2026-11-01, Proposed, pending Việt's
-acceptance. It removes the MEM-wait proactive frontend freeze and the
-registered-MEM first-presentation rule; IF/ID delivery is still held by
+**Frontend amendment:** IF-A1, accepted by Việt on 2026-11-01. It removes the
+MEM-wait proactive frontend freeze and the registered-MEM first-presentation
+rule; IF/ID delivery is still held by
 parent control during load-use and MEM wait. Recorded in
 [Pipeline-control priority](#pipeline-control-priority) and refined by
 [Fetch Stage](fetch-stage.md).
@@ -484,7 +484,7 @@ queued requests, limited only by Fetch Buffer capacity and
 `OBI_OUTSTANDING_MAX=1`. When every entry is occupied, allocation stops by
 capacity; no separate freeze exists.
 
-IF-A1 (Proposed, 2026-11-01): the frontend has no MEM-wait or MEM-occupancy
+IF-A1 (accepted by Việt on 2026-11-01): the frontend has no MEM-wait or MEM-occupancy
 input. The two OBI ports are independent links to independent subordinates,
 so withholding instruction requests while MEM is busy protects no ordering or
 correctness property. A later shared memory path resolves instruction/data
