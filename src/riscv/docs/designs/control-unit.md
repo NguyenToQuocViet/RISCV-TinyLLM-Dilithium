@@ -2,14 +2,14 @@
 
 **Status:** Accepted by Việt on 2026-10-30
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** CU D2 / 2026-10-30 (draft; D2 adds C4: `FENCE` `alu_op`).
+**Design revision:** CU D2 / 2026-10-30 (D2 adds C4: `FENCE` `alu_op`).
 **Parent contract:** [Decode stage](decode-stage.md) (sections 2, 3, 5, 6; D4–D7, O5, O6, O7-R),
 [BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract),
 [instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table) and
 [EX operand mux, section 4.2](execute-stage.md#42-operand-mux).
-**RTL mapping:** Planned module `control_unit` in `control_unit.sv`, instance
-`id_control_unit` in `decode_stage`; no RTL exists. The shared types used below
-exist in `rtl/riscv_pkg.sv`. This document is neither implementation nor
+**RTL mapping:** Module `control_unit` exists in `rtl/control_unit.sv`; `decode_stage`
+instantiates it as `id_control_unit` (`rtl/decode_stage.sv`). The shared types used
+below exist in `rtl/riscv_pkg.sv`. This document is neither implementation nor
 verification evidence.
 
 ## 1. Purpose and boundary
@@ -313,8 +313,10 @@ Expected outputs for every row: `reg_write=0`, `mem_en=0`,
 
 ## 8. Verification obligations
 
-Planned leaf-level checks; none exists yet. This section states obligations
-only; the test plan belongs to the verification Station. A leaf pass proves only
+Planned leaf-level checks; a directed happy-path subset exists, run by
+`tb/runners/test_control_unit.py` (cocotb module `tb/testcases/control_unit_cocotb.py`).
+Full coverage of this section is not claimed: the C1 exhaustive 2^17 sweep is
+PENDING. This section states obligations only; the test plan belongs to the verification Station. A leaf pass proves only
 these checks; it does not show decode integration, hazards or whole-core
 behavior.
 
@@ -350,6 +352,8 @@ D6 (safe, no logic beyond what safety requires) is carried from decode-stage.md.
 
 No material open question remains within this document's boundary.
 
-Independent work that can proceed: integration of `decode_stage`. Blocked until
-acceptance: `control_unit` RTL and leaf tests. A pass of the planned checks would
-not establish integration with `decode_stage`, the core or timing.
+Independent work that can proceed: composition checks for `decode_stage`
+(decode-stage.md section 8). `control_unit` RTL exists in `rtl/control_unit.sv` and
+is instantiated in `decode_stage`. A directed happy-path leaf test exists, and the
+C1 sweep is PENDING. A pass of the planned checks would not establish integration
+with `decode_stage`, the core or timing.

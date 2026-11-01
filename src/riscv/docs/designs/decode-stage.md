@@ -1,18 +1,19 @@
 # Decode Stage — Block Design
 
-**Status:** Accepted by Việt on 2026-10-29 — composition-level draft; owner decisions D1–D7 stated on
+**Status:** Accepted by Việt on 2026-10-29 — composition-level; owner decisions D1–D7 stated on
 2026-10-29 and resolutions O1–O7 are recorded here for acceptance (section 9).
 The ID D2 amendment `INSTR_WIDTH` (O7-R, section 9) is `accepted by Việt on 2026-10-29.`.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** ID D2 / 2026-10-29 (draft; D2 amends O7 only).
+**Design revision:** ID D2 / 2026-10-29 (D2 amends O7 only).
 **Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md), in
 particular [ID decode contract](5-stage-baseline-core.md#id-decode-contract),
 [instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table),
 [ID/EX boundary](5-stage-baseline-core.md#idex-boundary),
 [register-file timing and WB-to-ID bypass](5-stage-baseline-core.md#register-file-timing-and-wb-to-id-bypass)
 and [reset architecture](5-stage-baseline-core.md#reset-architecture).
-**RTL mapping:** Planned; no `decode_stage`, `register_file`,
-`immediate_generator` or `control_unit` RTL exists. This document is neither
+**RTL mapping:** `rtl/decode_stage.sv` exists and instantiates `rtl/register_file.sv`,
+`rtl/immediate_generator.sv` and `rtl/control_unit.sv` as `id_register_file`,
+`id_immediate_generator` and `id_control_unit`. This document is neither
 implementation nor verification evidence.
 
 ## 1. Purpose and boundary
@@ -144,19 +145,19 @@ rf_write_fire, wb_rd, wb_data ─────────► register_file write
 
 ### Leaf responsibilities
 
-Each leaf gets its own later block design; those documents are planned and do
-not exist yet. This document does not restate their detail.
+Each leaf has its own block design, linked below. This document does not
+restate their detail.
 
-- **`register_file`** ([planned: register-file.md](register-file.md)). 32 × 32
+- **`register_file`** ([register-file.md](register-file.md)). 32 × 32
   storage, two combinational read ports, one rising-edge write port gated by
   `rf_write_fire`; `x0` reads zero and ignores writes; per-port WB-to-ID
   bypass with the BASE priority; `x1`–`x31` not reset. It owns read-address
   matching and bypass selection (BASE register-file timing).
-- **`immediate_generator`** ([planned: immediate-generator.md](immediate-generator.md)).
+- **`immediate_generator`** ([immediate-generator.md](immediate-generator.md)).
   Produces the single canonical `imm` from `instruction`. The format-selection
   rule for each supported class and the value for classes without an immediate
   belong to that document; no `immediate_kind` leaves ID.
-- **`control_unit`** ([planned: control-unit.md](control-unit.md)). Recognizes
+- **`control_unit`** ([control-unit.md](control-unit.md)). Recognizes
   the 38 supported operations from their complete RV32I encodings (D7) and
   produces all semantic control and the `rs*_used` qualifiers per the BASE
   tables. The exact field-check table and the per-class control values live in
@@ -267,8 +268,7 @@ Register-file case through the wrapper: write `x7` at edge E with
 Planned composition-level checks; none exists yet. Expected values come from
 the BASE tables and the D1–D7 decisions, never from the DUT. Leaf-level
 evidence belongs to the later leaf documents. The exact field-check table is
-the oracle for recognition and exists only once the control-unit design is
-accepted.
+the oracle for recognition; it is in the accepted `control-unit.md`.
 
 | Requirement | Scenario | Expected observation |
 | --- | --- | --- |
@@ -325,8 +325,9 @@ the core takes from IF/ID valid. The core-level Hazard Control Unit qualifies
 `rs1_used` and `rs2_used` with IF/ID valid. Gating outputs with valid would add
 logic without a safety gain (D6).
 
-No material question remains within this document's boundary. Independent work
-that can proceed: the register-file block design (D3 and BASE fix its port set).
-Blocked until acceptance: leaf RTL and any readiness claim for composition. The
-control-unit field-check table (D7) and the immediate rules remain dependencies
-of the leaf documents.
+No material question remains within this document's boundary. The three leaf
+block designs are accepted and their RTL exists in `rtl/`; `rtl/decode_stage.sv`
+instantiates the three leaves. Each leaf has a directed happy-path test subset;
+no composition check exists, so this document makes no readiness claim for
+composition. The control-unit field-check table (D7)
+and the immediate rules remain dependencies of the leaf documents.

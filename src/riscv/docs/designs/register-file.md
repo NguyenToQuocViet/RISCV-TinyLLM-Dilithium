@@ -3,13 +3,13 @@
 **Status:** Accepted by Việt on 2026-10-29; Owner decisions R1–R4 stated on 2026-10-29 are
 recorded here for acceptance, with the resolution of O1 (section 9).
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** RF D1 / 2026-10-29 (draft).
+**Design revision:** RF D1 / 2026-10-29 (accepted).
 **Parent contract:** [Decode stage](decode-stage.md) (sections 2, 3, 4, 8; D3),
 [BASE register-file timing and WB-to-ID bypass](5-stage-baseline-core.md#register-file-timing-and-wb-to-id-bypass),
 [BASE reset architecture](5-stage-baseline-core.md#reset-architecture) and
 [writeback-stage.md](writeback-stage.md) (sections 1, 2).
-**RTL mapping:** Planned module `register_file`, instance `id_register_file` in
-`decode_stage`; no RTL exists. This document is neither implementation nor
+**RTL mapping:** Module `register_file` exists in `rtl/register_file.sv`; `decode_stage`
+instantiates it as `id_register_file` (`rtl/decode_stage.sv`). This document is neither implementation nor
 verification evidence.
 
 ## 1. Purpose and boundary
@@ -175,7 +175,9 @@ read port one cycle before it is in storage and remains afterwards.
 
 ## 8. Verification obligations
 
-Planned leaf-level checks; none exists yet. Expected values are literals taken
+Planned leaf-level checks; a directed happy-path subset exists, run by
+`tb/runners/test_register_file.py` (cocotb module `tb/testcases/register_file_cocotb.py`).
+Full coverage of this section is not claimed. Expected values are literals taken
 from the BASE read priority and R1–R4, never from the DUT. Stimulus timing
 follows the conventions in `tb/README.md`. A leaf pass proves only these
 vectors; it does not show decode integration, hazards or whole-core behavior.
@@ -219,7 +221,6 @@ Stated by the Owner on 2026-10-29.
 
 No open item remains within this document's boundary.
 
-Independent work that can proceed: the immediate-generator block design.
-Blocked until acceptance: `register_file` RTL and leaf tests. A pass of the
-planned checks would not establish integration with `decode_stage`, the core or
-timing.
+`register_file` RTL exists in `rtl/register_file.sv` and is instantiated in
+`decode_stage`. A directed happy-path leaf test exists. A pass of the planned
+checks would not establish integration with `decode_stage`, the core or timing.

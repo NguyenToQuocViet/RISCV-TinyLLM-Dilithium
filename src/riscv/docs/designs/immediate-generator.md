@@ -1,15 +1,15 @@
 # Immediate Generator — Block Design
 
-**Status:** Accepted by Việt on 2026-10-29. The IMM D2 amendment `INSTR_WIDTH` (O7-R) is `was accepted by Việt on 2026-10-29.`.
+**Status:** Accepted by Việt on 2026-10-29. The IMM D2 amendment `INSTR_WIDTH` (O7-R) was accepted by Việt on 2026-10-29.
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** IMM D2 / 2026-10-29 (draft; D2 amends the `instruction` type only).
+**Design revision:** IMM D2 / 2026-10-29 (D2 amends the `instruction` type only).
 **Parent contract:** [Decode stage](decode-stage.md) (sections 2, 3, 5; D5, D6, D7, O5, O7-R),
 [BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract),
 [instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table) and
 [ID/EX boundary](5-stage-baseline-core.md#idex-boundary).
-**RTL mapping:** Planned module `immediate_generator` in `immediate_generator.sv`,
-instance `id_immediate_generator` in `decode_stage`; no RTL exists. This document
-is neither implementation nor verification evidence.
+**RTL mapping:** Module `immediate_generator` exists in `rtl/immediate_generator.sv`;
+`decode_stage` instantiates it as `id_immediate_generator` (`rtl/decode_stage.sv`).
+This document is neither implementation nor verification evidence.
 
 ## 1. Purpose and boundary
 
@@ -156,8 +156,10 @@ The two shift rows show that `imm[11:5]` is kept as is: `SRAI` gives `imm[11:5]=
 
 ## 8. Verification obligations
 
-Planned leaf-level checks; none exists yet. Expected values are the literals in
-section 7, taken from the RV32I layouts and BASE, never from the DUT. Stimulus
+Planned leaf-level checks; a directed happy-path subset exists, run by
+`tb/runners/test_immediate_generator.py` (cocotb module
+`tb/testcases/immediate_generator_cocotb.py`). Full coverage of this section is not
+claimed. Expected values are the literals in section 7, taken from the RV32I layouts and BASE, never from the DUT. Stimulus
 timing follows `tb/README.md`. A leaf pass proves only these vectors; it does not
 show decode integration, control selection or whole-core behavior. Composition-level
 immediate checks stay in [decode-stage.md section 8](decode-stage.md#8-verification-obligations).
@@ -194,6 +196,6 @@ D6 (safe, no logic beyond what safety requires) is carried from decode-stage.md.
 
 No material open question remains within this document's boundary.
 
-Independent work that can proceed: the `control_unit` block design. Blocked until
-acceptance: `immediate_generator` RTL and leaf tests. A pass of the planned checks
-would not establish integration with `decode_stage`, the core or timing.
+`immediate_generator` RTL exists in `rtl/immediate_generator.sv` and is instantiated
+in `decode_stage`. A directed happy-path leaf test exists. A pass of the planned
+checks would not establish integration with `decode_stage`, the core or timing.
