@@ -2,7 +2,7 @@
 
 **Trạng thái:** bước 1–2 đã QA PASS ([kết quả](../reports/ptq_stage1.md)); bước 3–4 đã QA PASS ([kết quả](../reports/ptq_stage2.md)); bước 5–8 đã QA PASS ([kết quả](../reports/ptq_stage3.md)). Sweep per-tensor ban đầu giữ W8A16KV8; [mở rộng](../reports/ptq_a_extensions.md) có thêm A8/A12 per-input-channel và A12 SmoothQuant qua đủ quality gates. Heldout chưa đánh giá.
 
-**Bàn giao:** tạm dừng mở rộng sweep để xây [numerical contract](../../docs/design/numerical_contract.md) với A12 SmoothQuant làm cấu hình chính theo [D02](../../docs/DECISIONS.md#d02-phát-triển-datapath-số-nguyên-theo-smoothquant). [Shortlist](../results/ptq/shortlist.json) giữ baseline v0 làm đối chứng; A8 SmoothQuant alpha 0.9 đã có PIQA/decode chẩn đoán nhưng chưa đạt PPL gate nên vẫn không qualify và được giữ cho hướng tối ưu sau. Khảo sát ngân sách phần cứng/băng thông sơ bộ chưa được ghi nhận; cần bổ sung khi phát triển và sàng lọc numerical contract ở chặng 3–4. Đây chưa phải chốt cấu hình số học cuối cùng.
+**Bàn giao:** numerical contract v1 cho candidate `combined_min_1pct_residual16_m16` đã qua các gate software selection; quy tắc và kết quả nằm trong [numerical contract v1](../../docs/design/numerical_contract_v1.md#144-kết-quả-lựa-chọn-trên-selection) và [campaign](../results/numerical/contract_improvement/campaign.json). Đây là đầu vào cho khảo sát ngân sách phần cứng/băng thông và đánh giá heldout, chưa phải chốt cấu hình số học RTL. [Shortlist](../results/ptq/shortlist.json) tiếp tục giữ baseline v0 làm đối chứng; kết quả A8 SmoothQuant trước đó vẫn chưa đạt PPL gate.
 
 Thực hiện [chặng 2 của kế hoạch TinyLLM](../../docs/PLAN.md#2-thống-nhất-cách-đánh-giá-và-thử-lượng-tử-hóa): tìm cấu hình lượng tử hóa đạt chất lượng, giữ một cấu hình nền và danh sách ngắn để chuyển sang bản số nguyên và khảo sát RTL. Dùng lại [bản chuẩn FP32](../README.md) theo [D01](../../docs/DECISIONS.md#d01-dùng-fp32-làm-chuẩn-và-nền-tính-toán-cho-fake-quant).
 
@@ -40,6 +40,7 @@ Calibration dùng để tính tham số lượng tử hóa. Tập chọn dùng �
 
 **Đầu ra và tiêu chí hoàn thành:** bộ token IDs/câu hỏi được cố định; truy được nguồn và vai trò từng mẫu; ba tập tách biệt và các lượt prefill/decode hợp lệ. Chưa cần chạy model trên tập để dành.
 
+<a id="ptq-quality-protocol"></a>
 ### Bước 2 — Có bộ chấm chất lượng chạy được trên FP32
 
 **Đầu vào:** dữ liệu bước 1; bản Transformers gốc và môi trường của bản chuẩn.

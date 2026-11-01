@@ -17,7 +17,7 @@
 
 ## Smoothing và requantization trong numerical contract
 
-Phần này giải thích các công thức ở [§3.2 — Smoothing và requantization](../design/numerical_contract.md#32-smoothing-và-requantization).
+Phần này giải thích các công thức ở [§4.2 — Hệ số nhân–dịch và requantization](../design/numerical_contract_v1.md#numerical-contract-v1-4-2).
 
 ### Hệ số tham chiếu trước quantize A
 
@@ -59,7 +59,7 @@ c  = 0.02 / (4 * 0.01) = 0.5
 qA = RNE(100 * 0.5) = 50
 ```
 
-Gọi là **hệ số tham chiếu** vì `c[i]` là tỷ lệ toán học cần thực hiện. Trong datapath số nguyên, hệ số được biểu diễn bằng multiplier–shift, chẳng hạn `c[i] ≈ M[i] / 2^r[i]`. Độ rộng `M`, miền dịch, độ rộng tích và vị trí rounding vẫn cần được xác định theo §3.2; công thức tham chiếu không tự quyết định các thông số đó.
+Gọi là **hệ số tham chiếu** vì `c[i]` là tỷ lệ toán học cần thực hiện. Trong datapath số nguyên, hệ số được biểu diễn bằng multiplier–shift, chẳng hạn `c[i] ≈ M[i] / 2^r[i]`. Độ rộng `M`, miền dịch, độ rộng tích và vị trí rounding được quy định trong [§4.2 của numerical contract v1](../design/numerical_contract_v1.md#numerical-contract-v1-4-2); công thức tham chiếu không tự quyết định các thông số đó.
 
 ### Requantization và chuyển scale
 

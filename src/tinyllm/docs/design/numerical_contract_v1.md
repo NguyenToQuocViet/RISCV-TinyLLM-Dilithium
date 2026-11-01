@@ -1,6 +1,6 @@
-# Numerical contract đề xuất — SmolLM2-135M / W8A12KV8 SmoothQuant
+# Numerical contract v1 — SmolLM2-135M / W8A12KV8 SmoothQuant
 
-**Trạng thái:** đề xuất cấu hình `combined_high`, cấu hình duy nhất trong ba tổ hợp đo được vượt toàn bộ quality gate trên selection. Đây là kết quả của mô phỏng mã trên host; chưa phải golden integer kernel hoặc bằng chứng RTL. [Contract tham chiếu](numerical_contract.md) được giữ nguyên.
+**Trạng thái:** Numerical contract v1 chốt biểu diễn và quy tắc số học cho candidate [`combined_min_1pct_residual16_m16`](../../quantize/results/numerical/contract_improvement/artifacts/combined_min_1pct_residual16_m16/config.json), giữ nguyên W8A12KV8 và các hàm phi tuyến của `combined_high`. Candidate đã qua các gate software selection tại §14.4; cấu hình, lựa chọn bit và bằng chứng nằm trong [campaign](../../quantize/results/numerical/contract_improvement/campaign.json). Artifact runtime thực hiện phép toán trên mã nguyên, dùng GEMM FP64 chính xác trong cận đã chứng minh; chưa có kernel số nguyên native hoặc bằng chứng RTL/synthesis. Heldout và chi phí phần cứng chưa được đánh giá, nên v1 chưa phải xác nhận chất lượng ngoài selection hay xác nhận diện tích, timing, power RTL.
 
 ## 1. Model và bộ tham số
 
@@ -50,17 +50,17 @@ Saturation `sat_b` được áp dụng sau rounding về miền đích. Tích v�
 | `bits`, `signed`, `code_range` | Độ rộng logic, signedness và miền mã hợp lệ. |
 | `scale`, `zero_point`, `axis` | Quy tắc giải mã `v = scale * (q-zero_point)`. `scale` là scalar khi `axis=null`, hoặc là vector được đánh chỉ mục theo `axis`. |
 | `container_bits` | Độ rộng lưu/nạp; có thể lớn hơn `bits` và không làm thay đổi miền logic. |
-| `real_range` | Min/max quan sát được trong dữ liệu calibration, không phải miền mã được bảo đảm. |
+| `real_range` | Min/max thực biểu diễn tại hai mã hợp lệ biên, tính từ `code_range × scale`; không phải min/max quan sát của calibration hoặc bảo đảm cho dữ liệu đầu vào. |
 
-Ví dụ các entry thật của `combined_high`:
+Ví dụ các entry của candidate đang được kiểm tra:
 
 | Boundary | Format |
 | --- | --- |
-| `model.layers.0.self_attn.query_post_rope` | Signed16, `axis=1` với scale theo query head; miền mã `[-32768,32767]`, container16. |
+| `model.layers.0.self_attn.query_post_rope` | Signed8, `axis=1` với scale theo query head; miền mã `[-128,127]`, container8. |
 | `model.layers.0.self_attn.probability_unmasked` | Unsigned P12, `axis=null`, scale `1/4095`; miền mã `[0,4095]`, container16. |
-| `model.layers.0.residual_after_attention` | Signed24, `axis=null`; miền mã `[-8388608,8388607]`, container32. |
+| `model.layers.0.residual_after_attention` | Signed16, `axis=null`; miền mã `[-32768,32767]`, container16. |
 
-Danh sách đầy đủ 483 boundary format, gồm scale, axis và miền mã của từng tensor, nằm trong [`combined_high/config.json`](../../quantize/results/numerical/contract_search/combined_high/config.json), khóa `formats`. Các intermediate như `u0`, `a`, `b`, `u1` trong §6.2 là biến số học bên trong RMSNorm; bảng của chúng cho biết cận/độ rộng cần thiết trong thuật toán, không phải boundary format độc lập. Các hàm nonlinear khác cũng có biến nội bộ riêng, được đặc tả trong các mục tương ứng; chỉ tensor vào/ra của chúng có entry `formats` khi nó là boundary giữa các phép toán.
+Danh sách đầy đủ 483 boundary format của candidate, gồm scale, axis và miền mã của từng tensor, nằm trong [`config.json`](../../quantize/results/numerical/contract_improvement/artifacts/combined_min_1pct_residual16_m16/config.json), khóa `formats`. [`combined_high`](../../quantize/results/numerical/contract_search/combined_high/config.json) là cấu hình tham chiếu trước đó. Các intermediate như `u0`, `a`, `b`, `u1` trong §6.2 là biến số học bên trong RMSNorm; bảng của chúng cho biết cận/độ rộng cần thiết trong thuật toán, không phải boundary format độc lập. Các hàm nonlinear khác cũng có biến nội bộ riêng, được đặc tả trong các mục tương ứng; chỉ tensor vào/ra của chúng có entry `formats` khi nó là boundary giữa các phép toán.
 
 ## 3. Trọng số và input Linear
 
@@ -71,7 +71,7 @@ Danh sách đầy đủ 483 boundary format, gồm scale, axis và miền mã c�
 | Input Q/K/V/O, gate/up/down | Signed 12, `[-2048,2047]` | Per-tensor tại từng Linear, sau smoothing; scale nguồn; `z=0`. |
 | Input LM head | Signed 12, `[-2048,2047]` | Per-tensor, không smoothing; scale nguồn; `z=0`. |
 
-Host chuẩn bị `W'[o,i]=W[o,i]*s[i]`; đầu vào decoder tương ứng là `x'[i]=x[i]/s[i]`. Shared embedding/head không áp dụng phép biến đổi này. [Bộ mã W nguyên](../../quantize/results/numerical/contract_search/weights.safetensors) là dữ liệu dùng chung cho các cấu hình; lookup và LM head đọc cùng một tensor trong bộ này.
+Host chuẩn bị `W'[o,i]=W[o,i]*s[i]`; đầu vào decoder tương ứng là `x'[i]=x[i]/s[i]`. Shared embedding/head không áp dụng phép biến đổi này. [Bộ mã W nguyên](../../quantize/results/numerical/contract_improvement/weights.safetensors) là dữ liệu dùng chung cho các cấu hình; lookup và LM head đọc cùng một tensor trong bộ này.
 
 Bộ mã được xuất từ frozen fake-quant FP32 của candidate với miền signed đầy đủ, rồi khôi phục mã theo scale hàng đã biết. Không tính lại W bằng phép chia FP64 khác với phép chuẩn bị đã dùng khi đánh giá; các trường hợp sát half-step có thể khác mã. Việc chuẩn bị này chỉ chạy trên host; suy luận đọc trực tiếp W8 đã xuất.
 
@@ -101,6 +101,7 @@ Với mọi partial sum có `n<=1536` tích, cận tuyệt đối `n*262144` n�
 
 **Lý do:** INT32 chứa được cả trường hợp hai mã âm nhỏ nhất nhân nhau; không cần bỏ mã `-128` hoặc `-2048`.
 
+<a id="numerical-contract-v1-4-2"></a>
 ### 4.2. Hệ số nhân–dịch và requantization
 
 Host compile hệ số thực `c` bằng FP64; runtime chỉ nhận mã `M` và shift nguyên `s`. Với precision mantissa `p`:
@@ -140,11 +141,11 @@ Key hợp lệ khi `key_position<=query_position`. Mask là điều kiện hợp
 
 ## 6. RMSNorm
 
-Input được biểu diễn bằng mã `qX` và một scale chung `delta_X` cho vector 576 phần tử. Nếu residual dùng scale per-channel, chuyển một lần về định dạng input RMSNorm scalar 24 bit trước reduction; định dạng và hệ số của bước này là một phần của bộ tham số, không dùng lại các mã khác scale như thể chúng cùng đơn vị.
+Input được biểu diễn bằng mã `qX` và một scale chung `delta_X` cho vector 576 phần tử. Candidate hiện tại dùng residual signed16 per-tensor nên RMSNorm nhận trực tiếp mã residual và scale scalar tương ứng; không có bước align per-channel trước reduction.
 
 ### 6.1. Square, reduction và epsilon
 
-Đặt `Q=sum_i(qX[i]^2)`. Cộng chính xác, không rounding trong reduction. Với input tối đa signed 24, `Q<=576*2^46`, cần unsigned 56 bit. Các input hẹp hơn được zero/sign-extend đúng trước phép bình phương.
+Đặt `Q=sum_i(qX[i]^2)`. Cộng chính xác, không rounding trong reduction. Candidate có input RMSNorm tối đa signed16, nên `Q<=576*2^30<2^40`; unsigned 40 bit đủ chứa tổng. Mã được sign-extend trước phép bình phương.
 
 Biểu diễn `t = mean(x*x)+epsilon` bằng mã unsigned, scale `2^-F_t`. `F_t` là số fractional bit của cấu hình norm:
 
@@ -241,7 +242,7 @@ c_score[h] = delta_Q[h]*delta_K[h//3] / (8*delta_score[h])
 qScore = sat_score(requant(A_QK,c_score[h]))
 ```
 
-Dot-product có 64 tích. Ở cấu hình `combined_high`, Q signed16 có mã `[-32768,32767]`, K signed8 có mã `[-128,127]`. Một tích nằm trong `[-4194176,4194304]`; tổng 64 tích nằm trong `[-268427264,268435456]`. Cần signed30 bit tối thiểu: signed29 chỉ chứa tối đa `268435455`, thiếu đúng mã dương `+2^28`. Export ghi cận này và độ rộng vào `resources.arithmetic_widths`; container accumulator là 32 bit. Scaling thực `1/sqrt(64)=1/8` đã gộp vào hệ số. Áp mask bằng tập key hợp lệ ở §5; không quantize một sentinel số thực.
+Dot-product có 64 tích. Candidate dùng Q signed8 và K signed8, mỗi mã trong `[-128,127]`. Một tích nằm trong `[-16256,16384]`; tổng 64 tích nằm trong `[-1040384,1048576]`, cần signed22 bit. Container accumulator là 32 bit. Scaling thực `1/sqrt(64)=1/8` đã gộp vào hệ số. Áp mask bằng tập key hợp lệ ở §5; không quantize một sentinel số thực.
 
 ### 8.2. IndexSoftmax
 
@@ -264,9 +265,9 @@ exp_lut[N_LUT-1] = 0
 
 Không nội suy LUT. Với LUT32, chỉ số unsigned 5; `E` unsigned 8. Có ít nhất một key ở max và `E=255`, nên `255<=S<=512*255=130560`; tổng cần unsigned 17. Mọi phép cộng tổng chính xác. Không có denominator 0 trên hàng hợp lệ.
 
-### 8.3. Giao diện xác suất rời rạc và PV
+### 8.3. Giao diện xác suất P12 rời rạc và PV
 
-Phương án chuẩn hóa từng xác suất của proposal dùng:
+V1 chuẩn hóa và lưu riêng từng xác suất bằng P12, sau đó tính PV:
 
 ```text
 qP[i] = RNE((2^b_P-1)*E[i]/S)
@@ -276,31 +277,9 @@ delta_A_PV[h] = delta_P*delta_V[h//3]
 qContext = sat_context(requant(A_PV,delta_A_PV/delta_context))
 ```
 
-`qP` unsigned `b_P`; mã key bị che bằng 0. Mỗi phép chia xác suất có RNE độc lập; không ép tổng mã bằng `2^b_P-1`. Phương án P8 nguyên bản có trường hợp 512 score bằng nhau tạo toàn bộ `qP=0`; P12/P16 là các phương án thay đổi độ chính xác của giao diện này, không phải kết quả mặc định suy ra từ calibration.
+`qP` unsigned P12 (`b_P=12`); mã key bị che bằng 0. Mỗi phép chia xác suất có RNE độc lập; không ép tổng mã bằng 4095. Phương án P8 nguyên bản có trường hợp 512 score bằng nhau tạo toàn bộ `qP=0`, nên v1 giữ P12.
 
-Một cận an toàn cho tổng mã là `sum(qP)<=2^b_P-1+256`. Do mã P không âm, mỗi partial sum PV có trị tuyệt đối không quá `128*sum(qP)`. Cận này bao gồm sai số tổng xác suất do rounding.
-
-### 8.4. Giao diện E/S và PV ghép
-
-Phương án ghép giữ nguyên index và LUT ở §8.2, nhưng giao diện Softmax→PV là `E` unsigned 8 cùng denominator chung `S` unsigned 17 cho mỗi query/head. Xác suất tham chiếu là phân số `E[i]/S`; không lưu hoặc làm tròn một tensor P riêng.
-
-```text
-A[d] = sum_i(E[i]*qV[i,d])
-(M_C,s_C) = compile(delta_V[h//3]/delta_context[h])
-qContext[d] = sat_context(RNE(A[d]*M_C/(S*2^s_C)))
-```
-
-Nếu `s_C<0`, dịch trái tử `-s_C` bit và dùng mẫu `S`. Không rounding tử hoặc phân số trước phép chia cuối. Mã E bị che bằng 0, không góp vào cả hai tổng.
-
-| Đại lượng | Miền mã được bảo đảm | Độ rộng tối thiểu |
-| --- | --- | --- |
-| `E*qV` | `[-32640,32385]` | Signed 16 |
-| `A`, tối đa 512 tích | `[-16711680,16581120]` | Signed 25 |
-| `S` | `[255,130560]` | Unsigned 17 |
-
-Trước xấp xỉ hệ số/output requant, `A/S` nằm trong `[-128,127]`: đây là trung bình có trọng số của các mã V. Giữ đủ độ rộng cho `A*M_C` và `S*2^s_C`; container INT64 không cho phép tự động wrap nếu mẫu hoặc tử rộng hơn 64 bit.
-
-**Lý do của phương án ghép:** bỏ một bước rounding và dùng tích E8×V8. Nó cũng tránh trường hợp P8 toàn 0. Số phép chia là 64 trên mỗi query/head, so với `N` phép chia xác suất của phương án rời rạc; lợi ích về số phép chia xuất hiện khi `N>64`.
+Một cận an toàn cho tổng mã P12 là `sum(qP)<=4095+256=4351`. Do mã P không âm, mỗi partial sum PV có trị tuyệt đối không quá `128*sum(qP)`. Cận này bao gồm sai số tổng xác suất do rounding.
 
 Sau PV, ghép 9 head theo thứ tự head rồi feature thành 576 phần tử. Context đi qua smoothing/quantize A12 của O projection; output O được chuyển về scale residual trước khi cộng.
 
@@ -342,7 +321,7 @@ qResidual = sat_residual(RNE((qL_guard+qR_guard)/2^20))
 
 Mỗi bước align có RNE tại độ chính xác guard; cộng hai mã guard chính xác, rồi RNE và saturation một lần về output. Độ rộng guard được tính theo hệ số và miền nguồn của từng nhánh; không mặc định 48 bit khi dùng scale per-channel. Bản mô phỏng dùng container INT64 cho mã guard và tổng, với cận đã kiểm tra để không clipping trung gian hoặc overflow. Scale per-channel được broadcast theo feature; hai nhánh phải được đưa về cùng target scale tại mỗi feature trước phép cộng.
 
-Các scale tĩnh giữ nguyên giữa prefill/decode. Nếu residual dùng per-channel, bảng scale có 576 phần tử ở mỗi biên; chi phí metadata và bước align input RMSNorm phải được tính cùng với lợi ích giảm bit.
+Các scale residual của candidate là scalar per-tensor và giữ nguyên giữa prefill/decode. Hai nhánh được requantize theo scale scalar target trước phép cộng; guard giữ 20 bit phần lẻ.
 
 **Lý do:** scale riêng theo channel có thể giữ chi tiết của các feature nhỏ khi một feature có outlier lớn. Guard bit giảm sai số khi hai nhánh gần triệt tiêu nhau.
 
@@ -360,13 +339,14 @@ Greedy argmax chọn mã logits lớn nhất; khi hòa chọn token ID nhỏ nh�
 
 Tất cả giá trị nhiều byte dùng little-endian. Ma trận W row-major `[out,in]`; vector hệ số theo thứ tự output hoặc input feature được ghi trong mapping; cache theo `[B,Hkv,L,D]` native head. Padding bằng 0, không chèn phần tử padding vào reduction logic.
 
-| Dữ liệu | Container phần mềm/trao đổi |
+| Định dạng logic | Container chuẩn để trao đổi/lưu |
 | --- | --- |
-| W8, K8, V8 | Signed int8 |
-| Mã signed ≤16, gồm A12 | Signed int16, sign-extend đúng từ độ rộng logic |
-| Mã unsigned ≤16 | Unsigned int16 |
+| Mã signed ≤8, gồm W8/K8/V8 | Signed int8 |
+| Mã unsigned ≤8 | Unsigned int8 |
+| Mã signed 9–16, gồm A12 | Signed int16, sign-extend đúng từ độ rộng logic |
+| Mã unsigned 9–16 | Unsigned int16 |
 | Mã signed/unsigned 17–32 | Container 32 bit tương ứng |
-| Trung gian 33–64 bit | Container 64 bit tương ứng |
+| Trung gian signed/unsigned 33–64 | Container 64 bit tương ứng |
 | Trung gian rộng hơn 64 | Số nguyên đủ rộng; không cắt bớt trước bước rounding/thu hẹp đã quy định |
 | Token ID | Unsigned int16 |
 | Position/cache length | Unsigned int16; miền logic theo §5 |
@@ -377,11 +357,11 @@ Tất cả giá trị nhiều byte dùng little-endian. Ma trận W row-major `[
 | Softmax exponential LUT | Unsigned INT8; tổng `S` là unsigned 17 bit, không cần ROM riêng |
 | SiLU PWL | Breakpoint, slope và intercept Signed INT32; shift Signed INT8 nếu vừa miền, ngược lại Signed INT16; một bộ compile cho mỗi layer |
 
-Packing này không quy định bus hoặc thanh ghi SoC. Độ rộng logic dùng để thiết kế datapath vẫn là số bit trong contract, kể cả khi container rộng hơn. Các bảng hệ số/LUT phải được nạp nguyên vẹn; không lượng tử hóa lần nữa lúc load.
+Các container trong bảng là quy ước trao đổi gọn theo độ rộng logic, không phải phép đo bộ nhớ chạy thực tế. Artifact runner Python hiện dùng INT16 cho một số đầu ra Linear cả khi format logic là ≤8 bit, và dùng INT64 cho nhiều phép tính trung gian/residual; các carrier này không phải dự báo thanh ghi/SRAM RTL, RSS hay mức dùng bộ nhớ đỉnh. Bố trí buffer RTL phải dựa trên lịch thực thi và thiết kế datapath cụ thể. Packing này cũng không quy định bus hoặc thanh ghi SoC. Độ rộng logic dùng để thiết kế datapath vẫn là số bit trong contract, kể cả khi container trao đổi rộng hơn. Các bảng hệ số/LUT phải được nạp nguyên vẹn; không lượng tử hóa lần nữa lúc load.
 
-Bundle được ánh xạ qua [`config.json`](../../quantize/results/numerical/contract_search/combined_high/config.json), [`coefficients.safetensors`](../../quantize/results/numerical/contract_search/combined_high/coefficients.safetensors) và [`weights.safetensors`](../../quantize/results/numerical/contract_search/weights.safetensors). Trong `config.formats`, mỗi tên điểm ánh xạ tới `bits`, signedness, miền mã, scale, zero-point, axis và miền thực. Tensor `.M`/`.shift` cùng tiền tố là một cặp cho phép chuyển biểu diễn; thứ tự phần tử theo axis trong `formats`. Bundle hệ số chứa các cặp multiplier–shift, ROM RoPE, LUT Softmax/RMS và bảng PWL theo layer. Qparams frozen được tham chiếu từ candidate nguồn, không chép lại vào bundle. Export đã so toàn bộ tensor hệ số đã serialize với trình biên dịch runtime; cấu hình được chọn cũng đã reload và khớp bitwise ở logits full/cached. Adapter kiểm tra chỉ nạp `config.json`, không nạp bundle hệ số.
+Bundle candidate được ánh xạ qua [`config.json`](../../quantize/results/numerical/contract_improvement/artifacts/combined_min_1pct_residual16_m16/config.json), [`coefficients.safetensors`](../../quantize/results/numerical/contract_improvement/artifacts/combined_min_1pct_residual16_m16/coefficients.safetensors) và shared [`weights.safetensors`](../../quantize/results/numerical/contract_improvement/weights.safetensors). Trong `config.formats`, mỗi tên điểm ánh xạ tới `bits`, signedness, miền mã, scale, zero-point, axis và miền thực. Tensor `.M`/`.shift` cùng tiền tố là một cặp cho phép chuyển biểu diễn; thứ tự phần tử theo axis trong `formats`. Bundle hệ số chứa các cặp multiplier–shift, ROM RoPE, LUT Softmax/RMS và bảng PWL theo layer. Qparams frozen được tham chiếu từ candidate nguồn, không chép lại vào bundle. Bundle lưu sẵn được artifact runtime nạp trực tiếp.
 
-`config.json` giữ scale dạng số thực làm metadata và chứa bảng SiLU tham chiếu để tái tạo offline. Datapath dự kiến chỉ dùng mã, hệ số nguyên và bảng đã xuất. Campaign hiện dùng `ContractAdapter` như bộ chuẩn bị/mô phỏng trên host: nó đọc format trong config và biên dịch lại M/shift khi chạy; nó **không nạp** `coefficients.safetensors` vào suy luận. Bước export đọc lại bundle và so từng M/shift, ROM, LUT, epsilon và bảng PWL với trình biên dịch runtime tương ứng. Kiểm tra config reload chỉ chứng minh phép mô phỏng tái lập theo config; chưa phải kiểm tra nạp bundle vào một integer kernel.
+`config.json` giữ scale dạng số thực làm metadata; nó không chứa bảng SiLU tham chiếu. Khi chuẩn bị artifact, host lấy segmentation SiLU đã đóng băng từ [`contract_search/combined_high/config.json`](../../quantize/results/numerical/contract_search/combined_high/config.json), biên dịch bảng PWL theo scale của candidate, rồi lưu breakpoint, slope, intercept và shift nguyên trong [`coefficients.safetensors`](../../quantize/results/numerical/contract_improvement/artifacts/combined_min_1pct_residual16_m16/coefficients.safetensors). Datapath chỉ dùng mã, hệ số nguyên và bảng đã xuất. Artifact runner dùng `ptq_contract_runtime.py`, nạp các multiplier, shift, ROM và LUT từ bundle đã serialize; không tính lại hệ số trong lúc suy luận. `ContractAdapter` vẫn được dùng cho chuẩn bị trên host và các oracle số học, không phải backend của các lần chấm artifact.
 
 ## 13. Dung lượng dữ liệu cố định
 
@@ -407,54 +387,55 @@ Các số này không gồm hệ số, gamma, LUT, padding/alignment hoặc buff
 
 ### 14.2. Bằng chứng từ backend khảo sát
 
-Phép đo riêng từng biên và từng hàm dùng frozen fake-quant làm nền. Campaign lưu 483 biên, 151 phép thử phi tuyến và 32 lượt family; các phép đo này dùng để xếp hạng độ nhạy. Một cửa sổ, lượt family hoặc quick8 không chứng minh cấu hình đạt quality gate. Kết quả đầy đủ và cấu hình của từng phép đo nằm trong [campaign.json](../../quantize/results/numerical/contract_search/campaign.json).
+Phép đo riêng từng biên và từng hàm dùng frozen fake-quant làm nền. Campaign cũ lưu các phép đo 483 boundary và các phép thử phi tuyến trong [campaign.json](../../quantize/results/numerical/contract_search/campaign.json). Đợt cải thiện lưu 28 factor Quick8, cấu hình được chọn và toàn bộ phép đo qualification trong [campaign.json](../../quantize/results/numerical/contract_improvement/campaign.json). Quick8 chỉ để xếp hạng; Full64 PPL mới kiểm gate PPL trên selection.
 
 Các cấu hình kết hợp dùng phép toán nguyên cho requant, residual, nonlinear và các bước thu hẹp. MAC lớn được mô phỏng bằng GEMM FP64 trên mã nguyên. Cận **tổng trị tuyệt đối các tích**, không chỉ cận tổng sau triệt tiêu, nằm dưới `2^53`:
 
 | Reduction | Cận đủ dùng |
 | --- | --- |
 | Linear A12×W8, tối đa 1536 tích | `1536*2048*128=402653184` |
-| QK, Q tối đa 24 bit, 64 tích | `64*2^23*128=2^36` |
-| PV rời rạc, P tối đa unsigned 16, 512 tích | `512*65535*128<2^32` |
-| PV ghép E8×V8 | `512*255*128=16711680<2^24` |
+| Q8×K8, 64 tích | `64*128*128=2^20` |
+| PV rời rạc P12, 512 tích | `512*4095*128<2^28` |
 
-Vì từng tích và mọi partial sum đều là số nguyên biểu diễn chính xác, FP64 GEMM cho cùng accumulator như reduction số nguyên trong các miền này. Riêng E8×V8 có thể dùng FP32 code GEMM theo cận trong bảng. Square/reduction RMSNorm tối đa 56 bit dùng phép toán nguyên, không dựa vào FP64 để cộng chính xác.
+Vì từng tích và mọi partial sum đều là số nguyên biểu diễn chính xác, FP64 GEMM cho cùng accumulator như reduction số nguyên trong các miền này. Với candidate hiện tại, RMSNorm nhận tối đa mã signed16 nên square/reduction `Q<=576*2^30<2^40`; runner cộng Q bằng số nguyên, không dựa vào FP64 để cộng chính xác.
 
 Đây là backend mô phỏng mã, chưa phải phần mềm golden integer thuần kernel số nguyên hoặc bằng chứng RTL/synthesis. Bản phần mềm số nguyên được hiện thực từ contract vẫn cần regression với bộ mã đã xuất.
 
 ### 14.3. Quality gate trên selection
 
-Dùng [protocol PTQ hiện có](../../quantize/plans/ptq_plan.md#bước-2--có-bộ-chấm-chất-lượng-chạy-được-trên-fp32):
+Dùng [protocol PTQ hiện có](../../quantize/plans/ptq_plan.md#ptq-quality-protocol):
 
 | Phép đo | Dữ liệu | Điều kiện |
 | --- | --- | --- |
-| PPL full | 64 cửa sổ selection × 512 token, 32704 target | Không quá `1.05*22.574714201210707 = 23.703449911271242`. |
+| PPL full | 64 cửa sổ selection × 512 token, 32704 target | Tỷ lệ PPL không quá `1.05` so với FP32 PPL `22.574714201210707` (ngưỡng `23.703449911271242`). |
 | PIQA | 919 câu selection; chấm tổng LL phần đáp án | Giảm không quá 0.02 accuracy so `625/919`; tương đương ít nhất 607 câu đúng. |
-| Decode, prefill 32 | 8 cửa sổ × 64 target | PPL không quá `1.05*26.676072498453824 = 28.009876123376517`. |
-| Decode, prefill 448 | 8 cửa sổ × 64 target | PPL không quá `1.05*12.019438254052904 = 12.62041016675555`. |
+| Decode, prefill 32 | 8 cửa sổ × 64 target | Tỷ lệ PPL không quá `1.05` so với FP32 PPL `26.676072498453824` (ngưỡng khoảng `28.009876123376515`). |
+| Decode, prefill 448 | 8 cửa sổ × 64 target | Tỷ lệ PPL không quá `1.05` so với FP32 PPL `12.019438254052904` (ngưỡng `12.62041016675555`). |
 
 64 target decode bao gồm token đầu ngay sau prompt. Gate áp dụng PPL tổng hợp riêng từng regime, không áp một ngưỡng mới cho từng cửa sổ lẻ. KL và top-1 agreement là phép đo chẩn đoán, không thay thế các gate này. Heldout chỉ dùng xác nhận sau khi lựa chọn được chốt theo PLAN/D02.
 
 ### 14.4. Kết quả lựa chọn trên selection
 
-Cấu hình được đề xuất là `combined_high`. Trong 483 điểm format, nó dùng 393 điểm signed 16 bit, 30 điểm xác suất unsigned P12 và 60 điểm residual signed 24 bit; scale từng điểm và axis chính xác nằm trong `config.formats`. Tham số chung là coefficient precision `p=24`, RMS seed LUT64 với `F_t=40`, RoPE coefficient 16 bit, Softmax LUT32 với `c=8` và P12 rời rạc, SiLU PWL32 đoạn với ngưỡng 8. Mỗi dịch xuất được chứa trong INT8. Scale W/A/KV và SmoothQuant vẫn là frozen source.
+Cấu hình được đề xuất là `combined_min_1pct_residual16_m16`. Trong 483 điểm format, nó dùng 152 boundary signed8, 151 signed12, 150 signed16 và 30 xác suất unsigned P12; tất cả 60 residual đều signed16 per-tensor. Product FFN và nhánh O/down cũng giữ 16 bit. Độ chính xác hệ số chuyển scale là `p=16`; hệ số phi tuyến giữ `p=24`. W8A12KV8 SmoothQuant và toàn bộ thuật toán/hàm phi tuyến của `combined_high` được giữ nguyên: RMS seed64, RoPE16, Softmax LUT32 với `c=8` và P12 rời rạc, SiLU PWL32 đoạn với ngưỡng8, guard20. Scale từng điểm và axis nằm trong candidate `config.formats`.
 
 | Candidate | Full PPL / gate 23.7034499113 | PIQA / gate ≥607 | Cache32 / gate 28.0098761234 | Cache448 / gate 12.6204101668 | Kết quả |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `combined_high` | 22.8212126292 (+1.0919% so FP32) | 612/919; giảm 0.014146 | 26.8071147129 | 12.1201981256 | Đạt mọi gate |
+| `combined_min_1pct_residual16_m16` | 23.4638382551 (+3.9386%; đạt) | 612/919; giảm 0.014146 (đạt) | 27.5900298472 (đạt) | 12.5235182415 (đạt) | Đạt mọi gate selection |
 | `combined_mixed` | 26.4760330739 (+17.2818%) | Không chạy sau khi trượt PPL | Không chạy sau khi trượt PPL | Không chạy sau khi trượt PPL | Loại: trượt PPL |
 | `combined_guarded_fused` | 25.6511196453 (+13.6277%) | Không chạy sau khi trượt PPL | Không chạy sau khi trượt PPL | Không chạy sau khi trượt PPL | Loại: trượt PPL |
 
-PPL full dùng 64 cửa sổ selection, 32704 target; PIQA dùng 919 câu. Cache mỗi regime tổng hợp 8 lượt, 512 target; gate áp trên PPL tổng hợp. Vì chỉ `combined_high` đạt gate, cấu hình này là lựa chọn duy nhất trong các ứng viên đã đo, không phải tối ưu toàn cục. Campaign không dùng heldout để lựa chọn.
+PPL full dùng 64 cửa sổ selection, 32704 target; PIQA dùng 919 câu. Cache mỗi regime tổng hợp 8 lượt, 512 target; cả hai tỷ lệ PPL đều dưới 1.05 so với FP32. Cả 16 cache case giữ nguyên prefix và cho mã logits khớp bit giữa full forward và cached decode. Greedy 2 prompt và reload artifact cũng qua kiểm tra. Candidate đạt các gate software selection trên selection; campaign không dùng heldout để lựa chọn.
 
 ### 14.5. So sánh tài nguyên
 
-| Candidate | Trạng thái gate | Boundary payload / container ở context 512 (byte) | Coefficient tensor / file serialize (byte) | ROM/LUT/RMS/PWL (byte) | Phép normalize Softmax trong dense shape 512 |
+| Candidate | Trạng thái gate | Boundary payload / container ở context 512 (byte) | Coefficient tensors, gồm bảng / file serialize (byte) | ROM/LUT/RMS/PWL subset (byte) | Phép normalize Softmax trong dense shape 512 |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `combined_high` | Đạt | 670826496 / 723910656 | 2279050 / 2479970 | 78540 | 2359296, P12 rời rạc |
+| `combined_high` | Đạt | 670826496 / 723910656 | 2279200 / 2485984 | 78540 | 2359296, P12 rời rạc |
+| `combined_min_1pct_residual16_m16` | Đạt mọi gate selection | 483016704 / 562790400 | 2279200 / 2485984 | 78540 | 2359296, P12 rời rạc |
 | `combined_mixed` | Trượt PPL | 451215360 / 533299200 | 2668348 / 2881060 | 36348 | 2359296, P12 rời rạc |
 | `combined_guarded_fused` | Trượt PPL | 432733056 / 485683200 | 2679858 / 2893066 | 36348 | 294912, E8+S17 ghép |
 
-Boundary payload cộng tất cả tensor tại context512, container bytes phản ánh kiểu lưu/nạp đo được; hai số này không phải peak SRAM. Phép normalize là số đếm theo dense software shape; causal mask có thể giảm công việc đã schedule. Bundle coefficient tensor của `combined_high` gồm 2200510 byte multiplier/shift và 78540 byte bảng (65536 RoPE, 32 Softmax, 372 RMS/epsilon, 12600 SiLU). Bundle chung không gồm 134479872 byte W và 5898240 byte KV ở context512.
+Boundary payload cộng tất cả tensor tại context512; hai số này không phải peak SRAM hoặc carrier Python thực tế. Phép normalize là số đếm theo dense software shape; causal mask có thể giảm công việc đã schedule. Cột coefficient tensor cộng cả bảng; cột ROM/LUT/RMS/PWL nêu riêng phần bảng nên là số tham khảo nằm trong cột tổng, không cộng thêm. So với prepared `combined_high`, candidate giảm boundary payload khoảng 28.0% và container bytes khoảng 22.3%; coefficient tensor payload và file serialize không đổi. Precision M16 chưa giảm kích thước file vì tensor M vẫn dùng container INT32. Bảng so sánh hai cấu hình này lấy bundle từ cùng campaign. Bundle chung không gồm 134479872 byte W và 5898240 byte KV ở context512.
 
-`combined_mixed` và `combined_guarded_fused` có payload boundary nhỏ hơn, nhưng không vượt PPL gate nên không phải lựa chọn hợp lệ. Chỉ `combined_high` đạt gate, do đó chưa có so sánh tài nguyên giữa nhiều cấu hình đạt gate. Payload cộng qua các biên là proxy dung lượng/traffic của graph, không phải peak SRAM hoặc diện tích FPGA. Kết quả còn phụ thuộc lịch streaming và cách dùng lại datapath. Không có số liệu synthesis area, timing hoặc power; các phép đo này chỉ xếp hạng ba ứng viên đã khảo sát.
+`combined_mixed` và `combined_guarded_fused` có payload boundary nhỏ hơn nhưng trượt PPL. Payload cộng qua các biên chỉ là proxy dung lượng/traffic của graph, không phải peak SRAM hoặc diện tích FPGA. Kết quả còn phụ thuộc lịch streaming và cách dùng lại datapath. Chưa có số liệu synthesis area, timing hoặc power.

@@ -184,7 +184,7 @@ Các lệnh đánh giá và calibration mặc định đọc trực tiếp `data
 
 ## Thống kê trung gian cho numerical contract
 
-[ptq_intermediate_calibrate.py](ptq_intermediate_calibrate.py) dùng candidate W8A12KV8 SmoothQuant alpha 0.5 với scale/zero-point và vector `s` đã đóng băng, mở miền clip signed đầy đủ theo [numerical contract](../docs/design/numerical_contract.md). Công cụ đo các trung gian Linear, residual, RMSNorm, RoPE, attention, Softmax, SiLU và logits trên 64 cửa sổ train cùng 16 lượt cache train; không dùng selection/heldout và không ghi lại bundle nguồn.
+[ptq_intermediate_calibrate.py](ptq_intermediate_calibrate.py) dùng candidate W8A12KV8 SmoothQuant alpha 0.5 với scale/zero-point và vector `s` đã đóng băng, mở miền clip signed đầy đủ theo [numerical contract v1](../docs/design/numerical_contract_v1.md). Công cụ đo các trung gian Linear, residual, RMSNorm, RoPE, attention, Softmax, SiLU và logits trên 64 cửa sổ train cùng 16 lượt cache train; không dùng selection/heldout và không ghi lại bundle nguồn.
 
 ```bash
 timeout 300 .venv/bin/python -m pytest -q test_ptq_intermediate_calibrate.py test_ptq_a_extensions.py test_ptq_fake_quant.py
@@ -193,13 +193,39 @@ timeout 3600 .venv/bin/python ptq_intermediate_calibrate.py --offline
 
 Đầu ra mặc định ở `results/numerical/`: `intermediate_calibration.json` chứa miền quan sát, phân bố, scale MinMax ứng viên theo độ rộng và zero-point 0; `intermediate_qparams.safetensors` chứa scale accumulator Linear cùng tỷ lệ chuyển V → cache tham chiếu. Histogram tuyệt đối giữ exponent và ba bit mantissa FP32; percentile là cận trên theo bin, không phải quantile chính xác. Các số đo là tham chiếu fake-quant FP32; chưa chọn độ rộng trung gian hoặc thuật toán phi tuyến số nguyên, và chưa xác nhận chất lượng golden integer.
 
-## Khảo sát numerical contract số nguyên
+## Mô phỏng numerical contract từ artifact
 
-Đọc [contract đề xuất](../docs/design/numerical_contract_proposed.md) và campaign trước khi dùng các bundle. Lệnh đầy đủ chạy tuần tự baseline, replay, đo biên/họ, tổ hợp, qualify và export; `campaign.json` giữ checkpoint. Có thể tiếp tục bằng stage tương ứng; chọn `isolated` để chạy lại replay nếu campaign dừng trước khi đo biên.
+`ptq_contract_runtime.py` nạp `config.json`, bundle W8 dùng chung và `coefficients.safetensors`; suy luận không nạp checkpoint Transformers hoặc biên dịch lại hệ số. API là `load_prepared_contract(config.json)`. Kết quả campaign nằm trong `results/numerical/contract_improvement/campaign.json`; artifact riêng theo candidate ở `artifacts/`. Các phép đo dùng selection, không dùng heldout. Runtime tính các phép toán trên mã nguyên; GEMM mã lớn dùng FP64 trong cận đã chứng minh để cho accumulator chính xác. Đây là mô phỏng số học trên host, chưa phải kernel số nguyên native hoặc RTL.
+
+`ptq_contract_search.py` chỉ nhận các stage rõ ràng. Từ `quantize/`, có thể chuẩn bị và chạy lại các bước artifact như sau:
 
 ```bash
-.venv/bin/python -u ptq_contract_search.py --offline \
-    --output-dir results/numerical/contract_search --stage all
+OUT=results/numerical/contract_improvement
+timeout 3600 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage artifact-prepare
+timeout 3600 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage profile --profile-threads 1,2,4,8
+timeout 10800 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage artifact-baseline
+timeout 10800 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage artifact-factor-quick
+timeout 3600 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage artifact-prepare-combined
+timeout 1800 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage artifact-quick
 ```
 
-`results/numerical/contract_search/campaign.json` là báo cáo và checkpoint; bước export tạo `weights.safetensors` cùng `config.json` và `coefficients.safetensors` theo từng candidate. Kết quả là host simulation; chưa phải integer kernel hoặc RTL.
+`artifact-prepare` biên dịch các format ban đầu từ calibration đã cố định; `artifact-factor-quick` chỉ chạy 28 phép thử một biên, mỗi phép trên 8 cửa sổ. Bước tạo candidate kết hợp chọn độ rộng nhỏ nhất có `expm1(delta mean NLL) <= 1%`, giữ residual 16-bit per-tensor, Product và O/down branch 16-bit, M scale 16-bit, và nonlinear `combined_high` không đổi. `artifact-quick` chạy 8 cửa sổ đầu (4088 target), lưu từng cửa sổ và dừng; Quick chỉ để xếp hạng, không qua quality gate.
+
+`artifact-prepare` tạo `weights.safetensors` trong thư mục output nếu chưa có, khôi phục chính xác mã INT8 từ fake-quant đã đóng băng. Với campaign đã hoàn tất này, bundle riêng cho 28 phép screening được xóa để giảm dung lượng nhưng các phép đo vẫn được giữ trong `campaign.json`. Vì vậy, chạy lại `artifact-factor-quick` chỉ kiểm tra checkpoint và không chấm lại; nếu cần dựng lại bundle, chạy `artifact-prepare`.
+
+Full64 là stage riêng. Nó dùng lại 8 cửa sổ Quick của cùng candidate và chấm 56 cửa sổ còn lại:
+
+```bash
+timeout 10800 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage artifact-full
+```
+
+Chỉ sau khi Full64 qua PPL gate mới chuẩn bị các hàng FP32 cố định cho KL/top-1, rồi chạy qualification còn lại:
+
+```bash
+timeout 3600 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage artifact-prepare-diagnostics
+timeout 10800 .venv/bin/python -u ptq_contract_search.py --offline --output-dir "$OUT" --stage artifact-qualify
+```
+
+FP32 reference rows được tính trong tiến trình riêng bằng backend chuẩn một thread; runtime candidate không giữ model FP32. Qualification chấm đủ 919 câu PIQA, 16 cache case ở prefill 32/448, KL/top-1 trên 5 vị trí cố định mỗi case, hai prompt greedy và reload artifact với mã logits phải khớp bit. Mỗi stage là lệnh riêng; pipeline không tự chạy tiếp. `campaign.json` là bản ghi authoritative và checkpoint để tiếp tục sau gián đoạn. Stage qualification chỉ hoàn tất khi đủ coverage; kết quả quality gate có thể là pass hoặc rejected.
+
+Numerical contract v1 cho `combined_min_1pct_residual16_m16` đã qua các gate software selection: Full64 PPL 23.4638382551 (+3.9386% so với FP32), PIQA 612/919, cache PPL 27.5900298472 (prefill32) và 12.5235182415 (prefill448). Cả 16 cache case khớp mã logits và giữ prefix; greedy và reload cũng qua. Xem [numerical contract v1](../docs/design/numerical_contract_v1.md) để biết quy tắc số học. Đây là cơ sở để khảo sát chi phí RTL, chưa phải bằng chứng RTL/synthesis, chốt số học phần cứng hoặc đánh giá heldout.
