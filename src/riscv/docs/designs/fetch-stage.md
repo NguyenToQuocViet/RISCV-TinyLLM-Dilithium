@@ -194,9 +194,11 @@ The internal signal names between leaves belong to the leaf designs.
   `killed`, `protocol_committed`, `pc` and `instruction`, and allocation order (BASE
   instruction-fetch organization; capacity and transaction states). It drives the delivery outputs
   and frees the delivered entry on `fetch_fire`. Its internal encoding is open (O2, O3).
-- **`fetch_obi_interface`** — presents the chosen entry as protocol signals and enforces the OBI hold,
-  stability and handshake rules (BASE instruction-fetch organization). It drives the constant port
-  fields (F-c) and never withdraws a raised `req`.
+- **`fetch_obi_interface`** — presents the chosen entry as protocol signals and drives the constant
+  port fields (F-c). It is stateless ([fetch-obi-interface.md](fetch-obi-interface.md) FOI-O1): the
+  OBI hold, stability and no-withdrawal rules of BASE instruction-fetch organization are met at the
+  port because `fetch_buffer` keeps a protocol-committed entry and its `pc` until its `gnt`, and
+  `fetch_controller_unit` keeps presenting that entry.
 
 Pipeline-register ownership: the IF/ID register is core-owned, outside this stage (F-a).
 
@@ -206,7 +208,7 @@ Pipeline-register ownership: the IF/ID register is core-owned, outside this stag
 | --- | --- | --- | --- | --- |
 | `next_fetch_pc` (`ADDR_WIDTH`) | Next address to allocate; `fetch_controller_unit` | Sequential allocation: `+4`; redirect edge: `redirect_target + 4` | Holds when nothing is allocated, including while the buffer is full | `PC_RESET_VEC` (BASE reset architecture) |
 | Entry lifecycle (`FREE`, `QUEUED`, `OUTSTANDING`, `READY`) | Entry validity and lifecycle; `fetch_buffer` | Allocation, grant, response, `fetch_fire`, redirect | Per the BASE lifecycle | `FREE` (BASE reset architecture: entry-valid and lifecycle state) |
-| Entry `protocol_committed` | Request ownership; `fetch_buffer`. The other leaves only signal presentation (O1) | First `req` for the entry | Set until the entry's own `gnt` (BASE capacity and transaction states) | `0` (control-plane state; BASE stale-response section) |
+| Entry `protocol_committed` | Request ownership; `fetch_buffer`. The other leaves only signal presentation (O1) | First `req` for the entry: committed from the first cycle with `req = 1`, so a redirect on that edge keeps it (BASE capacity and transaction states) | Set until the entry's own `gnt` (BASE capacity and transaction states) | `0` (control-plane state; BASE stale-response section) |
 | Entry `killed` | Wrong-path marker; `fetch_buffer` | Redirect edge, for each kept entry | Set until the entry is drained or freed (BASE stale-response section) | `0` (control-plane state) |
 | Entry `pc` (`ADDR_WIDTH`) | Fetch address and delivered `fetch_pc`; `fetch_buffer` | Allocation | Holds for the entry's life; stable while `req` is asserted | Not reset; meaningful only while the entry is valid (BASE reset architecture) |
 | Entry `instruction` (`INSTR_WIDTH`) | Payload of a `READY` entry; `fetch_buffer` | Expected response for a live `OUTSTANDING` entry | Holds while `READY` | Not reset (BASE reset architecture) |
