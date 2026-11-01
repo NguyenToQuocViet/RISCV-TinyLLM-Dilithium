@@ -14,6 +14,12 @@ selects `load_result`. Stage-qualified names use the same base name, such as
 `mem_wb_src`. This is a contract naming change only; existing RTL/tests still
 use the previous names. The accepted local WB refinement is
 [Writeback Stage](writeback-stage.md).
+**Frontend amendment:** IF-A1 / 2026-11-01, Proposed, pending Việt's
+acceptance. It removes the MEM-wait proactive frontend freeze and the
+registered-MEM first-presentation rule; IF/ID delivery is still held by
+parent control during load-use and MEM wait. Recorded in
+[Pipeline-control priority](#pipeline-control-priority) and refined by
+[Fetch Stage](fetch-stage.md).
 
 **Decision record:** Việt approved `BASE → BASE_CI → BASE_CI_IRQ`, BASE with
 37 integer operations plus FENCE, and one common elaboration-selected top.
@@ -471,32 +477,31 @@ younger pipeline entries become invalid. On a response-plus-load-use edge,
 old WB retires, completed MEM enters MEM/WB, the load in EX enters EX/MEM,
 ID/EX receives a bubble, and dependent IF/ID remains held.
 
-During a load-use hazard, IF/ID does not consume a new instruction. Response
-capture and required `READY` creation continue. Proactive allocation and issue
-also continue subject to Fetch Buffer capacity, `OBI_OUTSTANDING_MAX=1`, and the registered
-MEM-occupancy rule below. During an
-unresolved MEM wait, proactive frontend progress is frozen: the Prefetch Unit
-does not allocate a new PC, consume a `READY` entry into IF/ID, or first-present
-an uncommitted queued request.
+During a load-use hazard or an unresolved MEM wait, IF/ID does not consume a
+new instruction. Every other frontend activity continues: response capture,
+required `READY` creation, allocation of the next PC and presentation of
+queued requests, limited only by Fetch Buffer capacity and
+`OBI_OUTSTANDING_MAX=1`. When every entry is occupied, allocation stops by
+capacity; no separate freeze exists.
 
-First presentation of an instruction request is qualified by current
-registered MEM occupancy, not by combinational MEM-wait release. While
-`EX/MEM.valid && EX/MEM.mem_en` is true, the frontend must not first-present an
-uncommitted queued request, including during the cycle in which
-`data_response_fire` releases the pipeline. After that edge, first presentation
-is permitted only if the updated EX/MEM entry does not contain another memory
-instruction and the other fetch-issue conditions permit it. This rule uses
-existing registered state and prevents a combinational path from
-`data_rvalid` to `instr_req`. It does not delay pipeline advance, fetch
-allocation, IF/ID delivery, or redirect processing otherwise permitted on the
-response edge, and it adds no pipeline release bubble.
+IF-A1 (Proposed, 2026-11-01): the frontend has no MEM-wait or MEM-occupancy
+input. The two OBI ports are independent links to independent subordinates,
+so withholding instruction requests while MEM is busy protects no ordering or
+correctness property. A later shared memory path resolves instruction/data
+contention by its own arbitration through each port's `gnt` (see
+[MMIO, FENCE, and integration obligations](#mmio-fence-and-integration-obligations)).
+Because the frontend takes no data-port signal, no combinational path from
+`data_rvalid` to `instr_req` can exist. Global stall and flush events reach IF
+only as the parent's IF/ID delivery control; the EX redirect reaches IF
+directly because it changes only the fetch PC and the Fetch Buffer entries
+(see [Stale instruction responses after redirect](#stale-instruction-responses-after-redirect)).
 
 Mandatory OBI progress continues during both load-use and MEM stalls. A request
 already asserted retains stable `req` and payload and may be granted, including
 on the MEM response edge; `instr_request_fire` is recorded; an expected
 outstanding response is accepted on `instr_response_fire`; and the Fetch Buffer
 performs every state transition required by those events. MEM stall freezes
-architectural and proactive fetch progress, not protocol obligations.
+architectural progress and IF/ID delivery, not fetch or protocol obligations.
 
 ### Pipeline-register local control
 
@@ -649,6 +654,12 @@ must not hold a normal control access until a long accelerator job finishes.
 Peripheral register maps, job interfaces and data movement are not chosen by
 BASE. CI job control and optional completion IRQ belong to the extensions.
 
+If code and data later share a physical memory or interconnect path, that
+path's arbitration owns instruction/data priority and expresses it only
+through each port's `gnt`. The core does not throttle instruction fetch for
+data traffic (IF-A1); both ports keep their OBI request-stability and
+one-outstanding obligations under any arbitration delay.
+
 Integration must preserve byte lanes, response matching, one-outstanding limits
 and data completion/ordering. Executable fetch storage must remain accessible
 and side-effect-free, including wrong-path/prefetch requests. Map/AXI adaptation,
@@ -767,7 +778,7 @@ No deasserted-`req` bubble is required between accepted instruction transactions
 
 The Fetch Controller owns the registered `next_fetch_pc`; the Fetch Buffer does not calculate `PC + 4` or otherwise choose the next address. When the Fetch Controller allocates a free entry as `QUEUED`, it assigns the current `next_fetch_pc` to that entry. Ownership of that fetch PC then transfers to the entry, and the Fetch Controller advances its registered next-fetch state immediately without waiting for `gnt` or a response. A later predictor may change how the Fetch Controller selects `next_fetch_pc`, but it does not change this ownership boundary.
 
-The additional entries therefore allow the sequential next fetch to be prepared from registered frontend state while an older transaction awaits its response and an older completed instruction awaits pipeline consumption. A new instruction request must not be created through a combinational dependency on the current `rvalid`, `rdata`, or `gnt` of either OBI port. In particular, first presentation follows the registered-MEM-occupancy rule in [Pipeline-control priority](#pipeline-control-priority). If a later instruction memory, cache, or interconnect accepts more than one granted-but-not-responded transaction, multiple entries may become `OUTSTANDING` only after an explicit configuration-contract update; the Fetch Buffer architecture itself need not be replaced.
+The additional entries therefore allow the sequential next fetch to be prepared from registered frontend state while an older transaction awaits its response and an older completed instruction awaits pipeline consumption. A new instruction request must not be created through a combinational dependency on the current `rvalid`, `rdata`, or `gnt` of either OBI port. The frontend takes no data-port signal (IF-A1 in [Pipeline-control priority](#pipeline-control-priority)). If a later instruction memory, cache, or interconnect accepts more than one granted-but-not-responded transaction, multiple entries may become `OUTSTANDING` only after an explicit configuration-contract update; the Fetch Buffer architecture itself need not be replaced.
 
 When `instr_response_fire` occurs for a live `OUTSTANDING` entry, the Fetch Buffer captures `rdata` as that entry's instruction payload and changes the entry to `READY`, independently of whether IF/ID can accept an instruction on that cycle. The subordinate then has no further responsibility for that transaction. `RESPONSE_BYPASS=0`: a response cannot pass combinationally from OBI into IF/ID, and even an immediately consumable expected response must first become registered `READY` state. If the `OUTSTANDING` entry is killed, its expected response is accepted and discarded and the entry becomes `FREE` without ever becoming a valid `READY` instruction.
 
@@ -934,11 +945,10 @@ Mandatory directed verification is organized around seven scenario groups:
 4. **Instruction OBI.** Cover request stability while awaiting grant,
    back-to-back requests, simultaneous `instr_response_fire` for A and
    `instr_request_fire` for B, and the
-   `READY + OUTSTANDING + QUEUED` steady state, frontend progress during a
-   load-use hazard, proactive frontend freeze with mandatory protocol progress
-   during a MEM wait, and first-presentation suppression through the MEM
-   response cycle, including when another memory instruction replaces the
-   completed one. Cover every specified redirect disposition for `READY`,
+   `READY + OUTSTANDING + QUEUED` steady state, and frontend progress during a
+   load-use hazard and during a MEM wait: IF/ID delivery held, fetch continuing
+   until the Fetch Buffer is full, and no `READY` entry lost or reordered when
+   delivery resumes (IF-A1). Cover every specified redirect disposition for `READY`,
    `OUTSTANDING`, presented `QUEUED`, and unpresented `QUEUED` entries.
 5. **Data OBI.** Cover delayed grant and expected response, duplicate-request
    suppression, the one-outstanding limit, load and store formatting, store

@@ -263,8 +263,8 @@ No extra next-PC payload must be carried through MEM/WB.
 
 On MRET retirement, serialized ownership releases only for the following cycle;
 that cycle can immediately recognize still-eligible IRQ and suppress return-target
-admission. MRET/IRQ do not bypass parent fetch capacity, executable-region or
-registered-MEM first-presentation restrictions. There is no IRQ-response FIFO
+admission. MRET/IRQ do not bypass parent fetch capacity or executable-region
+restrictions. There is no IRQ-response FIFO
 or general decoupled WB mode introduced by this extension.
 
 ## Completion source mapping
