@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 .pytest_cache/
 /calibration/
+/results/numerical/*/weights.safetensors
+/results/numerical/contract_improvement/artifacts/screening/

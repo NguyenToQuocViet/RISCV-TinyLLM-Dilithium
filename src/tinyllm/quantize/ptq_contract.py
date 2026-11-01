@@ -289,6 +289,11 @@ class ContractAdapter:
         self.final_norm_codes = None
 
     def set_trial(self, trial):
+        nonlinear = trial.get("nonlinear", {})
+        if any(isinstance(options, dict) and options.get("fused")
+               for name, options in nonlinear.items()
+               if name == "softmax" or name.endswith(".softmax")):
+            raise ValueError("fused Softmax-to-PV is unsupported; use the discrete probability boundary")
         if trial.get("mac_dtype", "float32") != self.trial.get("mac_dtype", "float32"):
             self.weights.clear()
         self.trial = trial
@@ -523,34 +528,18 @@ class ContractAdapter:
         # Do not quantize finite mask sentinels.
         scores = self.point(prefix+".score", scores)
         options = self.active_nonlinear("softmax", prefix+".softmax")
-        fused = bool(options and options.get("fused"))
         if options:
             score_fmt = self.nonlinear_format(prefix+".score")
             score_codes = encode(scores, score_fmt, self.trial.get("coefficient_bits", 24))[0]
-            if fused:
-                from ptq_contract_fused import index_softmax_components, fused_pv
-                exponential,denominator = index_softmax_components(score_codes,score_fmt.broadcast(scores),allowed,
-                    c=options.get("c",8),entries=options.get("entries",32),coefficient_bits=self.trial.get("coefficient_bits",24))
-                vf = Format(8,self.baseline.points[prefix+".value_post_projection"].fq.scale.double().tolist(),1)
-                vc = repeat_kv(encode(value,vf)[0],module.num_key_value_groups)
-                cf = self.nonlinear_format(prefix+".context")
-                ratio = torch.as_tensor(vf.scale,dtype=torch.float64).repeat_interleave(module.num_key_value_groups).reshape(1,-1,1,1)/float(cf.scale)
-                context_codes = fused_pv(exponential,denominator,vc,ratio,self.trial.get("coefficient_bits",24))
-                context = decoded(context_codes.transpose(1,2).contiguous().clamp(*cf.bounds),cf)
-                probabilities = None  # E/S is carried; no rounded P tensor exists.
-            else:
-                pb = options.get("probability_bits", 12)
-                probabilities = decoded(index_softmax(score_codes, score_fmt.broadcast(scores), allowed,
-                                          c=options.get("c", 8), entries=options.get("entries", 32),
-                                          probability_bits=pb, coefficient_bits=self.trial.get("coefficient_bits", 24)),
-                                        Format(pb, 1/((1 << pb)-1), None, True))
+            pb = options.get("probability_bits", 12)
+            probabilities = decoded(index_softmax(score_codes, score_fmt.broadcast(scores), allowed,
+                                      c=options.get("c", 8), entries=options.get("entries", 32),
+                                      probability_bits=pb, coefficient_bits=self.trial.get("coefficient_bits", 24)),
+                                    Format(pb, 1/((1 << pb)-1), None, True))
         else:
             probabilities = F.softmax(scores.masked_fill(~allowed, torch.finfo(scores.dtype).min), -1, dtype=torch.float32)
-        if not fused:
-            probabilities = self.point(prefix+".probability_unmasked", probabilities)
-        if fused:
-            pass
-        elif self.trial.get("integer_coefficients") and hasattr(probabilities, "_contract"):
+        probabilities = self.point(prefix+".probability_unmasked", probabilities)
+        if self.trial.get("integer_coefficients") and hasattr(probabilities, "_contract"):
             pc, pf = probabilities._contract
             vf = Format(8, self.baseline.points[prefix+".value_post_projection"].fq.scale.double().tolist(), 1)
             vc = repeat_kv(encode(value, vf)[0], module.num_key_value_groups)

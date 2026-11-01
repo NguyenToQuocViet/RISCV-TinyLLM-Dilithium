@@ -1,36 +1,158 @@
 #!/usr/bin/env python3
-"""Finite, resumable numerical-contract search on selection; never heldout."""
+"""Prepare and score one numerical-contract candidate from serialized artifacts."""
 import argparse
-from contextlib import contextmanager
 from copy import deepcopy
+import gc
 import math
 import os
 from pathlib import Path
+import sys
 import time
 
 import numpy as np
 import torch
-from safetensors import safe_open
 from safetensors.torch import load_file, save_file
+from transformers import AutoTokenizer
 
-from fp32_reference import ROOT, cached_logits, configure_runtime, environment, load_model, read_json, source_snapshot, write_json
-from ptq_eval import aggregate_nll, evaluate_piqa, evaluate_ppl, full_logits, score_targets
+from fp32_reference import (ROOT, configure_runtime, environment, load_model,
+                            read_json, source_snapshot, write_json)
+from ptq_eval import aggregate_nll, choose_answer, full_logits, score_targets
 from ptq_finalize import distribution_diagnostic, greedy
 from ptq_fake_quant import PTQAdapter
 from ptq_intermediate_calibrate import full_signed_range
-from ptq_contract import (ContractAdapter, Format, compile_silu, decoded, encode,
-                          encode_multiplier, fit_silu, rescale, rope_rom,
-                          rms_seed_lut, round_divide_scalar, softmax_lut)
+from ptq_contract import (ContractAdapter, Format, compile_silu, encode,
+                          encode_multiplier, rope_rom, rms_seed_lut,
+                          round_divide_scalar, softmax_lut)
+from ptq_contract_runtime import load_prepared_contract
 
+_SCALE_RESCALE_SUFFIXES = (".smooth", ".output", ".to_v_cache", ".to_residual",
+                           ".align_input", ".left_to_guard", ".right_to_guard",
+                           ".q_rope_to_qk", ".k_rope_to_cache", ".qk_to_score",
+                           ".pv_to_context", ".product")
+FACTOR_CANDIDATE_NAMES = (
+    "residual_w20", "residual_w18", "residual_w16",
+    "boundary_context_w12", "boundary_context_w8",
+    "boundary_embedding_w12", "boundary_embedding_w8",
+    "boundary_gate_up_w12", "boundary_gate_up_w8",
+    "boundary_k_pre_w12", "boundary_k_pre_w8",
+    "boundary_logits_w12", "boundary_logits_w8",
+    "boundary_norm_w12", "boundary_norm_w8",
+    "boundary_product_w12", "boundary_product_w8",
+    "boundary_q_post_w12", "boundary_q_post_w8",
+    "boundary_q_pre_w12", "boundary_q_pre_w8",
+    "boundary_residual_branch_w12", "boundary_residual_branch_w8",
+    "boundary_score_w12", "boundary_score_w8",
+    "boundary_silu_w12", "boundary_silu_w8", "scale_rescale_m16",
+)
+COMBINED_CANDIDATE = "combined_min_1pct_residual16_m16"
+FULL_PPL_REFERENCE = 22.574714201210707
+CACHE_PPL_REFERENCES = {"32": 26.676072498453824, "448": 12.019438254052904}
+FULL_PPL_LIMIT = FULL_PPL_REFERENCE * 1.05
+CACHE_PPL_LIMITS = {key: value * 1.05 for key, value in CACHE_PPL_REFERENCES.items()}
+PIQA_MINIMUM_CORRECT = 607
+
+
+def diagnostic_row_indices(prefill, length):
+    """Fixed full-vocabulary diagnostic positions for one cache case."""
+    if not 1 <= prefill < length <= 512:
+        raise ValueError("diagnostic cache lengths are outside the frozen protocol")
+    return sorted(set((0, prefill-1, prefill, length-2, length-1)))
+
+
+def qualification_gates(ppl, piqa_correct, cache_regimes, reference_ppl):
+    """Apply the frozen PPL, PIQA-count, and cache PPL limits."""
+    if not 0 <= piqa_correct <= 919:
+        raise ValueError("PIQA correct count is outside the fixed 919-question set")
+    if set(cache_regimes) != set(CACHE_PPL_LIMITS):
+        raise ValueError("both fixed cache regimes are required")
+    ppl_ratio = ppl / reference_ppl
+    cache = {}
+    for regime, limit in CACHE_PPL_LIMITS.items():
+        reference = CACHE_PPL_REFERENCES[regime]
+        ratio = cache_regimes[regime]["ppl"] / reference
+        cache[regime] = {"ppl": cache_regimes[regime]["ppl"],
+                         "fp32_ppl": reference, "limit": limit,
+                         "ratio_to_fp32": ratio, "pass": ratio <= 1.05}
+    piqa_drop = 625 / 919 - piqa_correct / 919
+    return {"ppl": {"ppl": ppl, "fp32_ppl": reference_ppl,
+                     "limit": reference_ppl * 1.05,
+                     "ratio_to_fp32": ppl_ratio, "pass": ppl_ratio <= 1.05},
+            "piqa": {"correct": piqa_correct, "questions": 919,
+                     "minimum_correct": PIQA_MINIMUM_CORRECT,
+                     "accuracy_drop_vs_fp32": piqa_drop,
+                     "pass": piqa_correct >= PIQA_MINIMUM_CORRECT},
+            "cache": cache,
+            "pass": (ppl_ratio <= 1.05 and piqa_correct >= PIQA_MINIMUM_CORRECT
+                     and all(item["pass"] for item in cache.values()))}
+
+
+def prepare_fp32_diagnostic_rows(args):
+    """Save only the fixed full-vocabulary FP32 rows needed for cache diagnostics."""
+    output = Path(args.output_dir)
+    path = output/"qualification_fp32_rows.safetensors"
+    report_path = output/"campaign.json"
+    report = read_json(report_path)
+    if report.get("stages", {}).get("combined_qualification") == "complete":
+        return
+    full = report.get("combined_full_ppl_result", {}).get("full_ppl", {})
+    if full.get("status") != "complete" or full.get("windows") != 64 or full.get("tokens") != 32704:
+        raise RuntimeError("the fixed candidate must complete Full64 before diagnostics")
+    if full["ppl"] / FULL_PPL_REFERENCE > 1.05:
+        raise RuntimeError("Full64 failed the PPL gate; FP32 diagnostics are skipped")
+    old = report.get("diagnostic_reference", {})
+    if old.get("status") == "complete" and path.is_file():
+        report.setdefault("stages", {})["diagnostic_reference"] = "measured"
+        atomic_json(report_path, report)
+        return
+
+    selection = read_json(ROOT/"data/wikitext_selection.json")
+    cases = read_json(ROOT/"data/cache_cases.json")
+    if len(cases) != 8 or len(selection) < 8:
+        raise RuntimeError("diagnostic selectors do not match the fixed 8-case protocol")
+    report["diagnostic_reference"] = {"status": "in_progress", "rows": 0,
+                                      "cases": [], "path": path.name}
+    atomic_json(report_path, report)
+    model, _ = load_model(source_snapshot(args.cache_dir, args.offline))
+    tensors = {}
+    case_rows = []
+    with torch.inference_mode():
+        for case_index, case in enumerate(cases):
+            record = selection[case["selection_index"]]
+            for regime in case["regimes"]:
+                prefill, length = regime["prefill"], regime["input_length"]
+                ids = record["input_ids"][:length]
+                rows = diagnostic_row_indices(prefill, len(ids))
+                logits = full_logits(model, ids)
+                if not torch.isfinite(logits[rows]).all():
+                    raise ValueError(f"nonfinite FP32 diagnostic logits: {case['id']} prefill={prefill}")
+                key = f"case_{case_index}_{prefill}"
+                tensors[key] = logits[rows].detach().cpu().contiguous()
+                case_rows.append({"id": case["id"], "prefill": prefill,
+                                  "length": len(ids), "rows": rows,
+                                  "key": key, "vocabulary": int(logits.shape[-1])})
+                del logits
+                print(f"FP32 DIAGNOSTIC {len(case_rows)}/16 {case['id']} prefill={prefill}", flush=True)
+    del model
+    gc.collect()
+    if len(case_rows) != 16 or sum(item["rows"] and len(item["rows"]) for item in case_rows) != 80:
+        raise RuntimeError("fixed FP32 diagnostic row coverage is incomplete")
+    temporary = path.with_suffix(".tmp")
+    save_file(tensors, str(temporary))
+    temporary.replace(path)
+    report = read_json(report_path)
+    report["diagnostic_reference"] = {"status": "complete", "rows": 80,
+        "cases": case_rows, "path": path.name,
+        "backend": "fp32_reference deterministic CPU FP32, eager attention, one intra-op thread",
+        "model_loaded_separately_from_candidate": True}
+    report.setdefault("stages", {})["diagnostic_reference"] = "measured"
+    atomic_json(report_path, report)
+    print("FP32 DIAGNOSTIC reference rows prepared: 80", flush=True)
 
 def atomic_json(path, value):
     temporary = path.with_suffix(".tmp")
     write_json(temporary, value)
     temporary.replace(path)
 
-
-_QUALIFICATION_STATUSES = {"qualified_selection", "rejected_full_ppl",
-                           "rejected_piqa_or_cache"}
 
 
 def shift_container(shift):
@@ -41,6 +163,7 @@ def shift_container(shift):
     return shift.to(torch.int8 if low >= -128 and high <= 127 else torch.int16).contiguous()
 
 
+
 def integer_code_bounds(bits, signed=True):
     if bits < 1:
         raise ValueError("integer format must have at least one bit")
@@ -49,11 +172,13 @@ def integer_code_bounds(bits, signed=True):
     return 0, (1 << bits) - 1
 
 
+
 def dot_product_code_bounds(lhs_bounds, rhs_bounds, terms):
     if terms < 1:
         raise ValueError("dot product must contain at least one term")
     products = [lhs * rhs for lhs in lhs_bounds for rhs in rhs_bounds]
     return min(products) * terms, max(products) * terms
+
 
 
 def minimum_signed_width(minimum, maximum):
@@ -65,1000 +190,1405 @@ def minimum_signed_width(minimum, maximum):
     return width
 
 
-def search_candidate_errors(report):
-    errors = []
-    if report.get("stages", {}).get("search") != "measured":
-        errors.append("search stage is not measured")
-    combinations = report.get("combinations")
-    if not isinstance(combinations, dict) or not combinations:
-        errors.append("no candidate combinations are available")
-    return errors
+
+def require_prepared_candidates(report, names_key, expected_count, maximum, label):
+    """Refuse to advance a stage when candidate preparation is incomplete."""
+    screening = report.get("screening", {})
+    names = screening.get(names_key)
+    artifacts = report.get("prepared_candidate_artifacts", {})
+    if not isinstance(names, list) or len(names) != expected_count or len(set(names)) != len(names):
+        raise RuntimeError(f"{label} candidate preparation is incomplete or duplicated")
+    allocated = set(artifacts) | set(screening.get("candidates", {}))
+    if len(allocated) > maximum:
+        raise RuntimeError(f"{label} candidate budget exceeded")
+    missing = [name for name in names if name not in artifacts]
+    if missing:
+        raise RuntimeError(f"{label} candidate artifact is missing: {missing[0]}")
+    return names
 
 
-def require_search_candidates(report):
-    errors = search_candidate_errors(report)
-    if errors:
-        raise RuntimeError("qualification prerequisites are incomplete: " + "; ".join(errors))
+
+def require_completed_quick_batch(report, names, expected_windows=8, expected_ids=None):
+    """Check each allocated Quick8 candidate before marking its stage complete."""
+    candidates = report.get("screening", {}).get("candidates", {})
+    for name in names:
+        quick = candidates.get(name, {}).get("quick", {})
+        windows = quick.get("per_window", [])
+        ids = [row.get("id") for row in windows]
+        if (quick.get("status") != "complete" or len(windows) != expected_windows
+                or len(set(ids)) != expected_windows
+                or (expected_ids is not None and ids != list(expected_ids))):
+            raise RuntimeError(f"{name}: Quick{expected_windows} candidate screen is incomplete")
 
 
-def qualification_errors(report, *, require_stage=False):
-    """Return missing or inconsistent selection evidence for every candidate."""
-    errors = search_candidate_errors(report)
-    stages = report.get("stages", {})
-    if require_stage and stages.get("qualification") != "measured":
-        errors.append("qualification stage is not measured")
-    combinations = report.get("combinations")
-    if not isinstance(combinations, dict) or not combinations:
-        return errors
-
-    for name, entry in combinations.items():
-        if not isinstance(entry, dict):
-            errors.append(f"{name}: candidate entry is not an object")
-            continue
-        status = entry.get("status")
-        if status not in _QUALIFICATION_STATUSES:
-            errors.append(f"{name}: missing or invalid terminal quality status")
-            continue
-        full_ppl = entry.get("full_ppl")
-        if (not isinstance(full_ppl, dict)
-                or not all(k in full_ppl for k in ("ppl", "nll", "tokens", "windows", "per_window"))
-                or full_ppl.get("windows") != 64 or full_ppl.get("tokens") != 32704
-                or len(full_ppl.get("per_window", [])) != 64
-                or any(not isinstance(row, dict) or row.get("tokens") != 511
-                       or not row.get("id") or not isinstance(row.get("nll"),(int,float))
-                       or not math.isfinite(row["nll"])
-                       for row in full_ppl.get("per_window", []))):
-            errors.append(f"{name}: full-selection PPL evidence is incomplete")
-            continue
-        if any(not isinstance(full_ppl[field], (int,float)) or not math.isfinite(full_ppl[field])
-               for field in ("ppl", "nll")):
-            errors.append(f"{name}: full-selection PPL evidence contains an invalid result")
-            continue
-        if (len({row["id"] for row in full_ppl["per_window"]}) != 64
-                or not math.isclose(sum(row["nll"] for row in full_ppl["per_window"]),
-                                    full_ppl["nll"], rel_tol=1e-10, abs_tol=1e-7)
-                or not math.isclose(math.exp(full_ppl["nll"]/full_ppl["tokens"]),
-                                    full_ppl["ppl"], rel_tol=1e-10, abs_tol=1e-12)):
-            errors.append(f"{name}: full-selection PPL aggregate does not match its 64 windows")
-            continue
-        relative_ppl = entry.get("relative_ppl_increase_vs_fp32")
-        if not isinstance(relative_ppl, (int, float)) or not math.isfinite(relative_ppl):
-            errors.append(f"{name}: relative full-selection PPL result is missing")
-            continue
-        if not math.isclose(relative_ppl, full_ppl["ppl"]/22.574714201210707-1,
-                            rel_tol=1e-10, abs_tol=1e-12):
-            errors.append(f"{name}: full-selection PPL ratio does not match the pinned FP32 reference")
-            continue
-        if status == "rejected_full_ppl":
-            if relative_ppl <= .05:
-                errors.append(f"{name}: rejected_full_ppl status contradicts its measured gate")
-            continue
-        if relative_ppl > .05:
-            errors.append(f"{name}: non-PPL-rejected status violates the full-selection PPL gate")
-            continue
-
-        piqa = entry.get("piqa")
-        piqa_drop = entry.get("piqa_drop_vs_fp32")
-        cache = entry.get("cache")
-        cache_relative = entry.get("cache_relative_ppl_increase")
-        if (not isinstance(piqa, dict) or piqa.get("questions") != 919
-                or len(piqa.get("per_question", [])) != 919
-                or not isinstance(piqa_drop, (int, float)) or not math.isfinite(piqa_drop)):
-            errors.append(f"{name}: PIQA quality evidence is incomplete")
-            continue
-        piqa_rows = piqa["per_question"]
-        if (not isinstance(piqa.get("correct"), int)
-                or not isinstance(piqa.get("accuracy"), (int,float)) or not math.isfinite(piqa["accuracy"])
-                or any(not isinstance(row, dict) or "id" not in row or "correct" not in row for row in piqa_rows)
-                or len({row["id"] for row in piqa_rows}) != 919
-                or sum(bool(row["correct"]) for row in piqa_rows) != piqa.get("correct")
-                or not math.isclose(piqa.get("accuracy", float("nan")), piqa["correct"]/919,
-                                    rel_tol=1e-10, abs_tol=1e-12)
-                or not math.isclose(piqa_drop, 625/919-piqa["accuracy"],
-                                    rel_tol=1e-10, abs_tol=1e-12)):
-            errors.append(f"{name}: PIQA aggregate does not match its 919 traceable questions or pinned reference")
-            continue
-        if not isinstance(cache, dict) or not isinstance(cache_relative, dict):
-            errors.append(f"{name}: cache quality evidence is incomplete")
-            continue
-        runs = cache.get("runs")
-        regimes = cache.get("regimes")
-        if (not isinstance(runs, list) or len(runs) != 16
-                or any(not isinstance(run, dict) or run.get("tokens") != 64
-                       or not isinstance(run.get("nll"),(int,float)) or not math.isfinite(run["nll"])
-                       for run in runs)
-                or not isinstance(regimes, dict) or not {"32", "448"}.issubset(regimes)
-                or any(not isinstance(regimes.get(regime), dict)
-                       or regimes[regime].get("tokens") != 512
-                       or any(not isinstance(regimes[regime].get(field),(int,float))
-                              or not math.isfinite(regimes[regime][field]) for field in ("nll","ppl"))
-                       for regime in ("32", "448"))):
-            errors.append(f"{name}: cache evidence must contain 16 traceable runs and 512 targets per regime")
-            continue
-        prefill_counts = {prefill:sum(run.get("prefill") == prefill for run in runs) for prefill in (32,448)}
-        case_counts = {}
-        invalid_run = False
-        for run in runs:
-            if run.get("prefill") not in (32,448) or run.get("decode") != 64 or not run.get("id"):
-                errors.append(f"{name}: cache run has invalid identity or regime")
-                invalid_run = True
-                break
-            case_counts[run["id"]] = case_counts.get(run["id"],0)+1
-        if invalid_run:
-            continue
-        if prefill_counts != {32:8,448:8} or len(case_counts) != 8 or set(case_counts.values()) != {2}:
-            errors.append(f"{name}: cache runs do not preserve eight paired 32/448 records")
-            continue
-        for regime,prefill in (("32",32),("448",448)):
-            regime_runs = [run for run in runs if run["prefill"] == prefill]
-            total_nll = sum(run["nll"] for run in regime_runs)
-            if (not math.isclose(total_nll,regimes[regime]["nll"],rel_tol=1e-10,abs_tol=1e-7)
-                    or not math.isclose(math.exp(total_nll/512),regimes[regime]["ppl"],
-                                        rel_tol=1e-10,abs_tol=1e-12)):
-                errors.append(f"{name}: cache aggregate for prefill {prefill} does not match its eight runs")
-                break
-        if errors and errors[-1].startswith(f"{name}: cache aggregate"):
-            continue
-        if set(cache_relative) != {"32", "448"}:
-            errors.append(f"{name}: cache PPL evidence must cover prefill 32 and 448")
-            continue
-        if any(not isinstance(value, (int, float)) or not math.isfinite(value)
-               for value in cache_relative.values()):
-            errors.append(f"{name}: cache PPL evidence contains an invalid result")
-            continue
-        cache_references = {"32":26.676072498453824,"448":12.019438254052904}
-        if any(not isinstance(regimes[regime].get("ppl"), (int,float))
-               or not math.isfinite(regimes[regime]["ppl"])
-               or not math.isclose(cache_relative[regime],
-                                regimes[regime]["ppl"]/cache_references[regime]-1,
-                                rel_tol=1e-10, abs_tol=1e-12) for regime in ("32","448")):
-            errors.append(f"{name}: cache PPL ratios do not match the pinned FP32 references")
-            continue
-        if "greedy" not in entry:
-            errors.append(f"{name}: greedy selection check is missing")
-            continue
-        passed = piqa_drop <= .02 and max(cache_relative.values()) <= .05
-        expected = "qualified_selection" if passed else "rejected_piqa_or_cache"
-        if status != expected:
-            errors.append(f"{name}: {status} status contradicts measured PIQA/cache gates")
-    return errors
+def require_completed_factor_quick(report, expected_ids):
+    """Accept pruned factor artifacts only when the recorded 28-case screen is complete."""
+    screening = report.get("screening", {})
+    names = screening.get("initial_candidates")
+    if (names != list(FACTOR_CANDIDATE_NAMES)
+            or screening.get("initial_candidate_count") != len(FACTOR_CANDIDATE_NAMES)):
+        raise RuntimeError("the completed factor screen has an unexpected candidate set")
+    artifacts = report.get("prepared_candidate_artifacts", {})
+    allocated = set(artifacts) | set(screening.get("candidates", {}))
+    if len(allocated) > 35:
+        raise RuntimeError("factor Quick8 hard budget exceeded")
+    require_completed_quick_batch(report, names, expected_ids=expected_ids)
+    candidates = screening.get("candidates", {})
+    for name in names:
+        quick = candidates[name]["quick"]
+        rows = quick["per_window"]
+        if (quick.get("windows") != 8 or quick.get("tokens") != 8*511
+                or any(item.get("tokens") != 511 for item in rows)):
+            raise RuntimeError(f"{name}: factor Quick8 target coverage changed")
+    return names
 
 
-def require_qualification(report, *, require_stage=False):
-    errors = qualification_errors(report, require_stage=require_stage)
-    if errors:
-        raise RuntimeError("selection qualification is incomplete: " + "; ".join(errors))
-
-
-def require_export_artifacts(report, output_dir):
-    """Check that the full weight bundle and every candidate export are usable."""
+@torch.inference_mode()
+def prepare_shared_weights(baseline, output_dir):
+    """Write shared frozen-FQ INT8 codes only when absent from the output directory."""
     output_dir = Path(output_dir)
-    errors = []
-    weights_path = output_dir / "weights.safetensors"
-    prepared = report.get("prepared_weights")
-    if not isinstance(prepared, dict):
-        errors.append("prepared weight metadata is missing")
-    if not weights_path.is_file() or weights_path.stat().st_size == 0:
-        errors.append("weights.safetensors is missing or empty")
-    elif isinstance(prepared, dict):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    weights_path = output_dir/"weights.safetensors"
+    if weights_path.is_file():
+        return weights_path
+    weights = {}
+    for weight_name in baseline.weights:
+        fmt = Format(8, baseline.points[weight_name].fq.scale.double().tolist(), 0)
+        prepared = baseline.points[weight_name](baseline.effective_weight(weight_name))
+        weights[weight_name] = encode(prepared, fmt)[0].to(torch.int8).contiguous()
+    temporary = weights_path.with_suffix(".tmp")
+    try:
+        save_file(weights, str(temporary), metadata={
+            "preparation":"pinned full-signed frozen PyTorch FQ; recover exact integer codes",
+            "shared_embedding_lm_head":"one tensor"})
+        temporary.replace(weights_path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return weights_path
+
+
+
+def _workspace_path(path):
+    path = Path(path).resolve()
+    try:
+        return path.relative_to(ROOT.parents[2].resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def reproduction_protocol(shared_weights=None):
+    if shared_weights is None:
+        shared_weights = ROOT/"results/numerical/contract_improvement/weights.safetensors"
+    return {"heldout_used":False,
+        "inputs":{"full_and_quick_ppl":"src/tinyllm/quantize/data/wikitext_selection.json",
+            "piqa":"src/tinyllm/quantize/data/piqa_selection.json",
+            "cache":"src/tinyllm/quantize/data/cache_cases.json",
+            "fp32_references":"src/tinyllm/quantize/results/ptq/fp32.json",
+            "combined_high_comparison":"src/tinyllm/quantize/results/numerical/contract_search/campaign.json",
+            "combined_high_configuration":"src/tinyllm/quantize/results/numerical/contract_search/combined_high/config.json",
+            "calibration":"src/tinyllm/quantize/results/numerical/intermediate_calibration.json",
+            "frozen_w8a12kv8_qparams":"src/tinyllm/quantize/candidates/w8a12kv8_smoothquant/qparams.safetensors",
+            "shared_integer_weights":_workspace_path(shared_weights)},
+        "selectors":{"quick":"first 8 full selection windows, 512 input tokens each",
+            "full_ppl":"all 64 full selection windows, 32704 targets",
+            "piqa":"all 919 selection questions",
+            "cache":"all 16 selection runs, 8 per each 32/448 prefill regime",
+            "greedy":"first two selection prompts, first 32 tokens, up to 32 generated tokens"},
+        "quality_gates":{"full_ppl_relative_to_fp32_max":0.05,
+            "piqa_accuracy_drop_max":0.02,"cache_ppl_relative_to_fp32_max":0.05},
+        "quick_role":"screening and shortlist ranking only; not a quality gate"}
+
+
+
+def record_successful_cli(report_path, phase, argv=None):
+    """Keep one concise successful invocation per reproducible campaign phase."""
+    report_path = Path(report_path)
+    report = read_json(report_path)
+    result = {"argv":list(argv if argv is not None else sys.orig_argv),
+        "working_directory":Path.cwd().as_posix(),"exit_status":0}
+    report.setdefault("cli_results", {})[phase] = result
+    report.setdefault("reproduction", reproduction_protocol(report_path.parent/"weights.safetensors"))
+    atomic_json(report_path, report)
+
+
+def record_failed_cli(report_path, phase, error, argv=None):
+    """Retain a failed stage invocation while preserving its partial checkpoint."""
+    report_path = Path(report_path)
+    report = read_json(report_path)
+    report.setdefault("cli_failures", []).append({
+        "phase": phase,
+        "argv": list(argv if argv is not None else sys.orig_argv),
+        "working_directory": Path.cwd().as_posix(),
+        "exit_status": 1,
+        "error": f"{type(error).__name__}: {error}"})
+    atomic_json(report_path, report)
+
+
+
+def coefficient_precision(name, scale_rescale_bits, nonlinear_bits):
+    """Select precision only for approved interface rescalers."""
+    if scale_rescale_bits not in (16,24) or nonlinear_bits != 24:
+        raise ValueError("only rescale M16/M24 and frozen nonlinear M24 are supported")
+    return scale_rescale_bits if name.endswith(_SCALE_RESCALE_SUFFIXES) else nonlinear_bits
+
+
+
+def profile_artifact_runtime(output_dir, thread_counts=(1, 2, 4, 8)):
+    """Measure artifact load, cold/warm model, and scorer time independently."""
+    output_dir = Path(output_dir)
+    config_path = output_dir/"artifacts/combined_high/config.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"prepared combined_high artifact not found: {config_path}")
+    records = read_json(ROOT/"data/wikitext_selection.json")
+    ids = records[0]["input_ids"][:512]
+    if len(ids) != 512:
+        raise ValueError("thread profile requires a complete 512-token selection window")
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError as exc:
+        raise RuntimeError("profile must start in a fresh process to fix inter-op threads at one") from exc
+    rows = []
+    reference_codes = None
+    scores = []
+    for threads in thread_counts:
+        torch.set_num_threads(int(threads))
+        started = time.monotonic()
+        runtime = load_prepared_contract(config_path)
+        load_seconds = time.monotonic()-started
+        times, score_seconds, score = [], None, None
+        with torch.inference_mode():
+            for repetition in range(3):
+                forward_started = time.monotonic()
+                output = runtime(input_ids=torch.tensor([ids], dtype=torch.long),
+                                 attention_mask=torch.ones((1, len(ids)), dtype=torch.long))
+                elapsed = time.monotonic()-forward_started
+                if reference_codes is None:
+                    reference_codes = output.logit_codes[0].clone()
+                elif not torch.equal(reference_codes, output.logit_codes[0]):
+                    raise AssertionError(f"artifact logit codes changed at intra-op threads={threads}, repetition={repetition}")
+                if repetition == 0:
+                    cold_seconds = elapsed
+                else:
+                    times.append(elapsed)
+                if repetition == 2:
+                    scorer_started = time.monotonic()
+                    score = score_targets(output.logits[0], ids)
+                    score_seconds = time.monotonic()-scorer_started
+                del output
+        row = {"threads":int(threads),"interop_threads":1,"runtime_backend":"PyTorch CPU FP64 exact-code GEMM",
+               "artifact_load_seconds":load_seconds,"cold_forward_seconds":cold_seconds,
+               "warmed_forward_seconds":times,"warmed_forward_median_seconds":float(np.median(times)),
+               "scorer_seconds":score_seconds,"scorer_nll":score[0],"scorer_targets":score[1],
+               "code_equal_to_first_thread":True}
+        rows.append(row); scores.append(score)
+        print(f"PROFILE threads={threads} load={load_seconds:.3f}s cold={cold_seconds:.3f}s "
+              f"warm_median={row['warmed_forward_median_seconds']:.3f}s scorer={score_seconds:.3f}s",flush=True)
+        del runtime
+        import gc
+        gc.collect()
+    if any(not math.isclose(score[0], scores[0][0], rel_tol=0, abs_tol=1e-9) for score in scores):
+        raise AssertionError("scorer NLL changed across the tested CPU thread counts")
+    selected = min(rows, key=lambda row:row["warmed_forward_median_seconds"])["threads"]
+    return {"status":"measured","selector":"selection window 0; all 512 input tokens",
+            "thread_counts":[int(v) for v in thread_counts],"selected_threads":selected,
+            "code_shape":list(reference_codes.shape),"score_comparison":"same NLL within 1e-9 across thread counts",
+            "runs":rows}
+
+
+
+def minimum_width_selection(factor_candidates, families, threshold=0.01):
+    """Choose the least tested boundary width whose measured Quick PPL rise is <= threshold."""
+    selected = {}
+    for family in sorted(families):
+        trials = []
+        for bits in (8, 12):
+            name = f"boundary_{family}_w{bits}"
+            entry = factor_candidates.get(name)
+            if entry is None:
+                raise RuntimeError(f"{name}: required factor Quick8 evidence is missing")
+            quick = entry.get("quick", {})
+            delta = quick.get("delta_mean_nll_vs_combined_high")
+            if quick.get("status") != "complete" or not isinstance(delta, (int, float)) or not math.isfinite(delta):
+                raise RuntimeError(f"{name}: completed factor Quick8 evidence is missing")
+            relative_ppl = math.expm1(delta)
+            trials.append({"candidate": name, "bits": bits, "delta_mean_nll": delta,
+                           "relative_ppl_increase": relative_ppl,
+                           "within_one_percent": relative_ppl <= threshold})
+        passing = [trial for trial in trials if trial["within_one_percent"]]
+        chosen = min(passing, key=lambda trial: trial["bits"]) if passing else None
+        selected[family] = {"selected_bits": chosen["bits"] if chosen else None,
+                            "selected_candidate": chosen["candidate"] if chosen else None,
+                            "tested": trials,
+                            "fallback": None if chosen else "retain combined_high width; no tested width passed"}
+    return selected
+
+
+def build_combined_candidate_config(base, inventory, factor_candidates, threshold=0.01):
+    """Apply measured boundary choices and explicit fixed widths to a fresh candidate."""
+    config = deepcopy(base)
+    config.pop("formats", None)
+    config["name"] = COMBINED_CANDIDATE
+    config["points"] = deepcopy(base["points"])
+    candidate_families = set(inventory.values()) - {"residual", "probability", "product", "residual_branch"}
+    selected = minimum_width_selection(factor_candidates, candidate_families, threshold)
+    for point, family in inventory.items():
+        if family == "residual":
+            config["points"][point] = {"bits": 16}
+        elif family in ("product", "residual_branch"):
+            config["points"][point] = {"bits": 16}
+        elif family in selected and selected[family]["selected_bits"] is not None:
+            config["points"][point] = {"bits": selected[family]["selected_bits"]}
+    config["scale_rescale_bits"] = 16
+    config["coefficient_bits"] = 24
+    config["integer_coefficients"] = True
+    config["metrics"] = False
+    return config, selected
+
+
+def main_parser():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--cache-dir", type=Path, default=ROOT/".cache/huggingface")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--stage", choices=("profile", "artifact-prepare", "artifact-factor-quick",
+        "artifact-prepare-combined",
+        "artifact-baseline", "artifact-quick", "artifact-full",
+        "artifact-prepare-diagnostics", "artifact-qualify"), required=True)
+    parser.add_argument("--profile-threads", default="1,2,4,8")
+    return parser
+
+
+def main(argv=None):
+    parser = main_parser()
+    args = parser.parse_args(argv)
+    args.output_dir_explicit = args.output_dir is not None
+    if args.output_dir is None:
+        args.output_dir = ROOT/"results/numerical/contract_improvement"
+    if args.stage == "profile" or args.stage.startswith("artifact-"):
+        if not args.output_dir_explicit:
+            parser.error(f"--stage {args.stage} requires an explicit --output-dir")
+    if args.stage == "profile":
+        thread_counts = tuple(int(value) for value in args.profile_threads.split(","))
+        if not thread_counts or any(value <= 0 for value in thread_counts):
+            parser.error("--profile-threads must be comma-separated positive integers")
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        path = args.output_dir/"campaign.json"
+        report = read_json(path) if path.exists() else {"stages": {}}
+        report["performance"] = profile_artifact_runtime(args.output_dir, thread_counts)
+        report.setdefault("stages", {})["profile"] = "measured"
+        atomic_json(path, report)
+        record_successful_cli(path, "profile")
+        print(f"PROFILE selected intra-op threads={report['performance']['selected_threads']}", flush=True)
+        return 0
+
+    configure_runtime()
+    if args.stage == "artifact-prepare":
+        ArtifactCompiler(args).prepare_initial_artifacts()
+        record_successful_cli(args.output_dir/"campaign.json", "artifact-prepare-factor-candidates")
+        return 0
+    if args.stage == "artifact-factor-quick":
+        campaign = ArtifactCampaign(args)
+        campaign.run_factor_quick()
+        record_successful_cli(args.output_dir/"campaign.json", "artifact-factor-quick")
+        return 0
+    if args.stage == "artifact-prepare-combined":
+        ArtifactCompiler(args).prepare_combined_candidate()
+        record_successful_cli(args.output_dir/"campaign.json", "artifact-prepare-combined-candidate")
+        return 0
+    if args.stage == "artifact-prepare-diagnostics":
         try:
-            with safe_open(str(weights_path), framework="pt", device="cpu") as bundle:
-                keys = bundle.keys()
-                byte_count = 0
-                wrong_dtype = []
-                for key in keys:
-                    view = bundle.get_slice(key)
-                    shape = view.get_shape()
-                    if view.get_dtype() != "I8":
-                        wrong_dtype.append(key)
-                    byte_count += math.prod(shape)
-                if len(keys) != prepared.get("matrices"):
-                    errors.append("prepared weight matrix count does not match weights.safetensors")
-                if byte_count != prepared.get("payload_bytes"):
-                    errors.append("prepared weight payload count does not match weights.safetensors")
-                if wrong_dtype:
-                    errors.append("prepared weights are not all signed INT8")
+            prepare_fp32_diagnostic_rows(args)
         except Exception as exc:
-            errors.append(f"weights.safetensors cannot be read: {exc}")
-
-    combinations = report.get("combinations", {})
-    for name, entry in combinations.items():
-        directory = output_dir / name
-        config_path = directory / "config.json"
-        coefficient_path = directory / "coefficients.safetensors"
-        validation = entry.get("coefficient_bundle_validation") if isinstance(entry, dict) else None
-        if not isinstance(validation, dict) or validation.get("status") != "passed":
-            errors.append(f"{name}: runtime coefficient equality check is missing")
-        if not config_path.is_file() or config_path.stat().st_size == 0:
-            errors.append(f"{name}: config.json is missing or empty")
+            record_failed_cli(args.output_dir/"campaign.json", "artifact-prepare-diagnostics", exc)
+            raise
+        record_successful_cli(args.output_dir/"campaign.json", "artifact-prepare-diagnostics")
+        return 0
+    if args.stage in ("artifact-baseline", "artifact-quick", "artifact-full", "artifact-qualify"):
+        campaign = ArtifactCampaign(args)
+        if args.stage == "artifact-baseline":
+            campaign.run_baseline()
+            phase = "artifact-baseline"
+        elif args.stage == "artifact-quick":
+            try:
+                campaign.run_combined_quick()
+            except Exception as exc:
+                record_failed_cli(args.output_dir/"campaign.json", "artifact-quick", exc)
+                raise
+            phase = "artifact-quick"
+        elif args.stage == "artifact-full":
+            campaign.run_combined_full_ppl()
+            phase = "artifact-full-ppl"
         else:
             try:
-                config = read_json(config_path)
-                if config.get("quality_status") != entry.get("status"):
-                    errors.append(f"{name}: exported quality status does not match qualification")
-                if config.get("weights") != "../weights.safetensors":
-                    errors.append(f"{name}: exported config has no valid shared weights mapping")
-                elif not (directory/config["weights"]).is_file():
-                    errors.append(f"{name}: shared weight mapping does not resolve to an artifact")
-                if config.get("coefficients") != "coefficients.safetensors":
-                    errors.append(f"{name}: exported config has no valid coefficient mapping")
-                if not isinstance(config.get("frozen_source_qparams"), str) or not (directory/config["frozen_source_qparams"]).is_file():
-                    errors.append(f"{name}: frozen source qparams mapping does not resolve to an artifact")
-                if not isinstance(config.get("formats"), dict) or not config["formats"]:
-                    errors.append(f"{name}: exported format mapping is missing")
-                if config.get("software_adapter_role") != "host_preparation_simulator":
-                    errors.append(f"{name}: exported software adapter role is missing")
-                if config.get("software_adapter_loads_coefficient_bundle") is not False:
-                    errors.append(f"{name}: adapter bundle-loading status is ambiguous")
-                if config.get("coefficient_bundle_validation") != "export tensors are checked against deterministic runtime multiplier/table compilation":
-                    errors.append(f"{name}: exported runtime coefficient check description is missing")
+                campaign.run_combined_qualification()
             except Exception as exc:
-                errors.append(f"{name}: config.json cannot be read: {exc}")
-        if not coefficient_path.is_file() or coefficient_path.stat().st_size == 0:
-            errors.append(f"{name}: coefficients.safetensors is missing or empty")
-        else:
-            try:
-                with safe_open(str(coefficient_path), framework="pt", device="cpu") as bundle:
-                    if not bundle.keys():
-                        errors.append(f"{name}: coefficients.safetensors contains no tensors")
-            except Exception as exc:
-                errors.append(f"{name}: coefficients.safetensors cannot be read: {exc}")
-    if errors:
-        raise RuntimeError("export artifacts are incomplete: " + "; ".join(errors))
+                record_failed_cli(args.output_dir/"campaign.json", "artifact-qualification", exc)
+                raise
+            phase = "artifact-qualification"
+        record_successful_cli(args.output_dir/"campaign.json", phase)
+        return 0
+    parser.error(f"unsupported stage: {args.stage}")
 
-
-def runtime_coefficient_bundle(config, formats, coefficient_sources, epsilon_values):
-    """Recompile exactly the integer coefficients/tables consumed at runtime."""
-    bits = config["coefficient_bits"]
-    result = {}
-    for key, value in coefficient_sources.items():
-        multiplier, shift = encode_multiplier(value, bits)
-        result[key+".M"] = multiplier.to(torch.int32).contiguous()
-        result[key+".shift"] = shift_container(shift)
-
-    rope_bits = config["nonlinear"]["rope"]["coefficient_bits"]
-    cosine, sine = rope_rom(rope_bits)
-    result["rope.cos"] = cosine.to(torch.int8 if rope_bits == 8 else torch.int16)
-    result["rope.sin"] = sine.to(torch.int8 if rope_bits == 8 else torch.int16)
-
-    softmax = config["nonlinear"]["softmax"]
-    result["softmax.exp_lut"] = softmax_lut(softmax["c"], softmax["entries"]).to(torch.uint8)
-    rms = config["nonlinear"]["rms"]
-    seed_entries = rms.get("seed_entries", 64)
-    result["rms.seed_lut"] = rms_seed_lut(seed_entries).to(torch.int16)
-    for name, value in epsilon_values.items():
-        result[name+".epsilon"] = torch.tensor(value, dtype=torch.int32)
-
-    pwl_options = config["nonlinear"]["silu"]
-    table = fit_silu(pwl_options["segments"], pwl_options.get("threshold", 8), bits)
-    compiled_tables = {}
-    for name in (f"model.layers.{index}.mlp" for index in range(30)):
-        input_spec, output_spec = formats[name+".gate_proj.output"], formats[name+".silu_output"]
-        input_format = Format(input_spec["bits"], input_spec["scale"], input_spec.get("axis"), not input_spec["signed"])
-        output_format = Format(output_spec["bits"], output_spec["scale"], output_spec.get("axis"), not output_spec["signed"])
-        compiled = compile_silu(input_format.scale, output_format, table, bits)
-        compiled_tables[name] = compiled
-        for key, value in compiled.items():
-            result[name+".pwl."+key] = (shift_container(value) if key == "shifts"
-                                         else torch.tensor(value, dtype=torch.int32))
-    return result, table, compiled_tables
-
-
-def require_runtime_bundle_match(config, exported_config, coefficient_sources, epsilon_values, bundle):
-    expected, expected_reference, expected_compiled = runtime_coefficient_bundle(
-        config, exported_config["formats"], coefficient_sources, epsilon_values)
-    if set(bundle) != set(expected):
-        missing = sorted(set(expected)-set(bundle))
-        extra = sorted(set(bundle)-set(expected))
-        raise RuntimeError(f"runtime coefficient bundle key mismatch; missing={missing[:4]}, extra={extra[:4]}")
-    mismatches = [key for key, value in expected.items()
-                  if value.dtype != bundle[key].dtype or value.shape != bundle[key].shape
-                  or not torch.equal(value, bundle[key])]
-    if mismatches:
-        raise RuntimeError("exported coefficients differ from runtime compilation: " + ", ".join(mismatches[:8]))
-    if exported_config.get("pwl_reference") != expected_reference:
-        raise RuntimeError("exported PWL reference differs from the runtime fitter")
-    if exported_config.get("pwl_compiled") != expected_compiled:
-        raise RuntimeError("exported PWL tables differ from the runtime compiler")
-
-
-def selection_summary(qualified):
-    dimensions = ("boundary_payload_bytes_per_512", "runtime_coefficient_bundle_bytes",
-                  "maximum_boundary_container_bits")
-    pareto = []
-    for name, entry in qualified.items():
-        resource = entry["resources"]
-        dominated = any(
-            all(other["resources"][dimension] <= resource[dimension] for dimension in dimensions)
-            and any(other["resources"][dimension] < resource[dimension] for dimension in dimensions)
-            for other_name, other in qualified.items() if other_name != name)
-        if not dominated:
-            pareto.append(name)
-    return {"qualified": list(qualified), "pareto": pareto,
-            "default": min(pareto, key=lambda name: qualified[name]["resources"]["boundary_payload_bytes_per_512"]) if pareto else None,
-            "basis": "minimum boundary payload among measured non-dominated qualified alternatives; no synthesis-area claim"}
-
-
-class Campaign:
+class ArtifactCompiler:
     def __init__(self, args):
         self.args = args
         args.output_dir.mkdir(parents=True, exist_ok=True)
         self.path = args.output_dir/"campaign.json"
         self.report = read_json(self.path) if self.path.exists() else {
-            "backend": "stage_specific_integer_contract_simulation",
-            "large_reduction_backends":{"isolated":"frozen FP32 reference MACs",
-                                        "combined":"exact integer sums via FP64 with absolute-product bounds <2**53"},
-            "heldout_used": False, "seed": 1234, "threads": 1,
-            "thresholds": {"ppl_relative_to_fp32_max": .05, "piqa_drop_max": .02},
-            "stages": {}, "isolated": {}, "family": {}, "combinations": {}}
+            "backend": "artifact_only_integer_code_execution; PyTorch CPU FP64 exact-code GEMM",
+            "heldout_used": False, "seed": 1234, "threads": 1, "stages": {}}
         self.started = time.monotonic()
         self.selection = read_json(ROOT/"data/wikitext_selection.json")
-        self.questions = read_json(ROOT/"data/piqa_selection.json")
-        self.cases = read_json(ROOT/"data/cache_cases.json")
-        self.reference = read_json(ROOT/"results/ptq/fp32.json")
-        self.model, self.tokenizer = load_model(source_snapshot(args.cache_dir, args.offline))
+        self.model, _ = load_model(source_snapshot(args.cache_dir, args.offline))
         candidate = ROOT/"candidates/w8a12kv8_smoothquant"
         self.baseline = PTQAdapter(self.model, read_json(candidate/"config.json"))
         self.baseline.load_qparams(candidate/"qparams.safetensors", recompute_weights=False)
         full_signed_range(self.baseline)
         self.baseline.set_mode("quantize")
+        self.shared_weights = prepare_shared_weights(self.baseline, args.output_dir)
         self.statistics = read_json(ROOT/"results/numerical/intermediate_calibration.json")["points"]
+        frozen_high = read_json(ROOT/"results/numerical/contract_search/combined_high/config.json")
+        self.frozen_nonlinear = deepcopy(frozen_high["nonlinear"])
+        self.frozen_silu_table = deepcopy(frozen_high["pwl_reference"])
+        self.prepared_baseline_config = None
+        self.prepared_baseline_coefficients = {}
+        self._cache_prepared_baseline()
         self.adapter = ContractAdapter(self.model, self.baseline, self.statistics)
         self.report.setdefault("environment", environment())
-        self.report["backend"] = "stage_specific_integer_contract_simulation"
-        self.report.setdefault("large_reduction_backends",{"isolated":"frozen FP32 reference MACs",
-            "combined":"exact integer sums via FP64; absolute product sums <2**53"})
+        self.report["backend"] = "artifact_only_integer_code_execution; PyTorch CPU FP64 exact-code GEMM"
+        prepared_weights = self.report.setdefault("prepared_weights", {})
+        prepared_weights.update({
+            "path":_workspace_path(self.shared_weights),
+            "matrices":len(self.baseline.weights),
+            "payload_bytes":sum(weight.numel() for weight in self.baseline.weights.values()),
+            "preparation":"full-signed frozen baseline FQ codes; no FP64 source re-quantization",
+        })
+        self.report["reproduction"] = reproduction_protocol(self.shared_weights)
+
+    def _refresh_prepared_weight_reference(self, config_path):
+        config_path = Path(config_path)
+        if not config_path.is_file():
+            return
+        config = read_json(config_path)
+        relative = Path(os.path.relpath(self.shared_weights.resolve(), config_path.parent.resolve())).as_posix()
+        if config.get("weights") != relative:
+            config["weights"] = relative
+            atomic_json(config_path, config)
+
+    def _cache_prepared_baseline(self):
+        config_path = self.args.output_dir/"artifacts/combined_high/config.json"
+        if not config_path.is_file():
+            return
+        self.prepared_baseline_config = read_json(config_path)
+        coefficients_path = config_path.parent/self.prepared_baseline_config["coefficients"]
+        self.prepared_baseline_coefficients = load_file(str(coefficients_path),device="cpu")
 
     def save(self):
         self.report["last_session_seconds"] = round(time.monotonic()-self.started, 3)
         atomic_json(self.path, self.report)
 
-    @contextmanager
-    def native_reference(self):
-        current = [(module,module.forward) for module,_ in self.adapter.bindings]
-        for module,original in reversed(self.adapter.bindings): module.forward = original
-        try:
-            with self.baseline.native(): yield
-        finally:
-            for module,forward in current: module.forward = forward
+    def prepare_artifact(self, config, output_dir, shared_weights):
+        """Compile exact frozen scale ratios once, then serialize runtime inputs."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        config = deepcopy(config)
+        config.pop("formats", None)  # a width or policy edit must regenerate scales
+        self.adapter.set_trial({**config, "metrics":False, "check_mac":False})
+        formats = {name: fmt.dictionary() for name, fmt in self.adapter.formats.items()}
+        bundle, coefficient_sources = {}, {}
+        scale_bits = int(config.get("scale_rescale_bits", 24))
+        nonlinear_bits = int(config.get("coefficient_bits", 24))
+        if scale_bits not in (16, 24) or nonlinear_bits != 24:
+            raise ValueError("this campaign permits scale M16/M24; nonlinear coefficient precision stays 24")
+        frozen = self.frozen_nonlinear
+        trial_nonlinear = config["nonlinear"]
+        trial_rms = trial_nonlinear.get("rms", {})
+        if (trial_rms.get("seed_entries", 64) != 64
+                or trial_rms.get("t_fractional_bits", 40) != 40
+                or trial_nonlinear.get("rope", {}).get("coefficient_bits") != frozen["rope"]["coefficient_bits"]
+                or trial_nonlinear.get("softmax", {}) != frozen["softmax"]
+                or trial_nonlinear.get("silu", {}) != frozen["silu"]):
+            raise ValueError("only the combined_high nonlinear configuration is allowed in this campaign")
 
-    def trial(self, name, *, points=None, nonlinear=None, integer=False, coefficient_bits=24):
-        return {"name": name, "points": points or {}, "nonlinear": nonlinear or {},
-                "integer_coefficients": integer, "coefficient_bits": coefficient_bits,
-                "metrics": True}
+        use_frozen_artifacts = (config.get("name") != "combined_high"
+                                and self.prepared_baseline_config is not None)
+        reused_fixed_tensors = 0
+        if use_frozen_artifacts:
+            for name,value in self.prepared_baseline_coefficients.items():
+                if (name.startswith(("rope.","softmax.","rms.")) or name.endswith(".epsilon")):
+                    bundle[name] = value.clone()
+                    reused_fixed_tensors += 1
 
-    def quick(self, config, records=None):
-        self.adapter.set_trial(config)
-        started = time.monotonic()
-        parts = []
-        with torch.inference_mode():
-            for record in self.selection[:1] if records is None else records:
-                logits = full_logits(self.model, record["input_ids"])
-                parts.append(score_targets(logits, record["input_ids"]))
-        nll, tokens = sum(p[0] for p in parts), sum(p[1] for p in parts)
-        result = {"nll": nll, "tokens": tokens, "ppl": math.exp(nll/tokens),
-                  "seconds": round(time.monotonic()-started, 3),
-                  "metrics": deepcopy(self.adapter.point_metrics)}
-        if "baseline" in self.report:
-            baseline = self.report["baseline"]["ppl"]["per_window"][:len(parts)]
-            reference_nll = sum(v["nll"] for v in baseline)
-            result["delta_mean_nll"] = (nll-reference_nll)/tokens
-            result["relative_ppl_change_vs_frozen"] = math.expm1(result["delta_mean_nll"])
-        print(f"{config['name']}: PPL={result['ppl']:.6f}, dNLL={result.get('delta_mean_nll',0):+.6g}, {result['seconds']:.2f}s", flush=True)
-        return result
+        def coefficient(key, value):
+            value = torch.as_tensor(value, dtype=torch.float64)
+            coefficient_sources[key] = value.clone()
+            bits = coefficient_precision(key, scale_bits, nonlinear_bits)
+            multiplier, shift = encode_multiplier(value, bits)
+            bundle[key+".M"] = multiplier.to(torch.int32).contiguous()
+            bundle[key+".shift"] = shift_container(shift)
 
-    def replay_stage(self):
-        if self.report["stages"].get("replay") == "measured":
-            return
-        self.adapter.set_trial(self.trial("local_replay_capture"))
-        self.adapter.collect_replay = True
-        self.quick(self.adapter.trial)
-        self.adapter.collect_replay = False
-        rows = {}
-        for name, value in self.adapter.replay.items():
-            row = {}
-            for bits in (8, 12, 16, 24):
-                fmt = self.adapter.make_format(name, {"bits": bits})
-                q, raw = encode(value, fmt)
-                reconstructed = decoded(q, fmt)
-                error = reconstructed.double()-value.double()
-                row[str(bits)] = {"mse": float(error.square().mean()), "max_abs_error": float(error.abs().max()),
-                    "zero_fraction": float((q == 0).double().mean()),
-                    "clip_fraction": float(((raw < fmt.bounds[0]) | (raw > fmt.bounds[1])).double().mean())}
-            source = self.adapter.make_format(name, {"bits": 24})
-            source_q = encode(value, source)[0]
-            target = self.adapter.make_format(name, {"bits": 8})
-            ratio = source.broadcast(value)/target.broadcast(value)
-            oracle = torch.round(source_q.double()*ratio).long().clamp(*target.bounds)
-            row["coefficient_precision"] = {}
-            for bits in (16, 24, 31):
-                got = rescale(source_q, ratio, bits).clamp(*target.bounds)
-                row["coefficient_precision"][str(bits)] = {"different_codes": int((got != oracle).sum()),
-                                                          "elements": got.numel(), "max_code_error": int((got-oracle).abs().max())}
-            rows[name] = row
-        self.report["local_replay"] = rows
-        self.report["stages"]["replay"] = "measured"
-        self.adapter.replay.clear()
-        self.save()
-
-    def isolated_stage(self):
-        rows = self.report["isolated"].setdefault("boundaries", {})
-        for i, (name, family) in enumerate(self.adapter.inventory.items()):
-            row = rows.setdefault(name, {"family": family, "trials": {}})
-            for bits in (8, 12, 16):
-                key = str(bits)
-                if key not in row["trials"]:
-                    row["trials"][key] = self.quick(self.trial(f"point:{i+1}/{len(self.adapter.inventory)}:{name}:{bits}", points={name: {"bits": bits}}))
-                    self.save()
-                if row["trials"][key]["delta_mean_nll"] <= .0005:
-                    break
-            if family == "residual" and row["trials"]["8"]["delta_mean_nll"] > .0005:
-                for bits in (8, 12):
-                    key = f"per_channel_{bits}"
-                    if key not in row["trials"]:
-                        row["trials"][key] = self.quick(self.trial(f"point:{name}:{key}", points={name:{"bits":bits,"policy":"per_channel"}}))
-                        self.save()
-                    if row["trials"][key]["delta_mean_nll"] <= .0005:
-                        break
-        nl = self.report["isolated"].setdefault("nonlinear", {})
-        instances = []
+        rope_bits = config["nonlinear"]["rope"]["coefficient_bits"]
+        if not use_frozen_artifacts:
+            cosine, sine = rope_rom(rope_bits)
+            bundle["rope.cos"] = cosine.to(torch.int8 if rope_bits == 8 else torch.int16)
+            bundle["rope.sin"] = sine.to(torch.int8 if rope_bits == 8 else torch.int16)
+        softmax = config["nonlinear"]["softmax"]
+        if not use_frozen_artifacts:
+            bundle["softmax.exp_lut"] = softmax_lut(softmax["c"], softmax["entries"]).to(torch.uint8)
+        rms_options = config["nonlinear"]["rms"]
+        seed_entries = rms_options.get("seed_entries", 64)
+        if not use_frozen_artifacts:
+            bundle["rms.seed_lut"] = rms_seed_lut(seed_entries).to(torch.int16)
+        table = deepcopy(self.frozen_silu_table)
+        if config.get("pwl_reference") not in (None, table):
+            raise ValueError("SiLU reference must match the frozen combined_high table")
+        reused_silu_layers = 0
+        recompiled_silu_layers = 0
+        aligned_norms = {}
+        incoming = {}
         for name, module in self.model.named_modules():
-            if name.endswith(("input_layernorm", "post_attention_layernorm")) or name == "model.norm":
-                instances.append((name, {"seed_entries":64}, "rms"))
-        for i in range(30):
-            prefix = f"model.layers.{i}"
-            instances += [(prefix+".self_attn.rope", {"coefficient_bits":16}, "rope"),
-                          (prefix+".self_attn.softmax", {"c":8,"entries":32,"probability_bits":8}, "softmax"),
-                          (prefix+".mlp.silu", {"segments":16,"threshold":8}, "silu")]
-        for name, options, family in instances:
-            if name not in nl:
-                nl[name] = {"family":family, "options":options,
-                            **self.quick(self.trial(f"nonlinear:{name}", nonlinear={name:options}))}
-                self.save()
-        self.report["stages"]["isolated"] = "measured"
-        self.save()
+            if isinstance(module, torch.nn.Linear):
+                activation_scale = self.baseline.points[name+".input"].fq.scale.double()
+                smoothing = self.baseline.smooth_scales.get(name, torch.tensor(1.)).double()
+                if name == "lm_head":
+                    source = "model.norm.output"
+                elif name.endswith(("q_proj", "k_proj", "v_proj")):
+                    source = name.rsplit(".self_attn.", 1)[0]+".input_layernorm.output"
+                elif name.endswith("o_proj"):
+                    source = name.rsplit(".", 1)[0]+".context"
+                elif name.endswith(("gate_proj", "up_proj")):
+                    source = name.rsplit(".mlp.", 1)[0]+".post_attention_layernorm.output"
+                else:
+                    source = name.rsplit(".", 1)[0]+".gate_product"
+                source_scale = torch.as_tensor(self.adapter.formats[source].scale, dtype=torch.float64)
+                incoming[name] = source
+                coefficient(name+".smooth", source_scale/(smoothing*activation_scale))
+                weight_name = "shared_embedding_lm_head.weight" if name == "lm_head" else name+".weight"
+                raw_scale = activation_scale*self.baseline.points[weight_name].fq.scale.double()
+                if name+".output" in self.adapter.formats:
+                    target_scale = torch.as_tensor(self.adapter.formats[name+".output"].scale, dtype=torch.float64)
+                    coefficient(name+".output", raw_scale/target_scale)
+                if name.endswith("v_proj"):
+                    cache_scale = self.baseline.points[name.removesuffix("v_proj")+"value_post_projection"].fq.scale.double().repeat_interleave(64)
+                    coefficient(name+".to_v_cache", raw_scale/cache_scale)
+            elif name.endswith(("input_layernorm", "post_attention_layernorm")) or name == "model.norm":
+                if name == "model.norm":
+                    source = f"model.layers.{len(self.model.model.layers)-1}.residual_after_ffn"
+                elif name.endswith("post_attention_layernorm"):
+                    source = name.removesuffix("post_attention_layernorm")+"residual_after_attention"
+                else:
+                    layer = int(name.split(".")[2])
+                    source = "model.embed_tokens.output" if layer == 0 else f"model.layers.{layer-1}.residual_after_ffn"
+                fmt = self.adapter.formats[source]
+                if fmt.axis is not None:
+                    aligned = self.adapter.make_format(source, {"bits":24})
+                    coefficient(name+".align_input", torch.as_tensor(fmt.scale, dtype=torch.float64)/float(aligned.scale))
+                else:
+                    aligned = fmt
+                aligned_norms[name] = {"source":source, **aligned.dictionary()}
+                delta = float(aligned.scale)
+                ft = rms_options.get("t_fractional_bits", 40)
+                coefficient(name+".to_t", delta*delta*(1 << ft)/int(self.model.config.hidden_size))
+                coefficient(name+".gamma_output", module.weight.detach().double()*delta/float(self.adapter.formats[name+".output"].scale))
+                epsilon = max(1, round(module.variance_epsilon*(1 << ft)))
+                bundle[name+".epsilon"] = torch.tensor(epsilon, dtype=torch.int32)
+        embedding_scale = self.baseline.points["shared_embedding_lm_head.weight"].fq.scale.double()
+        coefficient("embedding.to_residual", embedding_scale/float(self.adapter.formats["model.embed_tokens.output"].scale))
+        for index in range(len(self.model.model.layers)):
+            prefix = f"model.layers.{index}.mlp"
+            gate_format, silu_format = self.adapter.formats[prefix+".gate_proj.output"], self.adapter.formats[prefix+".silu_output"]
+            baseline_formats = (self.prepared_baseline_config or {}).get("formats", {})
+            gate_name, silu_name = prefix+".gate_proj.output", prefix+".silu_output"
+            same_silu_scales = (use_frozen_artifacts
+                and np.array_equal(np.asarray(formats[gate_name]["scale"]),
+                                   np.asarray(baseline_formats.get(gate_name,{}).get("scale")))
+                and np.array_equal(np.asarray(formats[silu_name]["scale"]),
+                                   np.asarray(baseline_formats.get(silu_name,{}).get("scale"))))
+            pwl_fields = ("breakpoints","slopes","intercepts","shifts")
+            positive_prefix = prefix+".pwl.positive"
+            if same_silu_scales and all(prefix+".pwl."+field in self.prepared_baseline_coefficients
+                                        for field in pwl_fields):
+                for field in pwl_fields:
+                    name = prefix+".pwl."+field
+                    bundle[name] = self.prepared_baseline_coefficients[name].clone()
+                for suffix in (".M",".shift"):
+                    name = positive_prefix+suffix
+                    bundle[name] = self.prepared_baseline_coefficients[name].clone()
+                reused_silu_layers += 1
+            else:
+                pwl = compile_silu(gate_format.scale, silu_format, table, nonlinear_bits)
+                for field, value in pwl.items():
+                    bundle[prefix+".pwl."+field] = (shift_container(value) if field == "shifts"
+                        else torch.tensor(value, dtype=torch.int32))
+                coefficient(positive_prefix, float(gate_format.scale)/float(silu_format.scale))
+                recompiled_silu_layers += 1
+            coefficient(prefix+".product", float(silu_format.scale)*float(self.adapter.formats[prefix+".up_proj.output"].scale)/float(self.adapter.formats[prefix+".gate_product"].scale))
+            attention = f"model.layers.{index}.self_attn"
+            qpre = torch.as_tensor(self.adapter.formats[attention+".q_proj.output"].scale, dtype=torch.float64).reshape(int(self.model.config.num_attention_heads), -1)[:, 0]
+            kpre = torch.as_tensor(self.adapter.formats[attention+".k_proj.output"].scale, dtype=torch.float64).reshape(3, -1)[:, 0]
+            qpost = torch.as_tensor(self.adapter.formats[attention+".query_post_rope"].scale, dtype=torch.float64)
+            kcache = self.baseline.points[attention+".key_post_rope"].fq.scale.double()
+            vcache = self.baseline.points[attention+".value_post_projection"].fq.scale.double()
+            score = torch.as_tensor(self.adapter.formats[attention+".score"].scale, dtype=torch.float64)
+            coefficient(attention+".q_rope_to_qk", qpre/qpost)
+            coefficient(attention+".k_rope_to_cache", kpre/kcache)
+            coefficient(attention+".qk_to_score", qpost*kcache.repeat_interleave(3)/8/score)
+            coefficient(attention+".score_to_index", score*(softmax["entries"]-1)/softmax["c"])
+            probability_denominator = (1 << softmax["probability_bits"])-1
+            coefficient(attention+".pv_to_context", vcache.repeat_interleave(3)/probability_denominator/float(self.adapter.formats[attention+".context"].scale))
+            layer = f"model.layers.{index}"
+            for target, left, right in (
+                (layer+".residual_after_attention", "model.embed_tokens.output" if index == 0 else f"model.layers.{index-1}.residual_after_ffn", attention+".o_proj.output"),
+                (layer+".residual_after_ffn", layer+".residual_after_attention", prefix+".down_proj.output")):
+                target_scale = torch.as_tensor(self.adapter.formats[target].scale, dtype=torch.float64)
+                coefficient(target+".left_to_guard", torch.as_tensor(self.adapter.formats[left].scale, dtype=torch.float64)/target_scale*(1 << 20))
+                coefficient(target+".right_to_guard", torch.as_tensor(self.adapter.formats[right].scale, dtype=torch.float64)/target_scale*(1 << 20))
+        model_config = self.model.config
+        geometry = {"layers":len(self.model.model.layers), "hidden_size":int(model_config.hidden_size),
+                    "intermediate_size":int(model_config.intermediate_size), "vocab_size":int(model_config.vocab_size),
+                    "query_heads":int(model_config.num_attention_heads), "kv_heads":int(model_config.num_key_value_heads),
+                    "head_dim":int(model_config.head_dim), "rope_theta":float(model_config.rope_theta),
+                    "max_positions":512}
+        if geometry != {"layers":30,"hidden_size":576,"intermediate_size":1536,
+                        "vocab_size":49152,"query_heads":9,"kv_heads":3,
+                        "head_dim":64,"rope_theta":100000.0,"max_positions":512}:
+            raise ValueError(f"model geometry differs from the reviewed contract: {geometry}")
+        prepared = {**config, "formats":formats, "model":geometry,
+                    "artifact_format":"tinyllm_integer_contract_v1",
+                    "scale_rescale_bits":scale_bits,
+                    "scale_rescale_multiplier_keys":sorted(name for name in coefficient_sources if name.endswith(_SCALE_RESCALE_SUFFIXES)),
+                    "nonlinear_multiplier_bits":nonlinear_bits,
+                    "weights":Path(os.path.relpath(Path(shared_weights).resolve(), output_dir.resolve())).as_posix(),
+                    "coefficients":"coefficients.safetensors",
+                    "linear_input_sources":incoming,"aligned_norm_inputs":aligned_norms,
+                    "runtime_role":"artifact_only_integer_code_execution",
+                    "runtime_loads_source_checkpoint":False,"runtime_loads_source_qparams":False,
+                    "runtime_compiles_coefficients_or_tables":False,
+                    "preparation_reuse":{"fixed_rope_softmax_rms_tensor_count":reused_fixed_tensors,
+                        "frozen_silu_layers_reused":reused_silu_layers,
+                        "frozen_silu_layers_recompiled_for_changed_boundary_scale":recompiled_silu_layers},
+                    "nonlinear_contract":{"rms_t_fractional_bits":rms_options.get("t_fractional_bits",40),
+                        "rms_m_fractional_bits":16,"rms_u_fractional_bits":14,
+                        "rms_newton_steps":1,"residual_alignment_guard_bits":20}}
+        for stale in ("frozen_source_qparams", "software_adapter_role", "software_adapter_loads_coefficient_bundle",
+                      "coefficient_bundle_validation", "pwl_reference", "pwl_compiled"):
+            prepared.pop(stale, None)
+        save_file(bundle, str(output_dir/"coefficients.safetensors"))
+        write_json(output_dir/"config.json", prepared)
+        return output_dir/"config.json"
 
-    def family_stage(self):
-        trials = []
-        for family in sorted(set(self.adapter.inventory.values())):
-            points = {n:{"bits":8} for n, f in self.adapter.inventory.items() if f == family}
-            trials.append(self.trial(f"family:{family}:8", points=points))
-        trials += [self.trial("nonlinear:rms64", nonlinear={"rms":{"seed_entries":64}}),
-                   self.trial("nonlinear:rms64_t32", nonlinear={"rms":{"seed_entries":64,"t_fractional_bits":32}}),
-                   self.trial("nonlinear:rms64_t24", nonlinear={"rms":{"seed_entries":64,"t_fractional_bits":24}}),
-                   self.trial("nonlinear:rope16", nonlinear={"rope":{"coefficient_bits":16}}),
-                   self.trial("nonlinear:rope12", nonlinear={"rope":{"coefficient_bits":12}}),
-                   self.trial("nonlinear:rope8", nonlinear={"rope":{"coefficient_bits":8}})]
-        for c in (6, 8, 10):
-            trials.append(self.trial(f"nonlinear:softmax32_c{c}_p8", nonlinear={"softmax":{"entries":32,"c":c,"probability_bits":8}}))
-        trials += [self.trial("nonlinear:softmax32_c8_p12", nonlinear={"softmax":{"entries":32,"c":8,"probability_bits":12}}),
-                   self.trial("nonlinear:softmax32_c8_p16", nonlinear={"softmax":{"entries":32,"c":8,"probability_bits":16}})]
-        for segments, threshold in ((8,6),(16,8),(32,8)):
-            trials.append(self.trial(f"nonlinear:silu{segments}_t{threshold}", nonlinear={"silu":{"segments":segments,"threshold":threshold}}))
-        for config in trials:
-            name = config["name"]
-            if name not in self.report["family"]:
-                self.report["family"][name] = {"config":config, **self.quick(config, self.selection[:8])}
-                self.save()
-        soft = self.report["family"]
-        cutoff = min((6,8,10),key=lambda c:soft[f"nonlinear:softmax32_c{c}_p8"]["delta_mean_nll"])
-        if cutoff != 8:
-            for pb in (12,16):
-                config = self.trial(f"nonlinear:softmax32_c{cutoff}_p{pb}",nonlinear={"softmax":{"entries":32,"c":cutoff,"probability_bits":pb}})
-                if config["name"] not in soft:
-                    soft[config["name"]] = {"config":config,**self.quick(config,self.selection[:8])}
-                    self.save()
-        # Entries64 only when P precision alone leaves a material LUT error.
-        best32 = min((n for n in soft if n.startswith("nonlinear:softmax32") and n.endswith("p16")),key=lambda n:soft[n]["delta_mean_nll"])
-        if soft[best32]["delta_mean_nll"] > .002:
-            best_cutoff = soft[best32]["config"]["nonlinear"]["softmax"]["c"]
-            config = self.trial(f"nonlinear:softmax64_c{best_cutoff}_p16", nonlinear={"softmax":{"entries":64,"c":best_cutoff,"probability_bits":16}})
-            if config["name"] not in soft:
-                soft[config["name"]] = {"config":config, **self.quick(config,self.selection[:8])}
-                self.save()
-        soft_names = [n for n in soft if n.startswith("nonlinear:softmax") and n.endswith("p16")]
-        best = min(soft_names,key=lambda n:soft[n]["delta_mean_nll"])
-        best = min((n for n in soft_names if soft[n]["delta_mean_nll"] <= soft[best]["delta_mean_nll"]+.001),
-                   key=lambda n:soft[n]["config"]["nonlinear"]["softmax"]["entries"])
-        options = {**soft[best]["config"]["nonlinear"]["softmax"],"fused":True}
-        options.pop("probability_bits",None)
-        config = self.trial("nonlinear:softmax_fused",nonlinear={"softmax":options})
-        if config["name"] not in soft:
-            soft[config["name"]] = {"config":config,**self.quick(config,self.selection[:8])}
+    def prepare_baseline_artifact(self):
+        config_path = ROOT/"results/numerical/contract_search/combined_high/config.json"
+        output = self.args.output_dir/"artifacts/combined_high"
+        if (output/"config.json").is_file():
+            self._refresh_prepared_weight_reference(output/"config.json")
+            self.report.setdefault("artifact_preparation", {})["baseline"] = "reused exact prepared combined_high artifact"
+            self.report["artifact_preparation"]["weights_shared_from"] = _workspace_path(self.shared_weights)
+            self.report["stages"]["artifact_prepare"] = "complete"
+            self._cache_prepared_baseline()
             self.save()
-        rms_names = ("nonlinear:rms64_t24","nonlinear:rms64_t32","nonlinear:rms64")
-        viable = [n for n in rms_names if soft[n]["delta_mean_nll"] <= soft["nonlinear:rms64"]["delta_mean_nll"]+.001]
-        selected = min(viable,key=lambda n:soft[n]["config"]["nonlinear"]["rms"].get("t_fractional_bits",40))
-        ft = soft[selected]["config"]["nonlinear"]["rms"].get("t_fractional_bits",40)
-        config = self.trial(f"nonlinear:rms32_t{ft}",nonlinear={"rms":{"seed_entries":32,"t_fractional_bits":ft}})
-        if config["name"] not in soft:
-            soft[config["name"]] = {"config":config,**self.quick(config,self.selection[:8])}
-            self.save()
-        self.report["stages"]["family"] = "measured"
+            return output/"config.json"
+        started = time.monotonic()
+        self.prepare_artifact(read_json(config_path), output, self.shared_weights)
+        self.report["artifact_preparation"] = {
+            "baseline":"combined_high","weights_shared_from":_workspace_path(self.shared_weights),
+            "preparation_seconds":round(time.monotonic()-started,3),
+            "runtime_source_checkpoint":False,"runtime_source_qparams":False,
+            "scale_rescale_bits":24,"nonlinear_multiplier_bits":24}
+        self.report["stages"]["artifact_prepare"] = "complete"
+        self._cache_prepared_baseline()
         self.save()
+        return output/"config.json"
 
-    def build_combinations(self):
-        family = self.report["family"]
-        soft_names = [n for n in family if n.startswith("nonlinear:softmax") and n.endswith(("p12","p16"))]
-        soft_name = min(soft_names, key=lambda n: family[n]["delta_mean_nll"])
-        soft_options = deepcopy(family[soft_name]["config"]["nonlinear"]["softmax"])
-        rope_name = min((n for n in family if n.startswith("nonlinear:rope") and family[n]["delta_mean_nll"] <= .001), default="nonlinear:rope16", key=lambda n: family[n]["config"]["nonlinear"]["rope"]["coefficient_bits"])
-        silu_name = min((n for n in family if n.startswith("nonlinear:silu")),key=lambda n: family[n]["delta_mean_nll"])
-        nonlinear = {"rms":{"seed_entries":64}, "rope":deepcopy(family[rope_name]["config"]["nonlinear"]["rope"]),
-                     "softmax":soft_options,"silu":deepcopy(family[silu_name]["config"]["nonlinear"]["silu"])}
-        high = {n:{"bits":24 if f == "residual" else 16} for n,f in self.adapter.inventory.items()}
-        for n,f in self.adapter.inventory.items():
-            if f == "probability": high[n] = {"bits":soft_options["probability_bits"]}
-        candidates = [self.trial("combined_high", points=high, nonlinear=deepcopy(nonlinear), integer=True)]
-        candidates[0]["nonlinear"]["rope"] = {"coefficient_bits":16}
-        rms_names = [n for n in ("nonlinear:rms64_t24","nonlinear:rms64_t32","nonlinear:rms64")
-                     if family[n]["delta_mean_nll"] <= family["nonlinear:rms64"]["delta_mean_nll"]+.001]
-        rms_name = min(rms_names,key=lambda n:family[n]["config"]["nonlinear"]["rms"].get("t_fractional_bits",40))
-        nonlinear["rms"] = deepcopy(family[rms_name]["config"]["nonlinear"]["rms"])
-        seed32 = next(n for n in family if n.startswith("nonlinear:rms32_t"))
-        if family[seed32]["delta_mean_nll"] <= family[rms_name]["delta_mean_nll"]+.0005:
-            nonlinear["rms"] = deepcopy(family[seed32]["config"]["nonlinear"]["rms"])
-        low_soft = min((n for n in soft_names if family[n]["delta_mean_nll"] <= family[soft_name]["delta_mean_nll"]+.001),
-                       key=lambda n:(family[n]["config"]["nonlinear"]["softmax"]["entries"],family[n]["config"]["nonlinear"]["softmax"]["probability_bits"]))
-        nonlinear["softmax"] = deepcopy(family[low_soft]["config"]["nonlinear"]["softmax"])
-        low_silu = min((n for n in family if n.startswith("nonlinear:silu") and family[n]["delta_mean_nll"] <= family[silu_name]["delta_mean_nll"]+.001),
-                       key=lambda n:family[n]["config"]["nonlinear"]["silu"]["segments"])
-        nonlinear["silu"] = deepcopy(family[low_silu]["config"]["nonlinear"]["silu"])
-        chosen = {}
-        for name, row in self.report["isolated"]["boundaries"].items():
-            passing = [(key,result) for key,result in row["trials"].items() if result["delta_mean_nll"] <= .0005]
-            key = min(passing,key=lambda item:(int(item[0].split('_')[-1]),"per_channel" in item[0]))[0] if passing else "16"
-            chosen[name] = {"bits":int(key.split('_')[-1]), **({"policy":"per_channel"} if key.startswith("per_channel") else {})}
-            if row["family"] == "probability": chosen[name] = {"bits":nonlinear["softmax"]["probability_bits"]}
-        candidates.append(self.trial("combined_mixed",points=chosen,nonlinear=nonlinear,integer=True,coefficient_bits=16))
-        # Conservative exception set: do not spend the entire quality budget on
-        # individually small errors that add across thirty decoder layers.
-        guarded = deepcopy(chosen)
-        for name, spec in guarded.items():
-            row = self.report["isolated"]["boundaries"][name]
-            if spec["bits"] == 8 and row["trials"]["8"]["delta_mean_nll"] > .00003:
-                spec["bits"] = 12
-            if row["family"] == "residual" and self.statistics[name]["maximum"] > 1000:
-                spec.update({"bits":16,"policy":"per_channel"})
-        fused = deepcopy(nonlinear)
-        fused["softmax"] = deepcopy(family["nonlinear:softmax_fused"]["config"]["nonlinear"]["softmax"])
-        guarded = {name:spec for name,spec in guarded.items() if self.adapter.inventory[name] != "probability"}
-        candidates.append(self.trial("combined_guarded_fused",points=guarded,nonlinear=fused,integer=True))
-        for candidate in candidates:
-            candidate["mac_dtype"] = "float64"
-            candidate["mac_exactness_bound"] = "integer product absolute sums <2**53: Linear1536*2048*128; QK64*2**23*128; PV512*65535*128"
+    def improvement_candidates(self):
+        source = read_json(ROOT/"results/numerical/contract_search/combined_high/config.json")
+        source.pop("formats",None)
+        source["scale_rescale_bits"] = 24
+        candidates = []
+
+        def add(name, *, points=None, scale_bits=24):
+            config = deepcopy(source)
+            config["name"] = name
+            config["points"] = deepcopy(points if points is not None else source["points"])
+            config["scale_rescale_bits"] = scale_bits
+            config["integer_coefficients"] = True
+            config["metrics"] = False
+            candidates.append(config)
+
+        for bits in (20,18,16):
+            points = deepcopy(source["points"])
+            for name,family in self.adapter.inventory.items():
+                if family == "residual":
+                    points[name] = {"bits":bits}
+            add(f"residual_w{bits}",points=points)
+        boundary_families = sorted(set(self.adapter.inventory.values())-{"residual","probability"})
+        for family in boundary_families:
+            for bits in (12,8):
+                points = deepcopy(source["points"])
+                for name,current in self.adapter.inventory.items():
+                    if current == family:
+                        points[name] = {"bits":bits}
+                add(f"boundary_{family}_w{bits}",points=points)
+        add("scale_rescale_m16",scale_bits=16)
+        if len(candidates) > 35:
+            raise RuntimeError(f"initial Quick8 allocation exceeds the 35-config budget: {len(candidates)}")
         return candidates
 
-    def search_stage(self):
-        for config in self.build_combinations():
+    def prepare_initial_artifacts(self):
+        self.prepare_baseline_artifact()
+        entries = self.report.setdefault("prepared_candidate_artifacts", {})
+        names = []
+        for config in self.improvement_candidates():
             name = config["name"]
-            if name not in self.report["combinations"]:
-                config["check_mac"] = True
-                result = self.quick(config, self.selection[:8])
-                self.report["combinations"][name] = {"config":config,"quick":result,
-                                                        "mac_samples":deepcopy(self.adapter.mac_checks)}
-                self.adapter.mac_checks.clear()
-                self.save()
-        self.report["stages"]["search"] = "measured"
+            output = self.args.output_dir/"artifacts/screening"/name
+            if not (output/"config.json").is_file():
+                self.prepare_artifact(config, output, self.shared_weights)
+            else:
+                self._refresh_prepared_weight_reference(output/"config.json")
+            entries[name] = (output/"config.json").relative_to(self.args.output_dir).as_posix()
+            names.append(name)
+            print(f"PREPARED {name}", flush=True)
+        screening = self.report.setdefault("screening", {})
+        screening["initial_candidates"] = names
+        screening["initial_candidate_count"] = len(names)
+        self.report.pop("factor_artifact_retention", None)
+        self.report["stages"]["initial_candidate_prepare"] = "complete"
         self.save()
 
-    def qualify_stage(self):
-        # A stage with no actual candidates is not evidence of qualification.
-        require_search_candidates(self.report)
-        fp = self.reference
-        for name, entry in self.report["combinations"].items():
-            config = entry["config"]
-            self.adapter.set_trial({**config,"metrics":False,"check_mac":False})
-            if "full_ppl" not in entry:
-                entry["full_ppl"] = evaluate_ppl(self.model,self.selection)
-                entry["relative_ppl_increase_vs_fp32"] = entry["full_ppl"]["ppl"]/fp["ppl"]["ppl"]-1
-                entry["relative_ppl_increase_vs_frozen"] = entry["full_ppl"]["ppl"]/self.report["baseline"]["ppl"]["ppl"]-1
+    def prepare_combined_candidate(self):
+        if self.report.get("stages", {}).get("combined_candidate_prepare") == "complete":
+            relative = self.report.get("prepared_candidate_artifacts", {}).get(COMBINED_CANDIDATE)
+            if relative and (self.args.output_dir/relative).is_file():
+                self._refresh_prepared_weight_reference(self.args.output_dir/relative)
+                prepared = self.report.setdefault("artifact_preparation", {}).setdefault(
+                    COMBINED_CANDIDATE, {})
+                prepared["weights_shared_from"] = _workspace_path(self.shared_weights)
                 self.save()
-            if entry["relative_ppl_increase_vs_fp32"] > .05:
-                entry["status"] = "rejected_full_ppl"
-                self.save()
+                print(f"PREPARED {COMBINED_CANDIDATE} already exists; reusing its artifact", flush=True)
+                return self.args.output_dir/relative
+        existing = self.report.get("screening", {}).get("candidates", {}).get(COMBINED_CANDIDATE, {})
+        existing_quick = existing.get("quick", {})
+        if existing_quick.get("per_window"):
+            raise RuntimeError("this candidate already has Quick checkpoints; resume with --stage artifact-quick")
+        if self.report.get("stages", {}).get("factor_screen") != "measured":
+            raise RuntimeError("the completed 28-candidate factor Quick8 screen is required")
+        names = require_prepared_candidates(self.report, "initial_candidates", 28, 35, "factor")
+        require_completed_quick_batch(self.report, names, expected_ids=[row["id"] for row in self.selection[:8]])
+        if self.report.get("stages", {}).get("baseline_reproduction") != "measured":
+            raise RuntimeError("the previously reproduced artifact baseline is required")
+        factor_candidates = self.report.get("screening", {}).get("candidates", {})
+        forced_factor_references = {}
+        for factor_name in ("residual_w16", "scale_rescale_m16"):
+            quick = factor_candidates.get(factor_name, {}).get("quick", {})
+            delta = quick.get("delta_mean_nll_vs_combined_high")
+            if quick.get("status") != "complete" or not isinstance(delta, (int, float)) or not math.isfinite(delta):
+                raise RuntimeError(f"{factor_name}: required factor Quick8 evidence is missing")
+            forced_factor_references[factor_name] = {
+                "delta_mean_nll": delta, "relative_ppl_increase": math.expm1(delta)}
+        base = read_json(ROOT/"results/numerical/contract_search/combined_high/config.json")
+        config, widths = build_combined_candidate_config(base, self.adapter.inventory, factor_candidates)
+        output = self.args.output_dir/"artifacts"/COMBINED_CANDIDATE
+        path = self.prepare_artifact(config, output, self.shared_weights)
+        relative = path.relative_to(self.args.output_dir).as_posix()
+        self.report.setdefault("prepared_candidate_artifacts", {})[COMBINED_CANDIDATE] = relative
+        self.report.setdefault("screening", {})["combined_candidate_name"] = COMBINED_CANDIDATE
+        self.report["combined_candidate_selection"] = {
+            "candidate": COMBINED_CANDIDATE,
+            "criterion": "smallest tested width with math.expm1(delta_mean_nll_vs_combined_high) <= 0.01 on stored factor Quick8",
+            "factor_selector": "first 8 selection windows; each contains 512 input tokens and 511 targets",
+            "families": widths,
+            "forced": {"residual": {"bits": 16, "scale_policy": "per_tensor",
+                                      "factor_quick_reference": forced_factor_references["residual_w16"]},
+                       "product": {"bits": 16}, "residual_branch": {"bits": 16},
+                       "scale_rescale_coefficients": {"bits": 16,
+                                                       "factor_quick_reference": forced_factor_references["scale_rescale_m16"]},
+                       "nonlinear_coefficients": {"bits": 24, "configuration": "frozen combined_high"},
+                       "probability": {"bits": 12, "configuration": "frozen combined_high"}},
+            "nonlinear": deepcopy(config["nonlinear"]),
+            "nonlinear_refit": False,
+            "artifact": relative,
+            "quick_result_reused": False}
+        self.report.setdefault("stages", {})["combined_candidate_prepare"] = "complete"
+        self.report.setdefault("artifact_preparation", {})[COMBINED_CANDIDATE] = {
+            "source": "stored 28 factor Quick8 measurements and combined_high artifact config",
+            "scale_rescale_bits": 16, "nonlinear_multiplier_bits": 24,
+            "weights_shared_from": _workspace_path(self.shared_weights)}
+        self.report["approval_gate"] = {
+            "status": "combined_quick_pending",
+            "checkpoint": "combined candidate prepared; candidate Quick8 has not run",
+            "next_action": "run artifact-quick, then stop for user review before Full64",
+            "quick8_is_a_quality_gate": False}
+        self.save()
+        print(f"PREPARED {COMBINED_CANDIDATE}: {relative}", flush=True)
+        return path
+
+
+class ArtifactCampaign:
+    def __init__(self, args):
+        self.args = args
+        self.root = Path(args.output_dir)
+        self.path = self.root/"campaign.json"
+        self.report = read_json(self.path)
+        baseline_config = self.root/"artifacts/combined_high/config.json"
+        if baseline_config.is_file() and "baseline_resources" not in self.report:
+            self.report["baseline_resources"] = self._resources(baseline_config)
+        self.report.setdefault("reproduction", reproduction_protocol())
+        profile = self.report.get("performance", {})
+        if profile.get("status") != "measured":
+            raise RuntimeError("artifact thread profile must be measured before scoring")
+        self.threads = int(profile["selected_threads"])
+        torch.set_num_threads(self.threads)
+        self.started = time.monotonic()
+        self.selection = read_json(ROOT/"data/wikitext_selection.json")
+        self.questions = read_json(ROOT/"data/piqa_selection.json")
+        self.cases = read_json(ROOT/"data/cache_cases.json")
+        self.reference = read_json(ROOT/"results/ptq/fp32.json")
+        self.saved = read_json(ROOT/"results/numerical/contract_search/campaign.json")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            source_snapshot(args.cache_dir, args.offline), local_files_only=True, trust_remote_code=False)
+        self.report["backend"] = "artifact_only_integer_code_execution; PyTorch CPU FP64 exact-code GEMM"
+        self.report["threads"] = self.threads
+        self.report["teacher_model_loaded_during_measurement"] = False
+        self.report["ptq_adapter_loaded_during_measurement"] = False
+
+    def save(self):
+        self.report["last_session_seconds"] = round(time.monotonic()-self.started, 3)
+        atomic_json(self.path, self.report)
+
+    def ppl(self, runtime, owner, key, records):
+        row = owner.setdefault(key, {"status":"in_progress", "per_window":[]})
+        if row.get("status") == "complete":
+            return row
+        done = {item["id"] for item in row["per_window"]}
+        for record in records:
+            if record["id"] in done:
                 continue
-            if "piqa" not in entry:
-                entry["piqa"] = evaluate_piqa(self.model,self.questions)
-                entry["piqa_drop_vs_fp32"] = fp["piqa"]["accuracy"]-entry["piqa"]["accuracy"]
-                self.save()
-            if "cache" not in entry:
-                entry["cache"] = self.cache_diagnostics()
-                entry["cache_relative_ppl_increase"] = {
-                    regime: result["ppl"]/fp["cache"]["regimes"][regime]["ppl"]-1
-                    for regime,result in entry["cache"]["regimes"].items()}
-                for row,reference in zip(entry["cache"]["runs"],fp["cache"]["runs"]):
-                    row["relative_ppl_increase_vs_fp32"] = math.expm1((row["nll"]-reference["nll"])/row["tokens"])
-                self.save()
-            passed = entry["piqa_drop_vs_fp32"] <= .02 and max(entry["cache_relative_ppl_increase"].values()) <= .05
-            entry["status"] = "qualified_selection" if passed else "rejected_piqa_or_cache"
-            if "greedy" not in entry:
-                prompts = [record["input_ids"][:32] for record in self.selection[:2]]
-                if "greedy_fp32" not in self.report:
-                    with self.native_reference(): self.report["greedy_fp32"] = greedy(self.model,self.tokenizer,prompts,max_new=32)
-                entry["greedy"] = greedy(self.model,self.tokenizer,prompts,max_new=32)
-                self.save()
+            logits = full_logits(runtime, record["input_ids"])
+            nll, tokens = score_targets(logits, record["input_ids"])
+            row["per_window"].append({"id":record["id"], "nll":nll, "tokens":tokens})
+            del logits
+            print(f"ARTIFACT PPL {len(row['per_window'])}/{len(records)} {record['id']}", flush=True)
             self.save()
-        # Require a terminal, gate-consistent result and the relevant evidence
-        # for every candidate before persisting the stage as measured.
-        require_qualification(self.report)
-        self.report["stages"]["qualification"] = "measured"
+        row["per_window"].sort(key=lambda item: next(i for i,r in enumerate(records) if r["id"] == item["id"]))
+        row.update(aggregate_nll([(item["nll"], item["tokens"]) for item in row["per_window"]]))
+        row["windows"] = len(records)
+        row["status"] = "complete"
         self.save()
+        return row
 
-    def cache_diagnostics(self):
-        details = []
-        for case in self.cases:
-            record = self.selection[case["selection_index"]]
+    def piqa(self, runtime, owner, key, records):
+        row = owner.setdefault(key, {"status":"in_progress", "per_question":[]})
+        if row.get("status") == "complete":
+            return row
+        done = {item["id"] for item in row["per_question"]}
+        for record in records:
+            if record["id"] in done:
+                continue
+            scores, counts = [], []
+            for choice in record["choices"]:
+                logits = full_logits(runtime, choice["input_ids"])
+                nll, count = score_targets(logits, choice["input_ids"], choice["answer_start"])
+                scores.append(-nll)
+                counts.append(count)
+                del logits
+            prediction = choose_answer(scores)
+            row["per_question"].append({"id":record["id"], "label":record["label"],
+                "prediction":prediction, "log_likelihoods":scores, "answer_tokens":counts,
+                "correct":prediction == record["label"]})
+            self.save()
+            if len(row["per_question"]) % 25 == 0:
+                print(f"ARTIFACT PIQA {len(row['per_question'])}/{len(records)}", flush=True)
+        row["per_question"].sort(key=lambda item: next(i for i,r in enumerate(records) if r["id"] == item["id"]))
+        correct = sum(item["correct"] for item in row["per_question"])
+        row.update({"questions":len(records), "choices":2*len(records), "correct":correct,
+            "accuracy":correct/len(records), "answer_tokens":sum(sum(x["answer_tokens"]) for x in row["per_question"]),
+            "status":"complete"})
+        self.save()
+        return row
+
+    def cache(self, runtime, owner, key, selection, cases, reference_rows=None, reference_cases=None):
+        row = owner.setdefault(key, {"status":"in_progress", "runs":[]})
+        if row.get("status") == "complete":
+            return row
+        completed = {(item["id"], item["prefill"]) for item in row["runs"]}
+        total = sum(len(case["regimes"]) for case in cases)
+        reference_by_case = {}
+        if reference_rows is not None:
+            if reference_cases is None or len(reference_cases) != 16:
+                raise RuntimeError("fixed FP32 cache diagnostic rows are incomplete")
+            reference_by_case = {(item["id"], item["prefill"]): item for item in reference_cases}
+        for case_index, case in enumerate(cases):
+            record = selection[case["selection_index"]]
             for regime in case["regimes"]:
-                prefill,decode = regime["prefill"],regime["decode"]
+                prefill, decode = regime["prefill"], regime["decode"]
+                if (case["id"], prefill) in completed:
+                    continue
                 ids = record["input_ids"][:regime["input_length"]]
-                rows = sorted(set((0,prefill-1,prefill,len(ids)-2,len(ids)-1)))
-                with self.native_reference(): reference = full_logits(self.model,ids)[rows].numpy().copy()
-                full = full_logits(self.model,ids).numpy()
-                cached = cached_logits(self.model,ids,prefill)
-                nll,count = score_targets(cached,ids,prefill,prefill+decode)
-                full_nll,_ = score_targets(full,ids,prefill,prefill+decode)
-                difference = np.abs(full-cached)
-                changed = full != cached
-                delta_logits = float(self.adapter.formats["lm_head.output"].scale)
-                code_difference = np.rint(full[changed].astype(np.float64)/delta_logits)-np.rint(cached[changed].astype(np.float64)/delta_logits)
-                different_codes = int(np.count_nonzero(code_difference))
-                if different_codes:
-                    raise AssertionError(f"exact combined full/cache logit codes differ: {case['id']} prefill={prefill}, {different_codes} codes")
-                details.append({"id":case["id"],**regime,"nll":nll,"tokens":count,"full_nll":full_nll,
-                    "diagnostic_rows":rows,"full_fp32":distribution_diagnostic(reference,full[rows]),
-                    "cache_fp32":distribution_diagnostic(reference,cached[rows]),
-                    "full_cache":{"max_abs":float(difference.max()),"mean_abs":float(difference.mean()),
-                                  "row_top1_agreement":float((full.argmax(-1)==cached.argmax(-1)).mean()),
-                                  "different_logit_codes":different_codes,"logit_codes_bitwise_equal":different_codes == 0,
-                                  "logit_elements":int(full.size)}})
-                print(f"CONTRACT CACHE {case['id']} prefill={prefill} targets={count}",flush=True)
-        return {"runs":details,"regimes":{str(p):aggregate_nll([(v["nll"],v["tokens"]) for v in details if v["prefill"] == p]) for p in (32,448)},
-                **aggregate_nll([(v["nll"],v["tokens"]) for v in details])}
-
-    def export_stage(self):
-        # Do not prepare or expose candidate artifacts until qualification has
-        # actually finished for every combination.
-        require_qualification(self.report, require_stage=True)
-        weights_path = self.args.output_dir/"weights.safetensors"
-        if not weights_path.exists():
-            weights = {}
-            for weight_name,source in self.baseline.weights.items():
-                fmt = Format(8,self.baseline.points[weight_name].fq.scale.double().tolist(),0)
-                prepared = self.baseline.points[weight_name](self.baseline.effective_weight(weight_name))
-                weights[weight_name] = encode(prepared,fmt)[0].to(torch.int8).contiguous()
-            temporary = weights_path.with_suffix(".tmp")
-            save_file(weights,str(temporary),metadata={"preparation":"pinned full-signed frozen PyTorch FQ; recover exact integer codes", "shared_embedding_lm_head":"one tensor"})
-            temporary.replace(weights_path)
-            del weights
-        self.report["prepared_weights"] = {"path":"weights.safetensors","matrices":len(self.baseline.weights),
-            "payload_bytes":sum(w.numel() for w in self.baseline.weights.values()),
-            "preparation":"full-signed frozen baseline FQ codes; no FP64 source re-quantization"}
-        # Export all measured alternatives, including explicitly rejected ones,
-        # so their concrete format and resource costs can still be reviewed.
-        for name, entry in self.report["combinations"].items():
-            config = entry["config"]
-            self.adapter.set_trial(config)
-            formats = {n:f.dictionary() for n,f in self.adapter.formats.items()}
-            bundle = {}
-            coefficient_sources = {}
-
-            def coefficient(key,value):
-                value = torch.as_tensor(value, dtype=torch.float64)
-                coefficient_sources[key] = value.clone()
-                multiplier,shift = encode_multiplier(value,config["coefficient_bits"])
-                bundle[key+".M"] = multiplier.to(torch.int32).contiguous()
-                bundle[key+".shift"] = shift_container(shift)
-
-            c = config["nonlinear"]["rope"]["coefficient_bits"]
-            cosine,sine = rope_rom(c)
-            bundle["rope.cos"] = cosine.to(torch.int8 if c == 8 else torch.int16)
-            bundle["rope.sin"] = sine.to(torch.int8 if c == 8 else torch.int16)
-            options = config["nonlinear"]["softmax"]
-            bundle["softmax.exp_lut"] = softmax_lut(options["c"],options["entries"]).to(torch.uint8)
-            seed_entries = config["nonlinear"]["rms"].get("seed_entries",64)
-            bundle["rms.seed_lut"] = rms_seed_lut(seed_entries).to(torch.int16)
-            pwl_options = config["nonlinear"]["silu"]
-            table = fit_silu(pwl_options["segments"],pwl_options.get("threshold",8),config["coefficient_bits"])
-            compiled = {}
-            aligned_norms = {}
-            incoming = {}
-            epsilon_values = {}
-            for n, module in self.model.named_modules():
-                if isinstance(module,torch.nn.Linear):
-                    a = self.baseline.points[n+".input"].fq.scale.double()
-                    smoothing = self.baseline.smooth_scales.get(n,torch.tensor(1.)).double()
-                    # Actual incoming format is determined by the dataflow map.
-                    if n == "lm_head": source = "model.norm.output"
-                    elif n.endswith(("q_proj","k_proj","v_proj")): source = n.rsplit(".self_attn.",1)[0]+".input_layernorm.output"
-                    elif n.endswith("o_proj"): source = n.rsplit(".",1)[0]+".context"
-                    elif n.endswith(("gate_proj","up_proj")): source = n.rsplit(".mlp.",1)[0]+".post_attention_layernorm.output"
-                    else: source = n.rsplit(".",1)[0]+".gate_product"
-                    delta = torch.as_tensor(self.adapter.formats[source].scale,dtype=torch.float64)
-                    incoming[n] = source
-                    coefficient(n+".smooth",delta/(smoothing*a))
-                    wname = "shared_embedding_lm_head.weight" if n == "lm_head" else n+".weight"
-                    raw_scale = a*self.baseline.points[wname].fq.scale.double()
-                    if n+".output" in self.adapter.formats:
-                        out_scale = torch.as_tensor(self.adapter.formats[n+".output"].scale,dtype=torch.float64)
-                        coefficient(n+".output",raw_scale/out_scale)
-                    if n.endswith("v_proj"):
-                        scale = self.baseline.points[n.removesuffix("v_proj")+"value_post_projection"].fq.scale.double().repeat_interleave(64)
-                        coefficient(n+".to_v_cache",raw_scale/scale)
-                elif n.endswith(("input_layernorm","post_attention_layernorm")) or n == "model.norm":
-                    if n == "model.norm": source = "model.layers.29.residual_after_ffn"
-                    elif n.endswith("post_attention_layernorm"):
-                        source = n.removesuffix("post_attention_layernorm")+"residual_after_attention"
-                    else:
-                        layer = int(n.split('.')[2])
-                        source = "model.embed_tokens.output" if layer == 0 else f"model.layers.{layer-1}.residual_after_ffn"
-                    fmt = self.adapter.formats[source]
-                    if fmt.axis is not None:
-                        aligned = self.adapter.make_format(source,{"bits":24})
-                        coefficient(n+".align_input",torch.as_tensor(fmt.scale,dtype=torch.float64)/float(aligned.scale))
-                    else: aligned = fmt
-                    aligned_norms[n] = {"source":source,**aligned.dictionary()}
-                    delta = float(aligned.scale)
-                    ft = config["nonlinear"]["rms"].get("t_fractional_bits",40)
-                    coefficient(n+".to_t",delta*delta*(1 << ft)/576)
-                    coefficient(n+".gamma_output",module.weight.detach().double()*delta/float(self.adapter.formats[n+".output"].scale))
-                    epsilon_values[n] = max(1,round(module.variance_epsilon*(1 << ft)))
-                    bundle[n+".epsilon"] = torch.tensor(epsilon_values[n],dtype=torch.int32)
-                    bound = 1 << (aligned.bits-1)
-                    square_sum = 576*bound*bound
-                    tm,ts = int(bundle[n+".to_t.M"]),int(bundle[n+".to_t.shift"])
-                    numerator = square_sum*tm
-                    tmax = (round_divide_scalar(numerator,1 << ts) if ts >= 0 else numerator << -ts)+int(bundle[n+".epsilon"])
-                    aligned_norms[n]["internal_widths"] = {
-                        "square_unsigned_bits":(bound*bound).bit_length(),
-                        "sum_square_unsigned_bits":square_sum.bit_length(),
-                        "sum_times_multiplier_unsigned_bits":numerator.bit_length(),
-                        "t_unsigned_bits":tmax.bit_length(),"t_code_max":tmax,
-                        "t_code_min":int(bundle[n+".epsilon"]),"t_fractional_bits":ft,
-                        "m_unsigned_bits":18,"seed_unsigned_bits":14,"u1_unsigned_bits":15,
-                        "seed_index_unsigned_bits":math.ceil(math.log2(seed_entries)),
-                        "gamma_output_product_signed_bits":aligned.bits+14+config["coefficient_bits"]}
-            delta_embed = self.baseline.points["shared_embedding_lm_head.weight"].fq.scale.double()
-            coefficient("embedding.to_residual",delta_embed/float(self.adapter.formats["model.embed_tokens.output"].scale))
-            for i in range(30):
-                prefix = f"model.layers.{i}.mlp"
-                sfmt,ofmt = self.adapter.formats[prefix+".gate_proj.output"],self.adapter.formats[prefix+".silu_output"]
-                ctable = compile_silu(sfmt.scale,ofmt,table,config["coefficient_bits"])
-                compiled[prefix] = ctable
-                for key,value in ctable.items():
-                    bundle[prefix+".pwl."+key] = (shift_container(value) if key == "shifts"
-                                                   else torch.tensor(value,dtype=torch.int32))
-                coefficient(prefix+".product",float(self.adapter.formats[prefix+".silu_output"].scale)*float(self.adapter.formats[prefix+".up_proj.output"].scale)/float(self.adapter.formats[prefix+".gate_product"].scale))
-                attention = f"model.layers.{i}.self_attn"
-                qp = torch.as_tensor(self.adapter.formats[attention+".q_proj.output"].scale,dtype=torch.float64).reshape(9,64)[:,0]
-                kp = torch.as_tensor(self.adapter.formats[attention+".k_proj.output"].scale,dtype=torch.float64).reshape(3,64)[:,0]
-                qpost = torch.as_tensor(self.adapter.formats[attention+".query_post_rope"].scale,dtype=torch.float64)
-                kcache = self.baseline.points[attention+".key_post_rope"].fq.scale.double()
-                vcache = self.baseline.points[attention+".value_post_projection"].fq.scale.double()
-                score = torch.as_tensor(self.adapter.formats[attention+".score"].scale,dtype=torch.float64)
-                coefficient(attention+".q_rope_to_qk",qp/qpost)
-                coefficient(attention+".k_rope_to_cache",kp/kcache)
-                coefficient(attention+".qk_to_score",qpost*kcache.repeat_interleave(3)/8/score)
-                coefficient(attention+".score_to_index",score*(options["entries"]-1)/options["c"])
-                probability_denominator = 1 if options.get("fused") else (1 << options["probability_bits"])-1
-                coefficient(attention+".pv_to_context",vcache.repeat_interleave(3)/probability_denominator/float(self.adapter.formats[attention+".context"].scale))
-                layer = f"model.layers.{i}"
-                for target,left,right in (
-                    (layer+".residual_after_attention", "model.embed_tokens.output" if i == 0 else f"model.layers.{i-1}.residual_after_ffn",attention+".o_proj.output"),
-                    (layer+".residual_after_ffn",layer+".residual_after_attention",prefix+".down_proj.output")):
-                    target_scale = torch.as_tensor(self.adapter.formats[target].scale,dtype=torch.float64)
-                    for branch,source in (("left",left),("right",right)):
-                        source_scale = torch.as_tensor(self.adapter.formats[source].scale,dtype=torch.float64)
-                        coefficient(target+"."+branch+"_to_guard",source_scale/target_scale*(1 << 20))
-            output = self.args.output_dir/name
-            output.mkdir(exist_ok=True)
-            coefficient_path = output/"coefficients.safetensors"
-            coefficient_temporary = coefficient_path.with_suffix(".tmp")
-            save_file(bundle,str(coefficient_temporary))
-            coefficient_temporary.replace(coefficient_path)
-            exported = {**config,"formats":formats,"pwl_reference":table,"pwl_compiled":compiled,
-                "weights":"../weights.safetensors","coefficients":"coefficients.safetensors",
-                "frozen_source_qparams":Path(os.path.relpath(ROOT/"candidates/w8a12kv8_smoothquant/qparams.safetensors",output)).as_posix(),
-                "linear_input_sources":incoming,"aligned_norm_inputs":aligned_norms,
-                "quality_status":entry.get("status","not_qualified"),"scale_source":"frozen train intermediate calibration",
-                "software_adapter_role":"host_preparation_simulator",
-                "software_adapter_loads_coefficient_bundle":False,
-                "coefficient_bundle_validation":"export tensors are checked against deterministic runtime multiplier/table compilation",
-                "nonlinear_contract":{"rms_t_fractional_bits":config["nonlinear"]["rms"].get("t_fractional_bits",40),"rms_m_fractional_bits":16,"rms_u_fractional_bits":14,
-                                       "rms_newton_steps":1,"residual_alignment_guard_bits":20}}
-            atomic_json(output/"config.json",exported)
-            serialized_config = read_json(output/"config.json")
-            serialized_coefficients = load_file(str(coefficient_path), device="cpu")
-            require_runtime_bundle_match(config, serialized_config, coefficient_sources,
-                                         epsilon_values, serialized_coefficients)
-            entry["coefficient_bundle_validation"] = {
-                "status":"passed","serialized_tensors":len(serialized_coefficients),
-                "multiplier_shift_pairs":len(coefficient_sources),
-                "tables":["rope.cos","rope.sin","softmax.exp_lut","rms.seed_lut","per-layer PWL"],
-                "adapter_loaded_bundle":False,
-                "runtime_comparison":"all serialized integer tensors equal recompilation from config formats and selected nonlinear options"}
-            entry["resources"] = self.resources(config,bundle,formats,aligned_norms,output)
-            if entry.get("status") == "qualified_selection" and "config_reload" not in entry:
-                ids = self.selection[0]["input_ids"][:96]
-                before = full_logits(self.model,ids).numpy().copy()
-                before_cache = cached_logits(self.model,ids,32)
-                loaded = read_json(output/"config.json")
-                self.adapter.set_trial(loaded)
-                after = full_logits(self.model,ids).numpy()
-                after_cache = cached_logits(self.model,ids,32)
-                if not np.array_equal(before,after) or not np.array_equal(before_cache,after_cache):
-                    raise AssertionError("reloaded contract config failed bitwise reproducibility")
-                entry["config_reload"] = {"full_bitwise_equal":True,"cache_bitwise_equal":True,"length":96,"prefill":32,
-                    "artifact":"config.json only; coefficients.safetensors is validated separately",
-                    "adapter_role":"host preparation/simulation adapter recompiles coefficients from config scales",
-                    "coefficient_bundle_loaded_by_adapter":False}
-            self.save()
-        qualified = {n:e for n,e in self.report["combinations"].items() if e.get("status") == "qualified_selection"}
-        self.report["selection"] = selection_summary(qualified)
-        require_export_artifacts(self.report, self.args.output_dir)
-        self.report["stages"]["export"] = "complete"
+                full = runtime(input_ids=torch.tensor([ids], dtype=torch.long),
+                    attention_mask=torch.ones((1,len(ids)), dtype=torch.long))
+                cached_logits, cached_codes, preserved = runtime.cached_outputs(ids,prefill,verify_prefix=True)
+                differing = int((full.logit_codes[0].to(torch.int32) != cached_codes.to(torch.int32)).sum())
+                if differing:
+                    raise AssertionError(f"full/cache code mismatch: {case['id']} prefill={prefill}")
+                full_nll, _ = score_targets(full.logits[0], ids, prefill, prefill+decode)
+                nll, tokens = score_targets(cached_logits, ids, prefill, prefill+decode)
+                result = {"id":case["id"], **regime, "nll":nll, "tokens":tokens,
+                    "full_nll":full_nll, "different_logit_codes":0,
+                    "logit_codes_bitwise_equal":True, "cache_prefix_preserved":preserved}
+                if reference_rows is not None:
+                    reference_case = reference_by_case.get((case["id"], prefill))
+                    expected_key = f"case_{case_index}_{prefill}"
+                    if reference_case is None or reference_case["key"] != expected_key:
+                        raise RuntimeError(f"FP32 diagnostic selector mismatch: {case['id']} prefill={prefill}")
+                    positions = reference_case["rows"]
+                    reference = reference_rows[expected_key]
+                    if (len(reference) != len(positions) or reference.shape[-1] != full.logits.shape[-1]
+                            or not torch.isfinite(reference).all()):
+                        raise ValueError(f"invalid FP32 diagnostic tensor: {expected_key}")
+                    full_selected = full.logits[0].index_select(0, torch.tensor(positions))
+                    cache_selected = cached_logits.index_select(0, torch.tensor(positions))
+                    full_diagnostic = distribution_diagnostic(reference, full_selected)
+                    cache_diagnostic = distribution_diagnostic(reference, cache_selected)
+                    result["diagnostic_rows"] = positions
+                    result["full_fp32_diagnostic"] = full_diagnostic
+                    result["cache_fp32_diagnostic"] = cache_diagnostic
+                    if not all(math.isfinite(value) for diagnostic in (full_diagnostic, cache_diagnostic)
+                               for value in (diagnostic["top1_agreement"], diagnostic["mean_kl_fp32_to_candidate"])):
+                        raise ValueError(f"nonfinite distribution diagnostic: {expected_key}")
+                    del reference, full_selected, cache_selected
+                row["runs"].append(result)
+                del full, cached_logits, cached_codes
+                self.save()
+                print(f"ARTIFACT CACHE {len(row['runs'])}/{total} {case['id']} prefill={prefill}", flush=True)
+        row["runs"].sort(key=lambda item:(item["id"], item["prefill"]))
+        row["regimes"] = {str(prefill):aggregate_nll([(item["nll"], item["tokens"])
+            for item in row["runs"] if item["prefill"] == prefill]) for prefill in (32,448)}
+        row.update(aggregate_nll([(item["nll"], item["tokens"]) for item in row["runs"]]))
+        row["status"] = "complete"
         self.save()
+        return row
 
-    def resources(self,config,bundle,formats,aligned_norms,output):
+    def baseline_reproduction_stage(self):
+        if self.report.get("stages", {}).get("baseline_reproduction") == "measured":
+            return
+        config_path = self.root/"artifacts/combined_high/config.json"
+        if not config_path.is_file():
+            raise FileNotFoundError(f"prepared combined_high artifact missing: {config_path}")
+        runtime = load_prepared_contract(config_path)
+        result = self.report.setdefault("baseline_reproduction", {"status":"in_progress"})
+        result["ppl"] = self.ppl(runtime,result,"ppl",self.selection)
+        result["piqa"] = self.piqa(runtime,result,"piqa",self.questions)
+        result["cache"] = self.cache(runtime,result,"cache",self.selection,self.cases)
+        if "greedy" not in result:
+            prompts = [record["input_ids"][:32] for record in self.selection[:2]]
+            result["greedy"] = greedy(runtime,self.tokenizer,prompts,max_new=32)
+            self.save()
+        old = self.saved["combinations"]["combined_high"]
+        old_ppl = {item["id"]:item["nll"] for item in old["full_ppl"]["per_window"]}
+        new_ppl = {item["id"]:item["nll"] for item in result["ppl"]["per_window"]}
+        old_piqa = {item["id"]:item["prediction"] for item in old["piqa"]["per_question"]}
+        new_piqa = {item["id"]:item["prediction"] for item in result["piqa"]["per_question"]}
+        old_cache = {(item["id"],item["prefill"]):item["nll"] for item in old["cache"]["runs"]}
+        new_cache = {(item["id"],item["prefill"]):item["nll"] for item in result["cache"]["runs"]}
+        same_ppl = old_ppl == new_ppl
+        same_piqa = old_piqa == new_piqa
+        same_cache = old_cache == new_cache
+        same_greedy = [x["generated_ids"] for x in result["greedy"]] == [x["generated_ids"] for x in old["greedy"]]
+        comparison = {"ppl_per_window_exact":same_ppl, "piqa_predictions_exact":same_piqa,
+            "cache_run_nll_exact":same_cache, "greedy_token_ids_exact":same_greedy,
+            "ppl_windows":len(new_ppl), "piqa_questions":len(new_piqa), "cache_runs":len(new_cache),
+            "greedy_prompts":len(result["greedy"])}
+        result["saved_baseline_comparison"] = comparison
+        if not all((same_ppl,same_piqa,same_cache,same_greedy)):
+            result["status"] = "mismatch"
+            self.save()
+            raise AssertionError(f"artifact baseline differs from saved combined_high: {comparison}")
+        result["relative_ppl_increase_vs_fp32"] = result["ppl"]["ppl"]/self.reference["ppl"]["ppl"]-1
+        result["piqa_drop_vs_fp32"] = self.reference["piqa"]["accuracy"]-result["piqa"]["accuracy"]
+        result["cache_relative_ppl_increase"] = {regime:result["cache"]["regimes"][regime]["ppl"]/
+            self.reference["cache"]["regimes"][regime]["ppl"]-1 for regime in ("32","448")}
+        result["status"] = "confirmed"
+        self.report.setdefault("stages",{})["baseline_reproduction"] = "measured"
+        self.save()
+        del runtime
+
+    def run_baseline(self):
+        self.baseline_reproduction_stage()
+        print("BASELINE artifact reproduction confirmed", flush=True)
+
+    def run_factor_quick(self):
+        if self.report.get("stages", {}).get("baseline_reproduction") != "measured":
+            raise RuntimeError("the previously reproduced artifact baseline is required")
+        if self.report.get("stages", {}).get("factor_screen") == "measured":
+            require_completed_factor_quick(
+                self.report, expected_ids=[row["id"] for row in self.selection[:8]])
+            print("FACTOR QUICK8 already complete; no scores were recomputed", flush=True)
+            return
+        names = require_prepared_candidates(self.report, "initial_candidates", 28, 35, "factor")
+        with torch.inference_mode():
+            for name in names:
+                self._screen_candidate(name)
+        require_completed_quick_batch(self.report, names,
+            expected_ids=[row["id"] for row in self.selection[:8]])
+        self.report.setdefault("stages", {})["factor_screen"] = "measured"
+        self.save()
+        print("FACTOR QUICK8 complete; no Full64 or qualification stage was started", flush=True)
+
+    @staticmethod
+    def _point_family(name):
+        if name == "model.embed_tokens.output": return "embedding"
+        if name == "lm_head.output": return "logits"
+        if name.endswith("layernorm.output") or name == "model.norm.output": return "norm"
+        if name.endswith("q_proj.output"): return "q_pre"
+        if name.endswith("k_proj.output"): return "k_pre"
+        if name.endswith("query_post_rope"): return "q_post"
+        if name.endswith(".score"): return "score"
+        if name.endswith("probability_unmasked"): return "probability"
+        if name.endswith(".context"): return "context"
+        if name.endswith(("o_proj.output", "down_proj.output")): return "residual_branch"
+        if name.endswith(("residual_after_attention", "residual_after_ffn")): return "residual"
+        if name.endswith(("gate_proj.output", "up_proj.output")): return "gate_up"
+        if name.endswith("silu_output"): return "silu"
+        if name.endswith("gate_product"): return "product"
+        raise KeyError(f"unknown numerical boundary: {name}")
+
+    def _resources(self, config_path):
+        config = read_json(config_path)
+        packed = container = 0
+        maximum_container = 0
         rows = {}
         for name,spec in config["points"].items():
-            family = self.adapter.inventory[name]
-            if family in ("score","probability"): count = 9*512*512
+            family = self._point_family(name)
+            if family in ("score", "probability"): count = 9*512*512
             elif family == "k_pre": count = 512*192
-            elif family in ("gate_up","silu","product"): count = 512*1536
+            elif family in ("gate_up", "silu", "product"): count = 512*1536
             elif family == "logits": count = 512*49152
             else: count = 512*576
-            container = 8 if spec["bits"] <= 8 else 16 if spec["bits"] <= 16 else 32
-            rows[name] = {"logical_bits":spec["bits"],"container_bits":container,"elements":count,
-                          "payload_bytes":math.ceil(count*spec["bits"]/8),"container_bytes":count*container//8}
-        if config["nonlinear"]["softmax"].get("fused"):
-            for i in range(30):
-                prefix = f"model.layers.{i}.self_attn"
-                rows[prefix+".exponential"] = {"logical_bits":8,"container_bits":8,"elements":9*512*512,
-                    "payload_bytes":9*512*512,"container_bytes":9*512*512}
-                rows[prefix+".denominator"] = {"logical_bits":17,"container_bits":32,"elements":9*512,
-                    "payload_bytes":math.ceil(9*512*17/8),"container_bytes":9*512*4}
+            bits = int(spec["bits"])
+            storage_bits = 8 if bits <= 8 else 16 if bits <= 16 else 32
+            payload = math.ceil(count*bits/8)
+            container_bytes = count*storage_bits//8
+            rows[name] = {"family":family,"logical_bits":bits,
+                "canonical_format_container_bits":storage_bits,
+                "elements_per_512":count,"packed_payload_bytes":payload,
+                "canonical_format_bytes":container_bytes}
+            packed += payload
+            container += container_bytes
+            maximum_container = max(maximum_container, storage_bits)
+        bundle_path = (config_path.parent/config["coefficients"]).resolve()
+        weights_path = (config_path.parent/config["weights"]).resolve()
+        bundle = load_file(str(bundle_path),device="cpu")
+        multiplier_shift_bytes = sum(t.numel()*t.element_size() for name,t in bundle.items()
+                                     if name.endswith((".M",".shift")))
+        table_bytes = sum(t.numel()*t.element_size() for name,t in bundle.items()
+                          if (name.startswith(("rope.","softmax.","rms."))
+                              or name.endswith(".epsilon") or ".pwl." in name)
+                          and not name.endswith((".M",".shift")))
+        scale_sizes = {name:int(torch.as_tensor(spec["scale"]).numel())
+                       for name,spec in config["formats"].items()}
+        per_tensor_scales = sum(count == 1 for count in scale_sizes.values())
+        per_channel_scales = sum(count for count in scale_sizes.values() if count > 1)
+        baseline_path = self.root/"artifacts/combined_high/config.json"
+        baseline = read_json(baseline_path) if baseline_path.is_file() else None
+        baseline_scale_values = (sum(int(torch.as_tensor(spec["scale"]).numel())
+                                     for spec in baseline["formats"].values()) if baseline else 0)
+        align_keys = [name for name in bundle if name.endswith(".align_input.M")]
+        align_values = sum(bundle[name].numel() for name in align_keys)
 
-        scale_counts = {"per_tensor":0,"per_feature_or_head":0}
-        scale_values = 0
-        for spec in formats.values():
-            count = int(np.asarray(spec["scale"]).size)
-            scale_values += count
-            scale_counts["per_tensor" if count == 1 else "per_feature_or_head"] += count
-        coefficient_bytes = sum(t.numel()*t.element_size() for t in bundle.values())
-        multiplier_bytes = sum(t.numel()*t.element_size() for name,t in bundle.items()
-                               if name.endswith((".M", ".shift")))
-        table_groups = {"rope_rom":0,"softmax_lut":0,"rms_seed_and_epsilon":0,"silu_pwl":0}
-        for name,tensor in bundle.items():
-            size = tensor.numel()*tensor.element_size()
-            if name.startswith("rope."): group = "rope_rom"
-            elif name.startswith("softmax."): group = "softmax_lut"
-            elif name.startswith("rms.") or name.endswith(".epsilon"): group = "rms_seed_and_epsilon"
-            elif ".pwl." in name: group = "silu_pwl"
-            else: continue
-            table_groups[group] += size
-        maximum_shift_bits = max((8*t.element_size() for name,t in bundle.items()
-                                  if name.endswith(".shift")), default=0)
-        max_rms_widths = {}
-        for description in aligned_norms.values():
-            for name,width in description.get("internal_widths",{}).items():
-                if name.endswith("_bits"):
-                    max_rms_widths[name] = max(max_rms_widths.get(name,0),width)
-
-        query_formats = [spec for name,spec in formats.items()
-                         if name.endswith(".query_post_rope")]
-        query_ranges = [integer_code_bounds(int(spec["bits"]), spec.get("signed", True))
-                        for spec in query_formats]
-        if query_ranges:
-            q_code_range = (min(bounds[0] for bounds in query_ranges),
-                            max(bounds[1] for bounds in query_ranges))
-        else:
-            q_code_range = integer_code_bounds(24)
-        k_code_range = integer_code_bounds(8)
-        qk_product_range = dot_product_code_bounds(q_code_range, k_code_range, 1)
-        qk_accumulator_range = dot_product_code_bounds(q_code_range, k_code_range, 64)
-        qk_product_bits = minimum_signed_width(*qk_product_range)
-        qk_accumulator_bits = minimum_signed_width(*qk_accumulator_range)
-        p_bits = config["nonlinear"]["softmax"].get("probability_bits",0)
-        sequence_length = 512
-        query_rows = 9*sequence_length
-        dense_score_elements = query_rows*sequence_length
-        causal_score_elements = 9*sequence_length*(sequence_length+1)//2
-        fused = config["nonlinear"]["softmax"].get("fused")
-        normalize_divisions = query_rows*64 if fused else dense_score_elements
-        softmax_interface = ("E unsigned 8 plus S unsigned 17; no probability tensor" if fused
-                             else f"P unsigned {p_bits}; one rounded normalization per dense score element")
-        linear_input_conversions_per_token = 30*(4*576+2*576+1536)+576
-        linear_output_conversions_per_token = 30*(576+192+192+576+1536+1536+576)+49152
-        cache_scale_conversions_per_token = 30*2*3*64
-        residual_branch_alignments_per_token = 30*2*2*576
-        rms_gamma_conversions_per_token = 61*576
-        source_qparams = ROOT/"candidates/w8a12kv8_smoothquant/qparams.safetensors"
-        return {
-            "measurement_scope":"batch 1, sequence length 512; logical tensor sizes and serialized files, not hardware measurement",
-            "boundary_payload_bytes_per_512":sum(r["payload_bytes"] for r in rows.values()),
-            "boundary_container_bytes_per_512":sum(r["container_bytes"] for r in rows.values()),
-            "maximum_boundary_container_bits":max(r["container_bits"] for r in rows.values()),
+        # Bound the actual guard integers from each branch source format and
+        # serialized M/shift pair. This reports logical widths the RTL must
+        # carry without counting the INT64 software container as datapath width.
+        branch_widths, branch_products, sum_widths = [], [], []
+        for layer in range(int(config["model"]["layers"])):
+            prefix = f"model.layers.{layer}"
+            for kind in ("attention","ffn"):
+                target = prefix+f".residual_after_{kind}"
+                if kind == "attention":
+                    left = "model.embed_tokens.output" if layer == 0 else f"model.layers.{layer-1}.residual_after_ffn"
+                    right = prefix+".self_attn.o_proj.output"
+                else:
+                    left = prefix+".residual_after_attention"
+                    right = prefix+".mlp.down_proj.output"
+                bounds = []
+                for branch,source in (("left_to_guard",left),("right_to_guard",right)):
+                    fmt = config["formats"][source]
+                    source_low,source_high = integer_code_bounds(int(fmt["bits"]),bool(fmt["signed"]))
+                    multipliers = bundle[target+"."+branch+".M"].reshape(-1).tolist()
+                    shifts = bundle[target+"."+branch+".shift"].reshape(-1).tolist()
+                    branch_ranges = []
+                    for multiplier,shift in zip(multipliers,shifts):
+                        denominator_shift = int(shift)
+                        products = (source_low*int(multiplier),source_high*int(multiplier))
+                        product_low,product_high = min(products),max(products)
+                        branch_products.append(minimum_signed_width(product_low,product_high))
+                        def apply(value):
+                            product = int(value)*int(multiplier)
+                            return (round_divide_scalar(product,1 << denominator_shift)
+                                    if denominator_shift >= 0 else product << -denominator_shift)
+                        low,high = apply(source_low),apply(source_high)
+                        branch_ranges.append((min(low,high),max(low,high)))
+                    if len(branch_ranges) == 1:
+                        branch_ranges *= int(config["model"]["hidden_size"])
+                    bounds.append(branch_ranges)
+                    branch_widths.extend(minimum_signed_width(*item) for item in branch_ranges)
+                aggregate = [(bounds[0][i][0]+bounds[1][i][0],
+                              bounds[0][i][1]+bounds[1][i][1])
+                             for i in range(max(len(bounds[0]),len(bounds[1])))]
+                sum_widths.extend(minimum_signed_width(*item) for item in aggregate)
+        extra_align_operations = align_values
+        alignment_invocations = len(align_keys)
+        aligned_output_bits = 24
+        fully_materialized_alignment_bytes = (alignment_invocations
+            * 512 * int(config["model"]["hidden_size"]) * aligned_output_bits // 8)
+        return {"measurement_scope":
+                "512-token canonical exchange/format storage proxy; not Python runtime carriers or RSS, not a simultaneous buffer or RTL SRAM estimate",
+            "packed_boundary_payload_proxy_bytes_per_512":packed,
+            "canonical_boundary_format_bytes_per_512":container,
+            "maximum_canonical_format_container_bits":maximum_container,
             "boundary_inventory":rows,
-            "shared_weight_payload_bytes":sum(w.numel() for w in self.baseline.weights.values()),
-            "prepared_weight_safetensors_bytes":(self.args.output_dir/"weights.safetensors").stat().st_size,
-            "kv_payload_bytes_512":30*3*512*64*2,
-            "runtime_coefficient_bundle_bytes":coefficient_bytes,
-            "runtime_multiplier_shift_bytes":multiplier_bytes,
-            "runtime_table_bytes":sum(table_groups.values()),
-            "runtime_table_breakdown_bytes":table_groups,
-            "multiplier_shift_pairs":sum(name.endswith(".M") for name in bundle),
-            "maximum_shift_container_bits":maximum_shift_bits,
-            "scale_metadata":{"format_count":len(formats),"scale_value_count":scale_values,
-                "per_tensor_scale_values":scale_counts["per_tensor"],
-                "per_feature_or_head_scale_values":scale_counts["per_feature_or_head"],
-                "hypothetical_float32_bytes":scale_values*4,"hypothetical_float64_bytes":scale_values*8,
-                "meaning":"config.json metadata, not runtime SRAM; intended datapath uses exported fixed-point coefficients"},
-            "frozen_source_qparams_bytes":source_qparams.stat().st_size,
-            "exported_config_json_bytes":(output/"config.json").stat().st_size,
-            "arithmetic_widths":{"linear_product_signed_bits":20,"linear_accumulator_container_bits":32,
-                "linear_accumulator_bound_bits":30,"qk_product_container_bits":qk_product_bits,
-                "qk_product_code_range":list(qk_product_range),
-                "qk_accumulator_bound_bits":qk_accumulator_bits,
-                "qk_accumulator_code_range":list(qk_accumulator_range),
-                "pv_discrete_product_signed_bits":(p_bits+8 if p_bits else None),
-                "pv_discrete_accumulator_bound_bits":((128*((1<<p_bits)-1+256)).bit_length()+1 if p_bits else None),
-                "pv_fused_product_signed_bits":16 if fused else None,
-                "pv_fused_accumulator_signed_bits":25 if fused else None,
-                "residual_guard_branch_signed_bits":63,"residual_sum_signed_bits":64,
-                "rms_max_observed_input_and_reduction_widths":max_rms_widths},
-            "operation_counts_at_length_512":{"dense_score_elements":dense_score_elements,
-                "causal_valid_score_elements":causal_score_elements,"softmax_interface":softmax_interface,
-                "normalization_divisions_dense_backend":normalize_divisions,
-                "discrete_probability_divisions_if_causal_skip":causal_score_elements if not fused else None,
-                "fused_pv_divisions_per_context_feature":query_rows*64 if fused else None,
-                "pv_multiply_accumulates_dense_backend":dense_score_elements*64,
-                "pv_multiply_accumulates_if_causal_keys_skipped":causal_score_elements*64,
-                "softmax_index_conversions_dense_backend":dense_score_elements,
-                "linear_input_scale_conversions_per_output_token":linear_input_conversions_per_token,
-                "linear_output_requant_conversions_per_output_token":linear_output_conversions_per_token,
-                "kv_cache_scale_conversions_per_output_token":cache_scale_conversions_per_token,
-                "residual_branch_alignments_per_output_token":residual_branch_alignments_per_token,
-                "rms_gamma_conversions_per_output_token":rms_gamma_conversions_per_token,
-                "rms_normalization_invocations_per_output_token":61,
-                "silu_pwl_values_per_output_token":30*1536,
-                "gate_product_values_per_output_token":30*1536},
-            "peak_sram_bytes":None,"fpga_area":None,"power":None,
-            "limitations":"Boundary bytes sum every interface as a full 512-token tensor, not concurrent peak SRAM. Dense score counts reflect the software shape; causal masking may reduce scheduled work. No packing, RTL synthesis, FPGA area, timing, or power measurement is included."}
+            "coefficient_bundle_bytes":bundle_path.stat().st_size,"shared_weight_bundle_bytes":weights_path.stat().st_size,
+            "runtime_multiplier_shift_payload_bytes":multiplier_shift_bytes,
+            "runtime_table_payload_bytes":table_bytes,
+            "scale_metadata":{"format_count":len(scale_sizes),"per_tensor_scale_values":per_tensor_scales,
+                "per_channel_or_head_scale_values":per_channel_scales,
+                "total_scale_values":sum(scale_sizes.values()),
+                "extra_scale_values_vs_combined_high":sum(scale_sizes.values())-baseline_scale_values,
+                "hypothetical_float32_bytes":4*sum(scale_sizes.values()),
+                "meaning":"configuration metadata, not runtime SRAM"},
+            "per_channel_rms_alignment":{"alignment_vectors":alignment_invocations,
+                "alignment_invocations_per_token":alignment_invocations,
+                "alignment_values_per_token":align_values,
+                "aligned_output_logical_bits":aligned_output_bits,
+                "fully_materialized_aligned_payload_bytes_per_512":fully_materialized_alignment_bytes,
+                "payload_scope":"24-bit logical code payload only if every per-norm aligned tensor for 512 tokens is materialized; tensors can be streamed/recomputed per norm, so this is not a concurrent peak-storage estimate",
+                "serialized_multiplier_elements":align_values,
+                "additional_integer_multiply_shift_operations_per_token":extra_align_operations,
+                "alignment_multiplier_bytes":sum(bundle[name].numel()*bundle[name].element_size()
+                    +bundle[name.removesuffix(".M")+".shift"].numel()*bundle[name.removesuffix(".M")+".shift"].element_size()
+                    for name in align_keys)},
+            "residual_arithmetic_widths":{"max_branch_guard_signed_bits":max(branch_widths,default=1),
+                "max_guard_multiplier_product_signed_bits_before_rne":max(branch_products,default=1),
+                "max_branch_magnitude_bits":max((width-1 for width in branch_widths),default=0),
+                "max_two_branch_sum_signed_bits":max(sum_widths,default=1),
+                "basis":"extrema from signed source code ranges and the serialized fixed-point M/shift pairs"},
+            "coefficient_storage_note":"M tensors remain INT32 containers; multiplier precision reduction changes logical magnitude precision, not necessarily serialized bytes. A shared datapath sized for the 24-bit class does not shrink solely because a candidate uses 16-bit coefficients.",
+            "scale_rescale_bits":config["scale_rescale_bits"],"nonlinear_multiplier_bits":config["nonlinear_multiplier_bits"],
+            "limitations":"No concurrent-peak SRAM, packing, area, timing, or power is inferred."}
 
+    def _screen_candidate(self, name):
+        screening = self.report.setdefault("screening", {}).setdefault("candidates", {})
+        if name in screening and screening[name].get("quick",{}).get("status") == "complete":
+            return screening[name]
+        if name not in screening and len(screening) >= 35:
+            raise RuntimeError("Quick8 hard budget exceeded (35 candidates maximum)")
+        artifacts = self.report.get("prepared_candidate_artifacts", {})
+        if name not in artifacts:
+            raise FileNotFoundError(f"candidate artifact was not prepared: {name}")
+        config_path = self.root/artifacts[name]
+        config = read_json(config_path)
+        entry = screening.setdefault(name,{"config_name":name,"quick":{"status":"in_progress","per_window":[]}})
+        runtime = load_prepared_contract(config_path)
+        row = entry["quick"]
+        done = {item["id"] for item in row["per_window"]}
+        for record in self.selection[:8]:
+            if record["id"] in done:
+                continue
+            logits = full_logits(runtime, record["input_ids"])
+            nll,tokens = score_targets(logits, record["input_ids"])
+            row["per_window"].append({"id":record["id"],"nll":nll,"tokens":tokens})
+            del logits
+            print(f"QUICK8 {name} {len(row['per_window'])}/8 {record['id']}",flush=True)
+            self.save()
+        row["per_window"].sort(key=lambda item:next(i for i,r in enumerate(self.selection[:8]) if r["id"]==item["id"]))
+        row.update(aggregate_nll([(item["nll"],item["tokens"]) for item in row["per_window"]]))
+        row["windows"] = len(row["per_window"])
+        base = self.report["baseline_reproduction"]["ppl"]["per_window"][:8]
+        row["delta_mean_nll_vs_combined_high"] = (row["nll"]-sum(x["nll"] for x in base))/row["tokens"]
+        resources = self._resources(config_path)
+        row["boundary_payload_proxy_bytes_per_512"] = resources["packed_boundary_payload_proxy_bytes_per_512"]
+        row["runtime_multiplier_shift_payload_bytes"] = resources["runtime_multiplier_shift_payload_bytes"]
+        row["scale_metadata"] = resources["scale_metadata"]
+        row["per_channel_rms_alignment"] = resources["per_channel_rms_alignment"]
+        row["residual_arithmetic_widths"] = resources["residual_arithmetic_widths"]
+        row["status"] = "complete"
+        entry["resources"] = resources
+        self.save()
+        del runtime
+        return entry
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--offline",action="store_true")
-    parser.add_argument("--cache-dir",type=Path,default=ROOT/".cache/huggingface")
-    parser.add_argument("--output-dir",type=Path,default=ROOT/"results/numerical/contract_search")
-    parser.add_argument("--stage",choices=("all","baseline","isolated","family","search","qualify","export"),default="all")
-    args = parser.parse_args()
-    configure_runtime()
-    campaign = Campaign(args)
-    # Independent disabled-adapter equality check, before baseline/full campaign.
-    ids = campaign.selection[0]["input_ids"][:32]
-    with torch.inference_mode(): expected = full_logits(campaign.model,ids)
-    with campaign.adapter.attached(),torch.inference_mode():
-        actual = full_logits(campaign.model,ids)
-        if not torch.equal(actual,expected): raise AssertionError("disabled adapter changed baseline")
-        campaign.report["disabled_adapter_bitwise_equal"] = True
-        # baseline_stage runs without changing bindings; native baseline and
-        # disabled adapter already proved identical above.
-        if args.stage in ("all","baseline") and campaign.report["stages"].get("baseline") != "measured":
-            started = time.monotonic()
-            campaign.report["baseline"] = {"ppl":evaluate_ppl(campaign.model,campaign.selection)}
-            campaign.report["baseline"]["seconds"] = round(time.monotonic()-started,3)
-            campaign.report["stages"]["baseline"] = "measured"
-            campaign.save()
-        if args.stage in ("all","isolated"):
-            campaign.replay_stage()
-            campaign.isolated_stage()
-        if args.stage in ("all","family"): campaign.family_stage()
-        if args.stage in ("all","search"): campaign.search_stage()
-        if args.stage in ("all","qualify"): campaign.qualify_stage()
-        if args.stage in ("all","export"): campaign.export_stage()
+    def _full_ppl(self, runtime, owner, records):
+        row = owner.setdefault("full_ppl", {"status":"in_progress","per_window":[]})
+        if row.get("status") == "complete": return row
+        if not row["per_window"] and len(records) >= 8:
+            quick = self.report.get("screening", {}).get("candidates", {}).get(owner["name"], {}).get("quick", {})
+            quick_rows = quick.get("per_window", [])
+            quick_by_id = {item["id"]:item for item in quick_rows}
+            expected_ids = [record["id"] for record in records[:8]]
+            if (quick.get("status") == "complete" and quick.get("windows") == 8
+                    and len(quick_rows) == 8 and len(quick_by_id) == 8
+                    and set(quick_by_id) == set(expected_ids)):
+                row["per_window"] = [dict(quick_by_id[record_id]) for record_id in expected_ids]
+                row["quick8_reuse"] = {"windows_reused":8,
+                    "remaining_full_selection_windows":len(records)-8,
+                    "basis":"same candidate artifact, full-selection records, and scorer as completed Quick8"}
+                self.save()
+        done = {item["id"] for item in row["per_window"]}
+        for record in records:
+            if record["id"] in done: continue
+            logits = full_logits(runtime,record["input_ids"])
+            nll,tokens = score_targets(logits,record["input_ids"])
+            row["per_window"].append({"id":record["id"],"nll":nll,"tokens":tokens})
+            del logits
+            self.save()
+            print(f"FULL64 {owner['name']} {len(row['per_window'])}/{len(records)} {record['id']}",flush=True)
+        row["per_window"].sort(key=lambda item:next(i for i,r in enumerate(records) if r["id"]==item["id"]))
+        row.update(aggregate_nll([(item["nll"],item["tokens"]) for item in row["per_window"]]))
+        row["windows"] = len(records)
+        row["full_selection_windows_not_reused_from_quick8"] = len(records)-row.get("quick8_reuse",{}).get("windows_reused",0)
+        row["status"] = "complete"
+        self.save()
+        return row
 
+    def run_combined_quick(self):
+        if self.report.get("stages", {}).get("combined_candidate_prepare") != "complete":
+            raise RuntimeError("run artifact-prepare-combined before Quick8")
+        if self.report.get("stages", {}).get("baseline_reproduction") != "measured":
+            raise RuntimeError("the previously reproduced artifact baseline is required")
+        selection = self.report.get("screening", {})
+        name = selection.get("combined_candidate_name", COMBINED_CANDIDATE)
+        factor_names = set(selection.get("initial_candidates", []))
+        if name in factor_names:
+            raise RuntimeError("combined candidate identity collides with a measured factor")
+        artifacts = self.report.get("prepared_candidate_artifacts", {})
+        if name not in artifacts:
+            raise FileNotFoundError(f"combined candidate artifact is missing: {name}")
+        if artifacts[name] in {artifacts[key] for key in factor_names if key in artifacts}:
+            raise RuntimeError("combined candidate must use its own prepared artifact")
+        self.threads = int(self.report.get("performance", {}).get("selected_threads", 0))
+        if self.threads != 8:
+            raise RuntimeError(f"Quick8 requires the verified 8-thread profile; found {self.threads}")
+        self.report.setdefault("backend", "artifact_only_integer_code_execution; PyTorch CPU FP64 exact-code GEMM")
+        self.report["threads"] = self.threads
+        self.report["teacher_model_loaded_during_measurement"] = False
+        self.report["ptq_adapter_loaded_during_measurement"] = False
+        if len(self.selection) < 8 or any(len(row["input_ids"]) != 512 for row in self.selection[:8]):
+            raise RuntimeError("Quick8 requires the first eight complete 512-token selection windows")
+        if "combined_candidate_name" not in selection:
+            selection["combined_candidate_name"] = name
+            self.save()
+        with torch.inference_mode():
+            entry = self._screen_candidate(name)
+        require_completed_quick_batch(self.report, [name], expected_ids=[row["id"] for row in self.selection[:8]])
+        quick = entry["quick"]
+        expected_targets = 8 * 511
+        if quick["tokens"] != expected_targets:
+            raise RuntimeError(f"Quick8 target count changed: {quick['tokens']} != {expected_targets}")
+        baseline = self.report["baseline_reproduction"]["ppl"]
+        baseline_quick_ppl = aggregate_nll([
+            (row["nll"], row["tokens"]) for row in baseline["per_window"][:8]])["ppl"]
+        relative_from_ppl = quick["ppl"] / baseline_quick_ppl - 1
+        relative_from_delta = math.expm1(quick["delta_mean_nll_vs_combined_high"])
+        if not math.isclose(relative_from_ppl, relative_from_delta, rel_tol=1e-10, abs_tol=1e-12):
+            raise AssertionError("Quick8 PPL ratio disagrees with its unrounded mean-NLL delta")
+        quick["relative_ppl_increase_vs_combined_high"] = relative_from_delta
+        quick["ranking_only"] = True
+        quick["quality_gate"] = False
+        self.report["combined_quick_result"] = {
+            "candidate": name, "windows": quick["windows"], "targets": quick["tokens"],
+            "ppl": quick["ppl"], "baseline_quick_ppl": baseline_quick_ppl,
+            "baseline_full_ppl": baseline["ppl"],
+            "relative_ppl_increase": relative_from_delta,
+            "backend": self.report["backend"], "threads": self.threads,
+            "reused_factor_candidate_scores": False,
+            "full64_status": "not_run_waiting_for_explicit_user_approval"}
+        self.report.setdefault("stages", {})["combined_quick"] = "measured"
+        self.report["approval_gate"] = {
+            "status": "pending_user_approval_for_full64",
+            "checkpoint": "combined candidate Quick8 completed; no candidate Full64 or PIQA/cache/greedy qualification was started",
+            "next_action": "report Quick8 and wait for explicit user approval before artifact-full",
+            "quick8_is_a_quality_gate": False}
+        self.save()
+        print(f"COMBINED QUICK8 {name} PPL={quick['ppl']:.12f} targets={quick['tokens']} "
+              f"delta_ppl={quick['relative_ppl_increase_vs_combined_high']:.6%}", flush=True)
+
+    def run_combined_full_ppl(self):
+        if self.report.get("stages", {}).get("combined_quick") != "measured":
+            raise RuntimeError("explicit Full64 stage requires a completed combined Quick8")
+        name = self.report.get("combined_quick_result", {}).get("candidate")
+        if name != COMBINED_CANDIDATE:
+            raise RuntimeError("Full64 is restricted to the prepared combined candidate")
+        config_path = self.root/self.report["prepared_candidate_artifacts"][name]
+        runtime = load_prepared_contract(config_path)
+        owner = self.report.setdefault("combined_full_ppl_result", {"name": name})
+        if owner.get("name") != name:
+            raise RuntimeError("Full64 checkpoint belongs to a different candidate")
+        row = self._full_ppl(runtime, owner, self.selection)
+        del runtime
+        if row["windows"] != 64 or row["tokens"] != 32704:
+            raise RuntimeError(f"Full64 PPL result is incomplete: {row['windows']} windows, {row['tokens']} targets")
+        owner["ppl_ratio_vs_fp32"] = row["ppl"] / self.reference["ppl"]["ppl"]
+        owner["relative_ppl_increase_vs_fp32"] = owner["ppl_ratio_vs_fp32"] - 1
+        owner["gate_limit"] = 0.05
+        owner["ppl_gate_pass"] = owner["ppl_ratio_vs_fp32"] <= 1.05
+        self.report.setdefault("stages", {})["combined_full_ppl"] = "measured"
+        owner.setdefault("full_selection_wall_seconds", self.report.get("last_session_seconds"))
+        self.report["approval_gate"] = {
+            "status": "authorized_execution_completed",
+            "checkpoint": "Full64 measured under the user-authorized fixed-candidate campaign",
+            "quick8_is_a_quality_gate": False,
+            "full64_ppl_gate_pass": owner["ppl_gate_pass"]}
+        self.report.setdefault("combined_quick_result", {})["full64_status"] = "measured"
+        if not owner["ppl_gate_pass"]:
+            owner["selection_status"] = "rejected_full_ppl"
+            owner["qualification_skipped"] = "dependent quality tests are gated on Full64 PPL"
+            self.report["stages"]["combined_qualification"] = "skipped_full_ppl_gate"
+            self.report["software_contract_selection"] = "rejected_full_ppl"
+        elif self.report.get("stages", {}).get("combined_qualification") == "complete":
+            owner["selection_status"] = self.report.get("software_contract_selection")
+        else:
+            owner["selection_status"] = "awaiting_remaining_quality_gates"
+        self.save()
+        print(f"COMBINED FULL64 {name} PPL={row['ppl']:.12f} "
+              f"targets={row['tokens']} gate_pass={owner['ppl_gate_pass']}", flush=True)
+
+    def run_combined_qualification(self):
+        full_owner = self.report.get("combined_full_ppl_result", {})
+        full = full_owner.get("full_ppl", {})
+        if full.get("status") != "complete" or full.get("windows") != 64 or full.get("tokens") != 32704:
+            raise RuntimeError("qualification requires completed 64-window/32704-target Full PPL")
+        if full["ppl"] / self.reference["ppl"]["ppl"] > 1.05:
+            raise RuntimeError("candidate failed Full64 PPL; remaining gates are not run")
+        reference_path = self.root/"qualification_fp32_rows.safetensors"
+        if self.report.get("stages", {}).get("combined_qualification") == "complete":
+            if reference_path.is_file():
+                reference_path.unlink()
+            diagnostic = self.report.setdefault("diagnostic_reference", {})
+            if (diagnostic.get("path") is not None
+                    or not diagnostic.get("temporary_file_removed", False)):
+                self.report["diagnostic_reference"]["temporary_file_removed"] = True
+                self.report["diagnostic_reference"]["path"] = None
+                self.save()
+            return
+        diagnostic = self.report.get("diagnostic_reference", {})
+        if diagnostic.get("status") != "complete" or not reference_path.is_file():
+            raise RuntimeError("run artifact-prepare-diagnostics before candidate qualification")
+        name = self.report.get("combined_quick_result", {}).get("candidate")
+        if name != COMBINED_CANDIDATE:
+            raise RuntimeError("qualification is restricted to the fixed prepared candidate")
+        config_path = self.root/self.report["prepared_candidate_artifacts"][name]
+        runtime = load_prepared_contract(config_path)
+        row = self.report.setdefault("combined_qualification_result", {"name": name})
+        if row.get("name") != name:
+            raise RuntimeError("qualification checkpoint belongs to another candidate")
+        row["status"] = "in_progress"
+        row["started_full_ppl"] = {"ppl": full["ppl"], "windows": full["windows"],
+                                    "targets": full["tokens"]}
+        self.save()
+
+        piqa = self.piqa(runtime, row, "piqa", self.questions)
+        expected_question_ids = [item["id"] for item in self.questions]
+        actual_question_ids = [item["id"] for item in piqa["per_question"]]
+        if (piqa["questions"] != 919 or piqa["choices"] != 1838
+                or actual_question_ids != expected_question_ids):
+            raise RuntimeError("PIQA qualification did not cover all fixed questions and choices")
+
+        reference_rows = load_file(str(reference_path), device="cpu")
+        cache = self.cache(runtime, row, "cache", self.selection, self.cases,
+                           reference_rows=reference_rows,
+                           reference_cases=diagnostic.get("cases"))
+        expected_cache = {(case["id"], regime["prefill"])
+                          for case in self.cases for regime in case["regimes"]}
+        actual_cache = {(item["id"], item["prefill"]) for item in cache["runs"]}
+        if (cache["status"] != "complete" or len(cache["runs"]) != 16
+                or actual_cache != expected_cache
+                or any(item["tokens"] != 64 for item in cache["runs"])):
+            raise RuntimeError("cache qualification did not cover all 16 fixed cases")
+        if any(not item["logit_codes_bitwise_equal"] or not item["cache_prefix_preserved"]
+               for item in cache["runs"]):
+            raise RuntimeError("cache codes differ from full forward or a prefix changed")
+        if any("full_fp32_diagnostic" not in item or "cache_fp32_diagnostic" not in item
+               for item in cache["runs"]):
+            raise RuntimeError("full-vocabulary FP32 diagnostics are missing from a cache case")
+        if any(sum(item["tokens"] for item in cache["runs"] if item["prefill"] == prefill) != 512
+               for prefill in (32, 448)):
+            raise RuntimeError("cache target coverage changed from 512 per prefill regime")
+
+        prompts = [record["input_ids"][:32] for record in self.selection[:2]]
+        greedy_result = row.get("greedy")
+        if greedy_result is None:
+            greedy_result = greedy(runtime, self.tokenizer, prompts, max_new=32)
+            if (len(greedy_result) != 2 or any(len(item["prompt_ids"]) != 32
+                                               or len(item["generated_ids"]) > 32
+                                               for item in greedy_result)):
+                raise RuntimeError("greedy qualification did not use the fixed prompts and token limit")
+            row["greedy"] = greedy_result
+            self.save()
+
+        # Compare serialized-artifact reload using exact integer logit codes.
+        reload_check = row.get("reload")
+        if not (isinstance(reload_check, dict) and reload_check.get("status") == "passed"):
+            probe_ids = self.selection[0]["input_ids"][:96]
+            probe_prefill = 32
+            expected_full = runtime(input_ids=torch.tensor([probe_ids], dtype=torch.long),
+                                    attention_mask=torch.ones((1, len(probe_ids)), dtype=torch.long),
+                                    use_cache=False).logit_codes.clone()
+            _, expected_cache_codes, expected_prefix = runtime.cached_outputs(
+                probe_ids, probe_prefill, verify_prefix=True)
+            if expected_prefix is not True:
+                raise AssertionError("candidate cache reload probe failed to preserve its prefix")
+            del runtime
+            gc.collect()
+            reloaded = load_prepared_contract(config_path)
+            actual_full = reloaded(input_ids=torch.tensor([probe_ids], dtype=torch.long),
+                                   attention_mask=torch.ones((1, len(probe_ids)), dtype=torch.long),
+                                   use_cache=False).logit_codes
+            _, actual_cache_codes, actual_prefix = reloaded.cached_outputs(
+                probe_ids, probe_prefill, verify_prefix=True)
+            reload_check = {"full_codes_bitwise_equal": torch.equal(actual_full, expected_full),
+                            "cache_codes_bitwise_equal": torch.equal(actual_cache_codes, expected_cache_codes),
+                            "cache_prefix_preserved": actual_prefix is True,
+                            "input_length": len(probe_ids), "prefill": probe_prefill}
+            reload_check["status"] = ("passed" if all(reload_check[key] for key in
+                ("full_codes_bitwise_equal", "cache_codes_bitwise_equal", "cache_prefix_preserved"))
+                else "failed")
+            del reloaded, expected_full, expected_cache_codes, actual_full, actual_cache_codes
+            gc.collect()
+            row["reload"] = reload_check
+            self.save()
+
+        gates = qualification_gates(full["ppl"], piqa["correct"], cache["regimes"],
+                                    self.reference["ppl"]["ppl"])
+        hard_checks = {
+            "full_ppl_coverage": full["windows"] == 64 and full["tokens"] == 32704,
+            "piqa_coverage": piqa["questions"] == 919 and piqa["choices"] == 1838,
+            "cache_coverage": len(cache["runs"]) == 16,
+            "full_cache_codes_equal": all(item["logit_codes_bitwise_equal"] for item in cache["runs"]),
+            "cache_prefix_preserved": all(item["cache_prefix_preserved"] for item in cache["runs"]),
+            "reload_bitwise_equal": all(reload_check[key] for key in
+                ("full_codes_bitwise_equal", "cache_codes_bitwise_equal", "cache_prefix_preserved")),
+            "diagnostics_finite": all(math.isfinite(diagnostic_value)
+                for item in cache["runs"]
+                for group in (item["full_fp32_diagnostic"], item["cache_fp32_diagnostic"])
+                for diagnostic_value in (group["top1_agreement"], group["mean_kl_fp32_to_candidate"])),
+            "greedy_finite_and_bounded": len(greedy_result) == 2 and all(
+                len(item["generated_ids"]) <= 32 for item in greedy_result)}
+        row["gates"] = gates
+        row["hard_checks"] = hard_checks
+        row["kept_for_software_profile"] = gates["pass"] and all(hard_checks.values())
+        row["status"] = ("software_selection_qualified" if row["kept_for_software_profile"]
+                          else "rejected_quality_or_numerical_gate")
+        row["heldout_evaluated"] = False
+        full_owner["selection_status"] = row["status"]
+        self.report.setdefault("stages", {})["combined_qualification"] = "complete"
+        self.report["software_contract_selection"] = row["status"]
+        self.save()
+        reference_path.unlink()
+        self.report["diagnostic_reference"]["temporary_file_removed"] = True
+        self.report["diagnostic_reference"]["path"] = None
+        self.save()
+        print(f"COMBINED QUALIFICATION {name} status={row['status']} "
+              f"PIQA={piqa['correct']}/919 cache_runs={len(cache['runs'])}", flush=True)
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

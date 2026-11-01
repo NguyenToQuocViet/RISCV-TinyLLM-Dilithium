@@ -21,10 +21,13 @@ from ptq_validate import assert_state_equal, parameter_fingerprints, probe_cache
 
 def distribution_diagnostic(reference, candidate):
     """Fixed rows, all vocabulary; KL direction FP32 || candidate."""
-    p = F.log_softmax(torch.as_tensor(reference).double(), dim=-1)
-    q = F.log_softmax(torch.as_tensor(candidate).double(), dim=-1)
+    reference = torch.as_tensor(reference)
+    candidate = torch.as_tensor(candidate)
+    p = F.log_softmax(reference.double(), dim=-1)
+    q = F.log_softmax(candidate.double(), dim=-1)
+    agreement = (reference.argmax(-1) == candidate.argmax(-1)).to(torch.float64).mean()
     return {'rows': len(reference), 'vocabulary': reference.shape[-1],
-        'top1_agreement': float((reference.argmax(-1)==candidate.argmax(-1)).mean()),
+        'top1_agreement': float(agreement),
         'mean_kl_fp32_to_candidate': float((p.exp()*(p-q)).sum(-1).mean())}
 
 
@@ -83,7 +86,8 @@ def candidate_cache(adapter, records, cases):
 def greedy(model, tokenizer, prompts, max_new=64):
     details=[]
     for ids in prompts:
-        cache=DynamicCache(); tokens=list(ids); generated=[]
+        cache=model.new_cache() if hasattr(model,"new_cache") else DynamicCache()
+        tokens=list(ids); generated=[]
         for step in range(min(max_new,512-len(tokens))):
             start=0 if step==0 else len(tokens)-1
             output=model(input_ids=torch.tensor([tokens[start:]]),attention_mask=torch.ones((1,len(tokens)),dtype=torch.long),
