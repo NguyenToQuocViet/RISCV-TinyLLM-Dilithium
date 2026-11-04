@@ -6,7 +6,7 @@
 [instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization),
 [IF/ID boundary](5-stage-baseline-core.md#ifid-boundary),
 [pipeline-control priority](5-stage-baseline-core.md#pipeline-control-priority) (including the
-Proposed frontend amendment IF-A1),
+frontend amendment IF-A1),
 [instruction fetch capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states),
 [stale instruction responses after redirect](5-stage-baseline-core.md#stale-instruction-responses-after-redirect),
 [OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration),
@@ -16,6 +16,10 @@ Proposed frontend amendment IF-A1),
 **RTL mapping:** Planned. No `fetch_stage` or fetch leaf RTL exists in `rtl/` (checked
 2026-11-01). Names are fixed in section 3 (N1). The RTL is written by Việt (F-d).
 This document is neither implementation nor verification evidence.
+
+**Amendment (accepted by Việt on 2026-11-04).** This document is worded to match the `fetch_buffer`
+decisions FB-O1..FB-O7 in [fetch-buffer.md](fetch-buffer.md): the buffer, not the controller, presents
+the entry at `issue`; O2 and O3 are resolved there.
 
 ## 1. Purpose and boundary
 
@@ -81,8 +85,8 @@ Controller's `next_fetch_pc` takes `PC_RESET_VEC`, and the control state is clea
 Constants and parameters:
 
 - `PC_RESET_VEC = 32'h0000_0000` is a BASE constant defined in the RISC-V package (BASE
-  [purpose and boundary](5-stage-baseline-core.md#purpose-and-boundary)). It is **not yet in
-  `rtl/riscv_pkg.sv`** (dependency D-1).
+  [purpose and boundary](5-stage-baseline-core.md#purpose-and-boundary)). It is defined in
+  `rtl/riscv_pkg.sv` (dependency D-1, resolved 2026-11-01).
 - `FETCH_DEPTH = 3` (BASE instruction-fetch organization), a local constant of `fetch_buffer` (N2).
 - `OBI_OUTSTANDING_MAX = 1` is a link contract on the instruction port, not an OBI property and not
   a port (BASE [OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration)).
@@ -171,10 +175,11 @@ if_stage : fetch_stage
 
 ```text
 redirect_fire, redirect_target, rst_n, clk
-    -> fetch_controller_unit  (next_fetch_pc; allocation, kill, presentation choice: O1)
-         -> allocate / kill / present -> fetch_buffer (FETCH_DEPTH = 3 entries)
+    -> fetch_controller_unit  (next_fetch_pc; alloc_valid, alloc_pc, kill: FB-O1)
+         -> alloc_valid, alloc_pc, kill -> fetch_buffer (FETCH_DEPTH = 3 entries)
+fetch_buffer -> alloc_fire -> fetch_controller_unit  (advances next_fetch_pc only)
 fetch_accept -> fetch_buffer (fetch_fire frees the oldest live READY entry: O5)
-fetch_buffer -> presented entry pc -> fetch_obi_interface
+fetch_buffer -> present_valid, present_pc (entry at issue) -> fetch_obi_interface
 fetch_obi_interface -> req, addr, we, be, wdata, rready           (instruction port out)
 gnt, rvalid, rdata -> fetch_obi_interface -> fetch_buffer           (grant and response in)
 fetch_buffer -> oldest live READY -> fetch_valid, fetch_pc, fetch_instruction
@@ -185,20 +190,23 @@ The internal signal names between leaves belong to the leaf designs.
 ### Leaf responsibilities
 
 - **`fetch_controller_unit`** — the instruction-fetch control plane: `next_fetch_pc`, sequential
-  `PC + 4`, redirect selection, allocation and kill commands, and the choice of which entry is
-  presented (BASE [instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization); O1).
+  `PC + 4`, redirect selection, and the allocation and kill commands (FB-O1; BASE
+  [instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization)). It reads no
+  per-entry state and has no `gnt` input. It does not choose the presented entry: `fetch_buffer` presents
+  the entry at `issue` (FB-O1).
   It owns the registered `next_fetch_pc` and hands it to each newly allocated `QUEUED` entry (BASE
   [capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states)).
   It stores no per-entry state and does not implement OBI request stability.
 - **`fetch_buffer`** — the `FETCH_DEPTH = 3` entries: lifecycle `FREE`/`QUEUED`/`OUTSTANDING`/`READY`,
-  `killed`, `protocol_committed`, `pc` and `instruction`, and allocation order (BASE
-  instruction-fetch organization; capacity and transaction states). It drives the delivery outputs
-  and frees the delivered entry on `fetch_fire`. Its internal encoding is open (O2, O3).
+  `killed`, `pc` and `instruction`, and allocation order as a three-slot ring (FB-O2; BASE
+  instruction-fetch organization; capacity and transaction states). It derives `protocol_committed`
+  (FB-O4) and the outstanding count (FB-O3), presents the entry at `issue` (FB-O1), drives the delivery
+  outputs and frees the delivered entry on `fetch_fire`. Its encoding is in [fetch-buffer.md](fetch-buffer.md).
 - **`fetch_obi_interface`** — presents the chosen entry as protocol signals and drives the constant
   port fields (F-c). It is stateless ([fetch-obi-interface.md](fetch-obi-interface.md) FOI-O1): the
   OBI hold, stability and no-withdrawal rules of BASE instruction-fetch organization are met at the
-  port because `fetch_buffer` keeps a protocol-committed entry and its `pc` until its `gnt`, and
-  `fetch_controller_unit` keeps presenting that entry.
+  port because `fetch_buffer` keeps the entry at `issue` and its `pc` until its `request_fire`
+  (FB-O1, FB-O2, FB-O4).
 
 Pipeline-register ownership: the IF/ID register is core-owned, outside this stage (F-a).
 
@@ -208,12 +216,12 @@ Pipeline-register ownership: the IF/ID register is core-owned, outside this stag
 | --- | --- | --- | --- | --- |
 | `next_fetch_pc` (`ADDR_WIDTH`) | Next address to allocate; `fetch_controller_unit` | Sequential allocation: `+4`; redirect edge: `redirect_target + 4` | Holds when nothing is allocated, including while the buffer is full | `PC_RESET_VEC` (BASE reset architecture) |
 | Entry lifecycle (`FREE`, `QUEUED`, `OUTSTANDING`, `READY`) | Entry validity and lifecycle; `fetch_buffer` | Allocation, grant, response, `fetch_fire`, redirect | Per the BASE lifecycle | `FREE` (BASE reset architecture: entry-valid and lifecycle state) |
-| Entry `protocol_committed` | Request ownership; `fetch_buffer`. The other leaves only signal presentation (O1) | First `req` for the entry: committed from the first cycle with `req = 1`, so a redirect on that edge keeps it (BASE capacity and transaction states) | Set until the entry's own `gnt` (BASE capacity and transaction states) | `0` (control-plane state; BASE stale-response section) |
+| Entry `protocol_committed` (derived) | Request ownership; `fetch_buffer`, derived as `life[issue] == QUEUED` (FB-O4) | The entry at `issue` is presented from the first cycle in which it is `QUEUED` at `issue`; a redirect on that edge keeps it (BASE capacity and transaction states) | Holds until the entry's own `gnt`, which moves `issue` (FB-O2) | None stored; derived from `life`, which resets to `FREE` |
 | Entry `killed` | Wrong-path marker; `fetch_buffer` | Redirect edge, for each kept entry | Set until the entry is drained or freed (BASE stale-response section) | `0` (control-plane state) |
 | Entry `pc` (`ADDR_WIDTH`) | Fetch address and delivered `fetch_pc`; `fetch_buffer` | Allocation | Holds for the entry's life; stable while `req` is asserted | Not reset; meaningful only while the entry is valid (BASE reset architecture) |
 | Entry `instruction` (`INSTR_WIDTH`) | Payload of a `READY` entry; `fetch_buffer` | Expected response for a live `OUTSTANDING` entry | Holds while `READY` | Not reset (BASE reset architecture) |
-| Outstanding count (`0` or `1`) | Stored or derived; O2 | `request_fire`, `response_fire` | Holds otherwise | `0` (BASE OBI response validity and reset) |
-| Allocation order | Oldest-first order across entries; O3 | Allocation, removal, redirect | Holds | Empty |
+| Outstanding count (`0` or `1`) | Derived, not stored: `life[issue - 1] == OUTSTANDING` (FB-O3) | `request_fire`, `response_fire` | Derived | No state; `life` resets to `FREE` (BASE OBI response validity and reset) |
+| Allocation order | Three-slot ring: `head`, `issue`, `tail` (FB-O2) | Allocation, `request_fire`, delivery, redirect | Holds | `head = issue = tail = 0` |
 
 Ownership rules: the presented request's payload is the entry's `pc`; `addr` and `req` do not
 change before the matching `gnt` (BASE capacity and transaction states). A `FREE` entry's payload
@@ -228,10 +236,9 @@ state, not from payload.
   its edge (BASE stale-response section), so a killed `READY` entry never persists.
 - **Delivery event**: `fetch_fire = fetch_valid && fetch_accept` (O5). It frees the oldest live
   `READY` entry; the core IF/ID captures that entry on the same edge.
-- **Presentable**: the oldest `QUEUED` entry with `protocol_committed = 0`, when no other entry is
-  protocol-committed and not yet granted (BASE capacity and transaction states: a presented entry is
-  not bypassed). An older `OUTSTANDING` entry does not block presentation; the subordinate holds
-  `gnt = 0` until it can accept (BASE capacity and transaction states).
+- **Presentable**: the entry at `issue`, when it is `QUEUED` (FB-O4). It is always committed, so no
+  uncommitted entry is presented. An older `OUTSTANDING` entry does not block presentation; the subordinate
+  holds `gnt = 0` until it can accept (BASE capacity and transaction states).
 - **Allocation**: a `FREE` entry, counting entries freed on this edge, receives `next_fetch_pc` as a
   new `QUEUED` entry. There is no other allocation condition (BASE IF-A1). A full buffer stops
   allocation by capacity alone.
@@ -314,7 +321,7 @@ Pre-edge: `next_fetch_pc = 0x14`. S1 `READY` (`pc=0x08`, `I1`); S2 `OUTSTANDING`
 
 | Edge | Events | State before | Action | State after |
 | --- | --- | --- | --- | --- |
-| E | `fetch_fire=1`; `request_fire` for S3; `response_fire` for S2 | S1 `READY` `0x08`; S2 `OUTSTANDING` `0x0C`; S3 `QUEUED` committed `0x10`; outstanding `1` | IF/ID captures `{0x08, I1}`; S1 freed and reallocated with `0x14`; S2 captures `I2`; S3 granted | S1 `QUEUED` `0x14` uncommitted; S2 `READY` `0x0C`; S3 `OUTSTANDING` `0x10`; `next_fetch_pc=0x18`; outstanding `1` |
+| E | `fetch_fire=1`; `request_fire` for S3; `response_fire` for S2 | S1 `READY` `0x08`; S2 `OUTSTANDING` `0x0C`; S3 `QUEUED` committed `0x10`; outstanding `1` | IF/ID captures `{0x08, I1}`; S1 freed and reallocated with `0x14`; S2 captures `I2`; S3 granted | S1 `QUEUED` `0x14` committed (at `issue`, FB-O4); S2 `READY` `0x0C`; S3 `OUTSTANDING` `0x10`; `next_fetch_pc=0x18`; outstanding `1` |
 
 After E: `fetch_valid=1` with `{0x0C, I2}`. `0x14` is presentable in the next cycle because S3 is
 no longer waiting for `gnt`. One instruction per cycle is sustained (BASE capacity and transaction
@@ -370,7 +377,7 @@ Leaf-level evidence belongs to the later leaf designs.
 | `fetch_accept` without `fetch_valid` (O5) | `fetch_accept=1` while no entry is `READY` | No entry freed; state unchanged by the accept |
 | Unexpected response (BASE OBI response validity and reset) | `rvalid` with no outstanding entry | No state change; reported as violation |
 | Reset (BASE reset architecture) | `rst_n` asserted with entries in every state | `req=0` after propagation; `next_fetch_pc=PC_RESET_VEC`; entries `FREE`; payload not checked |
-| Wrap (O3) | Many allocations through the three slots | Ordering holds across slot reuse |
+| Wrap (FB-O2) | Many allocations through the three slots ([fetch-buffer.md](fetch-buffer.md) trace W) | Ordering holds across slot reuse |
 
 ## 9. Rationale and open decisions
 
@@ -387,7 +394,7 @@ Leaf-level evidence belongs to the later leaf designs.
 | N1 | Names and instances of section 3 | `id_<module>` pattern; `fetch_obi_interface` avoids the `obi_interface` ambiguity |
 | N2 | `FETCH_DEPTH = 3` is a local constant of `fetch_buffer`; `OBI_OUTSTANDING_MAX` is not a port | Package change limited to `PC_RESET_VEC` |
 | N3 | `rst_n` is a stage input | BASE reset architecture |
-| O1 | `fetch_controller_unit` chooses the presented entry; `fetch_obi_interface` presents only that entry and keeps it stable | BASE assigns issue policy to the Fetch Controller Unit |
+| O1 | Amended by FB-O1 ([fetch-buffer.md](fetch-buffer.md)): `fetch_buffer` presents the entry at `issue` (the oldest `QUEUED`); the controller reads no per-entry state; `fetch_obi_interface` presents only that entry and keeps it stable | Owner decision 2026-11-04; BASE [OBI-side selection](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states) already gives the oldest eligible `QUEUED` entry to the OBI side |
 | O4 | Inputs are `0` or `1` only; X and Z are outside the contract | Accepted EX and WB precedent |
 | O5 | `fetch_fire = fetch_valid && fetch_accept` is the only event that delivers and frees the oldest live `READY` entry | Standard valid/accept; no extra HCU gating |
 
@@ -401,28 +408,23 @@ Leaf-level evidence belongs to the later leaf designs.
 - **D-3.** The HCU design must drive `fetch_accept` consistently with the IF/ID `stall` and `flush` it
   drives, so that IF frees an entry exactly when IF/ID captures it.
 
-### Open items, deferred to the `fetch_buffer` design
+### Open items resolved in the `fetch_buffer` design
 
 They do not change the `fetch_stage` interface.
 
-**O2. Outstanding count: stored or derived.**
-- Options: (a) an explicit count or flag; (b) derived from the entries in `OUTSTANDING`.
-- Current recommendation: (b), one source of truth; a reduction over three entries.
+**O2. Outstanding count: stored or derived.** Resolved in [fetch-buffer.md](fetch-buffer.md) (FB-O3):
+derived, `outstanding = life[issue - 1] == OUTSTANDING`.
 
-**O3. Age encoding for oldest-first order.**
-- Live order is always `READY` < `OUTSTANDING` < `QUEUED` in allocation order: at most one
-  `OUTSTANDING` entry, and the oldest `QUEUED` entry is presented first. A redirect removes a prefix
-  (stale `READY`, oldest end) and a suffix (uncommitted `QUEUED`, youngest end) and keeps the killed
-  middle until drained.
-- Options: (a) head and tail indices over the three slots: head advances on removal at the oldest
-  end, tail advances on allocation and rolls back over uncommitted `QUEUED` entries on redirect;
-  (b) a per-entry age or rank field.
-- Current recommendation: (a), with wrap, empty and full conditions defined in the leaf design.
+**O3. Age encoding for oldest-first order.** Resolved in [fetch-buffer.md](fetch-buffer.md) (FB-O2): a
+three-slot ring with `head` (write end), `issue` (oldest `QUEUED`) and `tail` (oldest entry). The redirect
+rule, and the wrap, empty and full conditions, are in that document.
 
 ### What can proceed and what stays blocked
 
-- Can proceed: leaf designs in the order `fetch_obi_interface`, `fetch_buffer` (decides O2 and O3),
-  then `fetch_controller_unit`, whose entry-selection inputs depend on the O3 age encoding; the HCU
-  design (D-3).
+- Done: `fetch_obi_interface` (leaf RTL committed, `04f4535`); `fetch_buffer` design (accepted by Việt on
+  2026-11-04, [fetch-buffer.md](fetch-buffer.md)).
+- Can proceed: `fetch_controller_unit`, against FB-O1 and FB-O7. It no longer has entry-selection inputs, and
+  on a kill edge `alloc_valid` is ignored (FB-O7). The `fetch_buffer` RTL and the HCU design (D-3) also can
+  proceed.
 - Leaf RTL follows each accepted leaf design. D-1 and D-2 are resolved.
 - Verification of this stage is not established by this document; section 8 lists obligations only.
