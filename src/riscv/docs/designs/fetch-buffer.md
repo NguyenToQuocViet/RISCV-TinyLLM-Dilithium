@@ -13,8 +13,7 @@ the [five-stage BASE core](5-stage-baseline-core.md): line 579 (Fetch Controller
 [OBI response validity and reset](5-stage-baseline-core.md#obi-response-validity-and-reset) and
 [reset architecture](5-stage-baseline-core.md#reset-architecture).
 Layout precedent: [data-obi-controller.md](data-obi-controller.md).
-**RTL mapping:** Planned. No `fetch_buffer` RTL exists in `rtl/` yet (checked 2026-11-04). Module
-`fetch_buffer`, file `fetch_buffer.sv`, instance `if_fetch_buffer` inside `prefetch_unit` (fetch-stage §3).
+**RTL mapping:** `rtl/fetch_buffer.sv`. Module `fetch_buffer`, file `fetch_buffer.sv`, instance `if_fetch_buffer` inside `prefetch_unit` (fetch-stage §3).
 The RTL is written by Việt (F-d). This document is neither implementation nor verification evidence.
 
 ## 1. Purpose and boundary
@@ -101,6 +100,10 @@ through the controller (FB-O1).
 
 `pc` and `instruction` are not reset (BASE [reset architecture](5-stage-baseline-core.md#reset-architecture);
 fetch-stage §4).
+
+RTL names: `head`, `issue` and `tail` are `head_ptr`, `issue_ptr` and `tail_ptr`; `next` and `prev` are
+`next_slot` and `prev_slot`; lifecycle values are `LIFE_FREE`, `LIFE_QUEUED`, `LIFE_OUTSTANDING` and
+`LIFE_READY` of `life_t`, which `riscv_pkg` defines with `FETCH_DEPTH` (fetch-stage N2).
 
 ### Derived signals (from state only)
 

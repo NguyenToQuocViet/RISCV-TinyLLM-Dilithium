@@ -87,7 +87,7 @@ Constants and parameters:
 - `PC_RESET_VEC = 32'h0000_0000` is a BASE constant defined in the RISC-V package (BASE
   [purpose and boundary](5-stage-baseline-core.md#purpose-and-boundary)). It is defined in
   `rtl/riscv_pkg.sv` (dependency D-1, resolved 2026-11-01).
-- `FETCH_DEPTH = 3` (BASE instruction-fetch organization), a local constant of `fetch_buffer` (N2).
+- `FETCH_DEPTH = 3` (BASE instruction-fetch organization), defined in `rtl/riscv_pkg.sv` (N2).
 - `OBI_OUTSTANDING_MAX = 1` is a link contract on the instruction port, not an OBI property and not
   a port (BASE [OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration)).
 
@@ -392,7 +392,7 @@ Leaf-level evidence belongs to the later leaf designs.
 | F-e | `redirect_fire` and `redirect_target` come raw from EX, because inside IF a redirect only changes the fetch PC and the entries. Global events (load-use, MEM wait, flushes of other stages) go through the HCU and reach IF only as `fetch_accept` | Owner principle: local effect stays direct, global effects go through the HCU |
 | F-f | No MEM-wait freeze and no MEM-occupancy rule for the frontend; the BASE amendment IF-A1 records it. Fetch continues during any stall until the buffer is full | Two independent ports and memory models: withholding fetch protects nothing; a later shared path arbitrates through `gnt` |
 | N1 | Names and instances of section 3 | `id_<module>` pattern; `fetch_obi_interface` avoids the `obi_interface` ambiguity |
-| N2 | `FETCH_DEPTH = 3` is a local constant of `fetch_buffer`; `OBI_OUTSTANDING_MAX` is not a port | Package change limited to `PC_RESET_VEC` |
+| N2 | `FETCH_DEPTH = 3` and the entry lifecycle type `life_t` are defined in `riscv_pkg` (Owner, 2026-11-04); `OBI_OUTSTANDING_MAX` is not a port | Owner placed them in the package when writing `fetch_buffer` |
 | N3 | `rst_n` is a stage input | BASE reset architecture |
 | O1 | Amended by FB-O1 ([fetch-buffer.md](fetch-buffer.md)): `fetch_buffer` presents the entry at `issue` (the oldest `QUEUED`); the controller reads no per-entry state; `fetch_obi_interface` presents only that entry and keeps it stable | Owner decision 2026-11-04; BASE [OBI-side selection](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states) already gives the oldest eligible `QUEUED` entry to the OBI side |
 | O4 | Inputs are `0` or `1` only; X and Z are outside the contract | Accepted EX and WB precedent |

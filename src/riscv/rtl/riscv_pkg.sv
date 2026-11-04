@@ -6,10 +6,11 @@
 //------------------------------------------------------------------------------
 
 package riscv_pkg;
-    localparam int DATA_WIDTH = 32;
-    localparam int ADDR_WIDTH = 32;
-    localparam int INSTR_WIDTH= 32;
+    localparam int DATA_WIDTH       = 32;
+    localparam int ADDR_WIDTH       = 32;
+    localparam int INSTR_WIDTH      = 32;
     localparam logic [ADDR_WIDTH-1:0] PC_RESET_VEC = '0;
+    localparam int FETCH_DEPTH    = 3;
 
     typedef enum logic [3:0] {
         ALU_ADD = 4'h0,
@@ -76,4 +77,11 @@ package riscv_pkg;
         OPC_JALR     = 5'b11001,
         OPC_JAL      = 5'b11011
     } opcode_t;
+
+    typedef enum logic [1:0] {
+        LIFE_FREE   = 2'h0,
+        LIFE_QUEUED = 2'h1,
+        LIFE_OUTSTANDING = 2'h2,
+        LIFE_READY  = 2'h3
+    } life_t;
 endpackage : riscv_pkg
