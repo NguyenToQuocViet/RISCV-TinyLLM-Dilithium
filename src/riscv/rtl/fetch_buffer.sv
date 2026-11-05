@@ -102,25 +102,25 @@ module fetch_buffer
     assign tail_free        = fetch_fire || killed_resp;
 
     //to controller
-    assign alloc_fire       = kill || (alloc_valid && (!full || tail_free));
+    assign alloc_fire       = alloc_valid && (!full || tail_free);
 
     //kill edge
     logic kept_out;
     logic kept_q;
     logic [1:0] nxt;
-    logic [1:0] target_slot;
+    logic [1:0] restart_slot;
 
     assign kept_out     = outst && !response_fire;
     assign kept_q       = present_valid;
     assign nxt          = next_slot(issue_ptr);
-    assign target_slot  = kept_q ? nxt : issue_ptr;
+    assign restart_slot = kept_q ? nxt : issue_ptr;
 
     //head pointer
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             head_ptr <= '0;
         end else if (kill) begin
-            head_ptr <= next_slot(target_slot);
+            head_ptr <= restart_slot;
         end else if (alloc_fire) begin
             head_ptr <= next_slot(head_ptr);
         end
@@ -166,15 +166,13 @@ module fetch_buffer
 
             if (kept_q && request_fire) begin
                 life[issue_ptr] <= LIFE_OUTSTANDING;
-            end else begin
+            end else if (kept_q) begin
                 life[issue_ptr] <= LIFE_QUEUED;
+            end else begin
+                life[issue_ptr] <= LIFE_FREE;
             end
 
-            if (kept_q) begin
-                life[nxt] <= LIFE_QUEUED;
-            end else begin
-                life[nxt] <= LIFE_FREE;
-            end
+            life[nxt] <= LIFE_FREE;
         end else begin
             if (response_fire && !killed[prv]) begin
                 life[prv] <= LIFE_READY;
@@ -212,9 +210,7 @@ module fetch_buffer
 
     //pc payload (no reset)
     always_ff @(posedge clk) begin
-        if (kill) begin
-            pc[target_slot] <= alloc_pc;
-        end else if (alloc_fire) begin
+        if (alloc_fire) begin
             pc[head_ptr] <= alloc_pc;
         end
     end
