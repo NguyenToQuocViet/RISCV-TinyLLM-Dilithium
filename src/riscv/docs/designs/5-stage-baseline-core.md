@@ -20,6 +20,12 @@ rule; IF/ID delivery is still held by
 parent control during load-use and MEM wait. Recorded in
 [Pipeline-control priority](#pipeline-control-priority) and refined by
 [Fetch Stage](fetch-stage.md).
+**Frontend amendment:** IF-A2, accepted by Việt on 2026-11-05. The
+redirect edge does not allocate the EX redirect target. `next_fetch_pc` takes `redirect_target` on that edge, and the
+target is allocated as a fresh `QUEUED` entry on the following edge, through the ordinary allocation path. The cost is
+one more cycle: the target's `req` starts two cycles after the redirect cycle at the earliest. Recorded in
+[Stale instruction responses after redirect](#stale-instruction-responses-after-redirect) and refined by
+[Fetch Controller Unit](fetch-controller-unit.md).
 
 **Decision record:** Việt approved `BASE → BASE_CI → BASE_CI_IRQ`, BASE with
 37 integer operations plus FENCE, and one common elaboration-selected top.
@@ -850,8 +856,9 @@ Memory controls, store data and data-port protocol ownership end in MEM.
 
 An EX branch/jump `redirect_fire` makes every younger Fetch Buffer entry
 allocated before it stale, regardless of matching PC. No stale entry is reused
-by matching PC. The Fetch Controller selects the target as next fetch address
-and allocates it freshly as QUEUED with new ownership. Recovery does not
+by matching PC. The Fetch Controller loads the target as its next fetch address on
+the redirect edge and allocates it freshly as QUEUED with new ownership on the
+following edge (IF-A2). Recovery does not
 undo an OBI handshake that occurs on the same edge:
 
 - A wrong-path `READY` entry is freed and cannot create IF/ID valid, even if IF/ID would otherwise accept it on that edge.
@@ -863,7 +870,7 @@ A protocol-committed queued request that is not granted on the redirect edge rem
 
 With `OBI_OUTSTANDING_MAX=1`, the fresh redirected fetch may occupy a slot reclaimed from a dropped, uncommitted queued entry but cannot become a second outstanding transaction. It remains queued until the stale outstanding transaction has been drained and the instruction-memory model can accept the redirected request. This is a consequence of the current memory configuration, not a permanent restriction of the three-entry Fetch Buffer architecture.
 
-The baseline has no `redirect_pending` state. With three Fetch Buffer entries, at most one entry can be `OUTSTANDING` and at most one other entry can be the single protocol-committed queued request currently presented on OBI. The remaining entry is already free or can be reclaimed from stale `READY` or unpresented `QUEUED` state on redirect. The Fetch Controller therefore allocates the EX redirect target through its registered PC path as a fresh `QUEUED` entry on the redirect edge, then advances its registered next-fetch state to the following sequential PC. The target request can first be presented in the following cycle if ordinary issue conditions allow it; there is no combinational redirect-to-OBI request path.
+The baseline has no `redirect_pending` state. With three Fetch Buffer entries, at most one entry can be `OUTSTANDING` and at most one other entry can be the single protocol-committed queued request currently presented on OBI. The remaining entry is already free or can be reclaimed from stale `READY` or unpresented `QUEUED` state on redirect. The Fetch Controller therefore loads the EX redirect target into its registered next-fetch state on the redirect edge (IF-A2), and allocates it as a fresh `QUEUED` entry on the following edge; that allocation advances the registered next-fetch state to the following sequential PC. Keeping at most two entries leaves one slot free after the redirect edge, so that following-edge allocation always finds one. The target request can first be presented in the cycle after that allocation, two cycles after the redirect cycle, if ordinary issue conditions allow it; there is no combinational redirect-to-OBI request path.
 
 Request/outstanding ownership and killed state are control-plane state and are reset. Fetch-entry PC payload is not reset and has meaning only while its entry is valid. Constant instruction-side `rready=1'b1` drains a killed expected response on `instr_response_fire`; stale work cannot block forward progress merely because it will be discarded. A future configuration that cannot guarantee a reclaimable entry on redirect must revisit whether pending-target state is required.
 

@@ -21,6 +21,11 @@ This document is neither implementation nor verification evidence.
 decisions FB-O1..FB-O7 in [fetch-buffer.md](fetch-buffer.md): the buffer, not the controller, presents
 the entry at `issue`; O2 and O3 are resolved there.
 
+**Amendment IF-A2 (accepted by Việt on 2026-11-05).** The redirect edge does not allocate the EX
+redirect target. `next_fetch_pc` takes `redirect_target` on that edge, and the target is allocated as a fresh
+`QUEUED` entry on the following edge. The rows below that describe the redirect edge are worded for it.
+See [fetch-controller-unit.md](fetch-controller-unit.md) and BASE IF-A2.
+
 ## 1. Purpose and boundary
 
 `fetch_stage` is the BASE IF stage. It turns the sequential, redirected instruction-address
@@ -214,7 +219,7 @@ Pipeline-register ownership: the IF/ID register is core-owned, outside this stag
 
 | State/storage | Meaning and owner | Update event | Hold rule | Reset value or no-reset rationale |
 | --- | --- | --- | --- | --- |
-| `next_fetch_pc` (`ADDR_WIDTH`) | Next address to allocate; `fetch_controller_unit` | Sequential allocation: `+4`; redirect edge: `redirect_target + 4` | Holds when nothing is allocated, including while the buffer is full | `PC_RESET_VEC` (BASE reset architecture) |
+| `next_fetch_pc` (`ADDR_WIDTH`) | Next address to allocate; `fetch_controller_unit` | Each allocation: `+4`; redirect edge: `redirect_target`, with no allocation on that edge (IF-A2) | Holds when nothing is allocated, including while the buffer is full | `PC_RESET_VEC` (BASE reset architecture) |
 | Entry lifecycle (`FREE`, `QUEUED`, `OUTSTANDING`, `READY`) | Entry validity and lifecycle; `fetch_buffer` | Allocation, grant, response, `fetch_fire`, redirect | Per the BASE lifecycle | `FREE` (BASE reset architecture: entry-valid and lifecycle state) |
 | Entry `protocol_committed` (derived) | Request ownership; `fetch_buffer`, derived as `life[issue] == QUEUED` (FB-O4) | The entry at `issue` is presented from the first cycle in which it is `QUEUED` at `issue`; a redirect on that edge keeps it (BASE capacity and transaction states) | Holds until the entry's own `gnt`, which moves `issue` (FB-O2) | None stored; derived from `life`, which resets to `FREE` |
 | Entry `killed` | Wrong-path marker; `fetch_buffer` | Redirect edge, for each kept entry | Set until the entry is drained or freed (BASE stale-response section) | `0` (control-plane state) |
@@ -240,7 +245,7 @@ state, not from payload.
   uncommitted entry is presented. An older `OUTSTANDING` entry does not block presentation; the subordinate
   holds `gnt = 0` until it can accept (BASE capacity and transaction states).
 - **Allocation**: a `FREE` entry, counting entries freed on this edge, receives `next_fetch_pc` as a
-  new `QUEUED` entry. There is no other allocation condition (BASE IF-A1). A full buffer stops
+  new `QUEUED` entry. There is no other allocation condition (BASE IF-A1), and a redirect edge allocates nothing (IF-A2). A full buffer stops
   allocation by capacity alone.
 
 ### 5.2 Concurrent-event rules
@@ -248,7 +253,7 @@ state, not from payload.
 | Condition | Events on this edge | Actions | Next state |
 | --- | --- | --- | --- |
 | `rst_n = 0` | Any | No request, transfer, delivery or allocation (BASE reset architecture) | `next_fetch_pc = PC_RESET_VEC`; control state reset (section 6) |
-| `redirect_fire = 1` | Grant and response events on this edge still apply | Every `READY` entry is freed, whatever `fetch_accept` is; an `OUTSTANDING` entry is killed and kept, or freed if its `response_fire` occurs; a protocol-committed `QUEUED` entry is killed and kept, and becomes killed `OUTSTANDING` if granted on this edge; an uncommitted `QUEUED` entry is freed; the target is allocated as a fresh uncommitted `QUEUED` entry (BASE stale-response section, four cases) | `next_fetch_pc = redirect_target + 4` |
+| `redirect_fire = 1` | Grant and response events on this edge still apply | Every `READY` entry is freed, whatever `fetch_accept` is; an `OUTSTANDING` entry is killed and kept, or freed if its `response_fire` occurs; a protocol-committed `QUEUED` entry is killed and kept, and becomes killed `OUTSTANDING` if granted on this edge; an uncommitted `QUEUED` entry is freed; the target is not allocated on this edge; it is allocated as a fresh uncommitted `QUEUED` entry on the following edge (IF-A2; BASE stale-response section, four cases) | `next_fetch_pc = redirect_target` |
 | No redirect, `fetch_fire = 1` | Delivery; grant and response events; allocation | The oldest live `READY` entry is freed; that slot may be allocated on the same edge (BASE capacity and transaction states, one-edge example) | As the events dictate |
 | No redirect, `fetch_fire = 0` (HCU stall, or nothing `READY`) | Grant and response events; allocation | No delivery. Allocation and presentation continue until every entry is occupied (BASE IF-A1) | As the events dictate |
 
@@ -335,7 +340,8 @@ committed, `req=1` (`0x24`). Inputs: `redirect_fire=1`, `redirect_target=0x100`,
 
 | Edge | Events | State before | Action | State after |
 | --- | --- | --- | --- | --- |
-| R | Redirect to `0x100` | As above | S1 freed; S2 killed and kept; S3 killed and kept, `req` stays `1`; S1 reallocated with `0x100` | S1 `QUEUED` `0x100` uncommitted; S2 `OUTSTANDING` killed; S3 `QUEUED` committed killed, `req=1`; `fetch_valid=0`; `next_fetch_pc=0x104` |
+| R | Redirect to `0x100` | As above | S1 freed; S2 killed and kept; S3 killed and kept, `req` stays `1`; no allocation on this edge | S1 `FREE`; S2 `OUTSTANDING` killed; S3 `QUEUED` committed killed, `req=1`; `fetch_valid=0`; `next_fetch_pc=0x100` |
+| R+1 | Target allocation (IF-A2) | As after R; no grant or response | S1 allocated with `0x100` (uncommitted) | S1 `QUEUED` `0x100` uncommitted; S3 still waits for `gnt` with `req=1`; `next_fetch_pc=0x104` |
 
 Afterwards: `0x100` is not presented while S3 waits for `gnt`. When S3 is granted it becomes killed
 `OUTSTANDING`, and its response and S2's are drained to `FREE`, never `READY`. `0x100` is then
@@ -372,7 +378,7 @@ Leaf-level evidence belongs to the later leaf designs.
 | Redirect, committed and granted | Grant on the redirect edge | Entry becomes killed `OUTSTANDING`; its response is drained |
 | Redirect, committed not granted | Trace B | `req` and `addr` stay stable; not replaced or bypassed |
 | Redirect, unpresented | Redirect with an uncommitted `QUEUED` entry | Entry freed; never presented |
-| Redirect target | Redirect edge | Target allocated as `QUEUED`; its `req` starts at the earliest in the next cycle |
+| Redirect target | Redirect edge, then the following edge (Trace B) | No allocation on the redirect edge; target allocated as `QUEUED` on the following edge (IF-A2); its `req` starts two cycles after the redirect cycle at the earliest |
 | HCU stall (IF-A1) | Trace C | Delivery held; buffer fills to three entries; allocation stops; no entry lost or reordered after release |
 | `fetch_accept` without `fetch_valid` (O5) | `fetch_accept=1` while no entry is `READY` | No entry freed; state unchanged by the accept |
 | Unexpected response (BASE OBI response validity and reset) | `rvalid` with no outstanding entry | No state change; reported as violation |
@@ -397,6 +403,7 @@ Leaf-level evidence belongs to the later leaf designs.
 | O1 | Amended by FB-O1 ([fetch-buffer.md](fetch-buffer.md)): `fetch_buffer` presents the entry at `issue` (the oldest `QUEUED`); the controller reads no per-entry state; `fetch_obi_interface` presents only that entry and keeps it stable | Owner decision 2026-11-04; BASE [OBI-side selection](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states) already gives the oldest eligible `QUEUED` entry to the OBI side |
 | O4 | Inputs are `0` or `1` only; X and Z are outside the contract | Accepted EX and WB precedent |
 | O5 | `fetch_fire = fetch_valid && fetch_accept` is the only event that delivers and frees the oldest live `READY` entry | Standard valid/accept; no extra HCU gating |
+| IF-A2 | Accepted 2026-11-05 (BASE amendment): the redirect edge loads `redirect_target` into `next_fetch_pc` without allocating it; the target is allocated on the following edge | The EX branch-resolve path no longer reaches the `pc` slots or a `+4` adder; the controller loses a mux and an adder. Cost: one more cycle per redirect. No synthesis numbers exist |
 
 ### Dependencies
 
@@ -423,8 +430,10 @@ rule, and the wrap, empty and full conditions, are in that document.
 
 - Done: `fetch_obi_interface` (leaf RTL committed, `04f4535`); `fetch_buffer` design (accepted by Việt on
   2026-11-04, [fetch-buffer.md](fetch-buffer.md)).
-- Can proceed: `fetch_controller_unit`, against FB-O1 and FB-O7. It no longer has entry-selection inputs, and
-  on a kill edge `alloc_valid` is ignored (FB-O7). The `fetch_buffer` RTL and the HCU design (D-3) also can
-  proceed.
+- Can proceed: `fetch_controller_unit` RTL ([fetch-controller-unit.md](fetch-controller-unit.md), Accepted, FCU-O1..FCU-O6),
+  against FB-O1 (amended by IF-A2) and FB-O7 (replaced). On a kill edge `alloc_valid` is ignored (FB-O7), and
+  `next_fetch_pc` loads `redirect_target`.
+- The `fetch_buffer` RTL implements [fetch-buffer.md](fetch-buffer.md) section 4.3.
+  The HCU design (D-3) can proceed.
 - Leaf RTL follows each accepted leaf design. D-1 and D-2 are resolved.
 - Verification of this stage is not established by this document; section 8 lists obligations only.
