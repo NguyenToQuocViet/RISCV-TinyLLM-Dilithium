@@ -13,8 +13,9 @@ frontend amendment IF-A1),
 [OBI response validity and reset](5-stage-baseline-core.md#obi-response-validity-and-reset) and
 [reset architecture](5-stage-baseline-core.md#reset-architecture);
 [memory-stage.md](memory-stage.md) and [decode-stage.md](decode-stage.md) for port and layout precedent.
-**RTL mapping:** Planned. No `fetch_stage` or fetch leaf RTL exists in `rtl/` (checked
-2026-11-01). Names are fixed in section 3 (N1). The RTL is written by Việt (F-d).
+**RTL mapping:** The three leaves exist in `rtl/`: `fetch_obi_interface` (`04f4535`), `fetch_buffer`
+(`2a8d0bf`, its latest commit) and `fetch_controller_unit` (`d985318`). `prefetch_unit` and `fetch_stage` exist
+too (`4f2135c`; checked 2026-11-05). Names are fixed in section 3 (N1, N4). The RTL is written by Việt (F-d).
 This document is neither implementation nor verification evidence.
 
 **Amendment (accepted by Việt on 2026-11-04).** This document is worded to match the `fetch_buffer`
@@ -63,7 +64,8 @@ Non-goals:
   [OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration)).
 - No address-range checking. The code-region precondition belongs to the harness and test
   program (BASE [stale instruction responses](5-stage-baseline-core.md#stale-instruction-responses-after-redirect)).
-- No leaf internals. Each leaf gets its own block design later.
+- No leaf internals. The leaf designs own them: [fetch-buffer.md](fetch-buffer.md),
+  [fetch-controller-unit.md](fetch-controller-unit.md) and [fetch-obi-interface.md](fetch-obi-interface.md).
 
 Producers and consumers at the stage boundary:
 
@@ -190,7 +192,30 @@ gnt, rvalid, rdata -> fetch_obi_interface -> fetch_buffer           (grant and r
 fetch_buffer -> oldest live READY -> fetch_valid, fetch_pc, fetch_instruction
 ```
 
-The internal signal names between leaves belong to the leaf designs.
+### Prefetch Unit wrapper and internal nets (N4)
+
+Owner decision, 2026-11-05. `prefetch_unit` has the same 17 ports as `fetch_stage` (8 inputs, 9 outputs;
+section 2), with the same names and widths. `fetch_stage` has one child, so it connects them by name with no
+logic and no internal nets. `prefetch_unit` has no logic of its own and gets no separate `prefetch-unit.md`:
+this section specifies it.
+
+`clk` goes to `fetch_controller_unit` and `fetch_buffer` only; `fetch_obi_interface` has no `clk`
+([fetch-obi-interface.md](fetch-obi-interface.md) FOI-O1). `rst_n` goes to all three leaves.
+
+The nine nets inside `prefetch_unit` are the leaf port names below. Widths are checked against the leaf
+port lists in `rtl/`.
+
+| Net | Width | Driver | Load |
+| --- | --- | --- | --- |
+| `kill` | 1-bit `logic` | `fetch_controller_unit` (= `redirect_fire`, FCU-O2) | `fetch_buffer` |
+| `alloc_valid` | 1-bit `logic` | `fetch_controller_unit` (constant `1`, FCU-O3) | `fetch_buffer` |
+| `alloc_pc` | `logic [ADDR_WIDTH-1:0]` | `fetch_controller_unit` (= `next_fetch_pc`, FCU-O4) | `fetch_buffer` |
+| `alloc_fire` | 1-bit `logic` | `fetch_buffer` | `fetch_controller_unit` |
+| `present_valid` | 1-bit `logic` | `fetch_buffer` (entry at `issue` is `QUEUED`) | `fetch_obi_interface` |
+| `present_pc` | `logic [ADDR_WIDTH-1:0]` | `fetch_buffer` (`pc` of that entry) | `fetch_obi_interface` |
+| `request_fire` | 1-bit `logic` | `fetch_obi_interface` | `fetch_buffer` |
+| `raw_response_transfer` | 1-bit `logic` | `fetch_obi_interface` | `fetch_buffer` |
+| `response_data` | `logic [INSTR_WIDTH-1:0]` | `fetch_obi_interface` (`rdata` pass-through, FOI-O6) | `fetch_buffer` |
 
 ### Leaf responsibilities
 
@@ -363,9 +388,9 @@ The HCU holds IF/ID (for example during a MEM wait), so `fetch_accept=0` on edge
 
 ## 8. Verification obligations
 
-Planned checks. No fetch test exists (`tb/runners/` has no fetch runner, checked 2026-11-01).
+Planned checks. No fetch test exists (`tb/runners/` has no fetch runner, checked 2026-11-05).
 Expected values come from the BASE rules cited and the traces in section 7, not from the DUT.
-Leaf-level evidence belongs to the later leaf designs.
+Leaf-level checks are in the leaf designs; the rows below are the stage (composition) checks.
 
 | Requirement/invariant | Stimulus or scenario | Expected observation |
 | --- | --- | --- |
@@ -384,6 +409,8 @@ Leaf-level evidence belongs to the later leaf designs.
 | Unexpected response (BASE OBI response validity and reset) | `rvalid` with no outstanding entry | No state change; reported as violation |
 | Reset (BASE reset architecture) | `rst_n` asserted with entries in every state | `req=0` after propagation; `next_fetch_pc=PC_RESET_VEC`; entries `FREE`; payload not checked |
 | Wrap (FB-O2) | Many allocations through the three slots ([fetch-buffer.md](fetch-buffer.md) trace W) | Ordering holds across slot reuse |
+| Hold rule (fetch-obi-interface §3, §5) | Committed entry first presented with `redirect_fire=1` on that edge, then `gnt=0` for several edges, with a younger `QUEUED` entry behind it | `present_valid` and `present_pc` (so `req` and `addr`) stay on the committed entry until its `request_fire`; the redirect keeps it, and the younger entry is not presented |
+| Composition trace (fetch-obi-interface §5, edges 1–6) | Replay that §5 sequence through this stage: `S2` outstanding; `S3` presented from edge 1 and granted with `S2`'s response on edge 3; `S4` queued; reset on edge 5; release on edge 6 | Edge 3: `S2` `READY` with `0x0C`, `S3` `OUTSTANDING`, one outstanding; edge 4: `req=1`, `addr=0x14` with `gnt=0`; edge 5: every entry `FREE`, `next_fetch_pc=PC_RESET_VEC`, `req=0` after propagation; edge 6: nothing presented. The fetch-obi table has no `next_fetch_pc` column, so `next_fetch_pc` is checked at reset only |
 
 ## 9. Rationale and open decisions
 
@@ -400,6 +427,7 @@ Leaf-level evidence belongs to the later leaf designs.
 | N1 | Names and instances of section 3 | `id_<module>` pattern; `fetch_obi_interface` avoids the `obi_interface` ambiguity |
 | N2 | `FETCH_DEPTH = 3` and the entry lifecycle type `life_t` are defined in `riscv_pkg` (Owner, 2026-11-04); `OBI_OUTSTANDING_MAX` is not a port | Owner placed them in the package when writing `fetch_buffer` |
 | N3 | `rst_n` is a stage input | BASE reset architecture |
+| N4 | `prefetch_unit` has the same 17 ports as `fetch_stage` (8 inputs, 9 outputs), same names and widths. `fetch_stage` connects them by name with no logic and no internal nets. No separate `prefetch-unit.md` | Owner, 2026-11-05. A wrapper with no logic is specified by section 3 |
 | O1 | Amended by FB-O1 ([fetch-buffer.md](fetch-buffer.md)): `fetch_buffer` presents the entry at `issue` (the oldest `QUEUED`); the controller reads no per-entry state; `fetch_obi_interface` presents only that entry and keeps it stable | Owner decision 2026-11-04; BASE [OBI-side selection](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states) already gives the oldest eligible `QUEUED` entry to the OBI side |
 | O4 | Inputs are `0` or `1` only; X and Z are outside the contract | Accepted EX and WB precedent |
 | O5 | `fetch_fire = fetch_valid && fetch_accept` is the only event that delivers and frees the oldest live `READY` entry | Standard valid/accept; no extra HCU gating |
@@ -428,12 +456,9 @@ rule, and the wrap, empty and full conditions, are in that document.
 
 ### What can proceed and what stays blocked
 
-- Done: `fetch_obi_interface` (leaf RTL committed, `04f4535`); `fetch_buffer` design (accepted by Việt on
-  2026-11-04, [fetch-buffer.md](fetch-buffer.md)).
-- Can proceed: `fetch_controller_unit` RTL ([fetch-controller-unit.md](fetch-controller-unit.md), Accepted, FCU-O1..FCU-O6),
-  against FB-O1 (amended by IF-A2) and FB-O7 (replaced). On a kill edge `alloc_valid` is ignored (FB-O7), and
-  `next_fetch_pc` loads `redirect_target`.
-- The `fetch_buffer` RTL implements [fetch-buffer.md](fetch-buffer.md) section 4.3.
-  The HCU design (D-3) can proceed.
-- Leaf RTL follows each accepted leaf design. D-1 and D-2 are resolved.
+- Done: leaf RTL is committed for all three leaves: `fetch_obi_interface` (`04f4535`), `fetch_buffer`
+  (`2a8d0bf`, design [fetch-buffer.md](fetch-buffer.md)) and `fetch_controller_unit` (`d985318`, design
+  [fetch-controller-unit.md](fetch-controller-unit.md)). D-1 and D-2 are resolved.
+- Done: the two wrappers, `prefetch_unit` (N4) and `fetch_stage`, are committed (`4f2135c`).
+- Can proceed: the HCU design (D-3).
 - Verification of this stage is not established by this document; section 8 lists obligations only.

@@ -192,7 +192,7 @@ Reading the trace:
   and `rvalid` are already zero, so the `rst_n` term is not exercised here. The leaf check in
   section 5 uses `gnt = 1` and `rvalid = 1` on the reset edge to exercise it.
 
-**Leaf-level checks** (no leaf test exists; `tb/runners/` has no fetch runner, checked 2026-11-01).
+**Leaf-level checks** (no leaf test exists; `tb/runners/` has no fetch runner, checked 2026-11-05).
 The leaf is combinational, so each check is a single-cycle vector driven by the testbench, which
 also drives `present_valid` and `present_pc`:
 
@@ -211,7 +211,7 @@ A pass of these checks shows the leaf's combinational behavior for these vectors
 the Fetch Buffer's lifecycle, the entry selection at `issue`, OBI compliance of the subordinate, or
 whole-core fetch behavior.
 
-**Composition-level checks** (planned in the `fetch_buffer` and `prefetch_unit` designs, not the leaf).
+**Composition-level checks** (planned at stage level in [fetch-stage.md](fetch-stage.md) §8, not in the leaf).
 These depend on the Fetch Buffer state that the leaf test drives by proxy:
 
 - Reset: `req` is `0` after reset propagation because the buffer clears `present_valid` (FOI-O5(a));
@@ -220,7 +220,8 @@ These depend on the Fetch Buffer state that the leaf test drives by proxy:
   buffer side with no leaf port (FOI-O3).
 - Hold rule: `present_valid` and `present_pc` stay on the committed entry until its `request_fire`
   (section 3); the Fetch Buffer keeps that entry at `issue` (fetch-buffer.md).
-- Trace edges 1–6: entry states and `next_fetch_pc`, as in the table above.
+- Trace edges 1–6: entry states, `req` and reset, as in the table above. The table has no `next_fetch_pc`
+  column; `next_fetch_pc` appears there only at reset (edge 5).
 
 ## 6. Owner decisions
 
