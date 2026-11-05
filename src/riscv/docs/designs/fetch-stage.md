@@ -441,7 +441,8 @@ Leaf-level checks are in the leaf designs; the rows below are the stage (composi
   Việt together with this document. It also drops one clause in `external-interrupt-extension.md` (Proposed) that cited the
   removed first-presentation rule.
 - **D-3.** The HCU design must drive `fetch_accept` consistently with the IF/ID `stall` and `flush` it
-  drives, so that IF frees an entry exactly when IF/ID captures it.
+  drives, so that IF frees an entry exactly when IF/ID captures it. Resolved by
+  [hazard-control-unit.md](hazard-control-unit.md) (HCU-O5), accepted by Việt on 2026-11-05.
 
 ### Open items resolved in the `fetch_buffer` design
 
@@ -460,5 +461,5 @@ rule, and the wrap, empty and full conditions, are in that document.
   (`2a8d0bf`, design [fetch-buffer.md](fetch-buffer.md)) and `fetch_controller_unit` (`d985318`, design
   [fetch-controller-unit.md](fetch-controller-unit.md)). D-1 and D-2 are resolved.
 - Done: the two wrappers, `prefetch_unit` (N4) and `fetch_stage`, are committed (`4f2135c`).
-- Can proceed: the HCU design (D-3).
+- Done: the HCU design (D-3), [hazard-control-unit.md](hazard-control-unit.md).
 - Verification of this stage is not established by this document; section 8 lists obligations only.
