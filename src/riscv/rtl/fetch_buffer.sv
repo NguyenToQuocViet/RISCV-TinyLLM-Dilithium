@@ -107,82 +107,122 @@ module fetch_buffer
     //kill edge
     logic kept_out;
     logic kept_q;
+    logic [1:0] nxt;
     logic [1:0] target_slot;
 
     assign kept_out     = outst && !response_fire;
     assign kept_q       = present_valid;
-    assign target_slot  = kept_q ? next_slot(issue_ptr) : issue_ptr;
+    assign nxt          = next_slot(issue_ptr);
+    assign target_slot  = kept_q ? nxt : issue_ptr;
 
-    //control state
+    //head pointer
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            head_ptr    <= '0;
-            issue_ptr   <= '0;
-            tail_ptr    <= '0;
+            head_ptr <= '0;
+        end else if (kill) begin
+            head_ptr <= next_slot(target_slot);
+        end else if (alloc_fire) begin
+            head_ptr <= next_slot(head_ptr);
+        end
+    end
 
+    //issue pointer
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            issue_ptr <= '0;
+        end else if (request_fire) begin
+            issue_ptr <= nxt;
+        end
+    end
+
+    //tail pointer
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            tail_ptr <= '0;
+        end else if (kill) begin
+            if (kept_out) begin
+                tail_ptr <= prv;
+            end else begin
+                tail_ptr <= issue_ptr;
+            end
+        end else if (tail_free) begin
+            tail_ptr <= next_slot(tail_ptr);
+        end
+    end
+
+    //slot lifecycle
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
             for (int slot = 0; slot < FETCH_DEPTH; slot++) begin
-                life[slot]      <= LIFE_FREE;
-                killed[slot]    <= 1'b0;
+                life[slot] <= LIFE_FREE;
             end
         end else if (kill) begin
-            //free every slot, then restore kept entries and the target
-            for (int slot = 0; slot < FETCH_DEPTH; slot++) begin
-                life[slot]      <= LIFE_FREE;
-                killed[slot]    <= 1'b0;
+            //prv, issue and nxt are all three slots
+            if (kept_out) begin
+                life[prv] <= LIFE_OUTSTANDING;
+            end else begin
+                life[prv] <= LIFE_FREE;
             end
 
-            if (kept_out) begin
-                life[prv]       <= LIFE_OUTSTANDING;
-                killed[prv]     <= 1'b1;
+            if (kept_q && request_fire) begin
+                life[issue_ptr] <= LIFE_OUTSTANDING;
+            end else begin
+                life[issue_ptr] <= LIFE_QUEUED;
             end
 
             if (kept_q) begin
-                life[issue_ptr]     <= request_fire ? LIFE_OUTSTANDING : LIFE_QUEUED;
-                killed[issue_ptr]   <= 1'b1;
-            end
-
-            life[target_slot]   <= LIFE_QUEUED;
-            killed[target_slot] <= 1'b0;
-
-            head_ptr    <= next_slot(target_slot);
-            tail_ptr    <= kept_out ? prv : issue_ptr;
-
-            if (request_fire) begin
-                issue_ptr   <= next_slot(issue_ptr);
+                life[nxt] <= LIFE_QUEUED;
+            end else begin
+                life[nxt] <= LIFE_FREE;
             end
         end else begin
-            if (response_fire) begin
-                life[prv]   <= killed[prv] ? LIFE_FREE : LIFE_READY;
+            if (response_fire && !killed[prv]) begin
+                life[prv] <= LIFE_READY;
             end
 
             if (request_fire) begin
                 life[issue_ptr] <= LIFE_OUTSTANDING;
-                issue_ptr       <= next_slot(issue_ptr);
             end
 
             if (tail_free) begin
-                life[tail_ptr]      <= LIFE_FREE;
-                killed[tail_ptr]    <= 1'b0;
-                tail_ptr            <= next_slot(tail_ptr);
+                life[tail_ptr] <= LIFE_FREE;
             end
 
             //last: may reuse the slot freed on this edge
             if (alloc_fire) begin
-                life[head_ptr]      <= LIFE_QUEUED;
-                killed[head_ptr]    <= 1'b0;
-                head_ptr            <= next_slot(head_ptr);
+                life[head_ptr] <= LIFE_QUEUED;
             end
         end
     end
 
-    //payload (no reset)
-    always_ff @(posedge clk) begin
-        if (alloc_fire) begin
-            pc[kill ? target_slot : head_ptr]   <= alloc_pc;
+    //killed marks
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int slot = 0; slot < FETCH_DEPTH; slot++) begin
+                killed[slot] <= 1'b0;
+            end
+        end else if (kill) begin
+            killed[prv]       <= kept_out;
+            killed[issue_ptr] <= kept_q;
+            killed[nxt]       <= 1'b0;
+        end else if (tail_free) begin
+            killed[tail_ptr] <= 1'b0;
         end
+    end
 
-        if (response_fire && !killed[prv] && !kill) begin
-            instruction[prv]    <= response_data;
+    //pc payload (no reset)
+    always_ff @(posedge clk) begin
+        if (kill) begin
+            pc[target_slot] <= alloc_pc;
+        end else if (alloc_fire) begin
+            pc[head_ptr] <= alloc_pc;
+        end
+    end
+
+    //instruction payload (no reset)
+    always_ff @(posedge clk) begin
+        if (response_fire) begin
+            instruction[prv] <= response_data;
         end
     end
 endmodule

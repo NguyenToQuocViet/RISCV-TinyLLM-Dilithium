@@ -146,8 +146,9 @@ These hold after every edge. Each one is checked by the traces in section 5.
 
 ### 4.2 Rules without a kill (`K = 0`)
 
-- **P (response).** `life[prv] := killed[prv] ? FREE : READY`. When not killed, `instruction[prv] := response_data`
-  (fetch-stage §5.3; BASE capacity and transaction states, "a live `OUTSTANDING` entry captures `rdata`").
+- **P (response).** `life[prv] := killed[prv] ? FREE : READY`. `instruction[prv] := response_data` on every
+  `response_fire`; a killed entry never becomes `READY`, so its payload is never read (fetch-stage §5.3; BASE
+  capacity and transaction states, "a live `OUTSTANDING` entry captures `rdata`").
 - **Q (request).** `life[issue] := OUTSTANDING`; `issue := next(issue)`. The killed flag is unchanged.
   Non-killed entries follow BASE capacity and transaction states.
 - **Delivery / killed drain (`tail_free`).** `life[tail] := FREE`; `killed[tail] := 0`; `tail := next(tail)`.
