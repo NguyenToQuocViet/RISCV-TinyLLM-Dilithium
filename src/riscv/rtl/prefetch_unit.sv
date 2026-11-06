@@ -2,7 +2,7 @@
 // Module      : prefetch_unit
 // Description : Connects fetch_controller_unit, fetch_buffer and fetch_obi_interface.
 // Author      : Viet Nguyen To Quoc
-// Date        : 2026-11-05
+// Date        : 2026-11-06
 //------------------------------------------------------------------------------
 
 module prefetch_unit
@@ -31,24 +31,13 @@ module prefetch_unit
     output logic [ADDR_WIDTH-1:0] fetch_pc,
     output logic [INSTR_WIDTH-1:0] fetch_instruction
 );
-    logic alloc_fire;
-    logic kill;
-    logic alloc_valid;
-    logic [ADDR_WIDTH-1:0] alloc_pc;
-
-    fetch_controller_unit if_fetch_controller_unit (
-        .clk        (clk),
-        .rst_n      (rst_n),
-
-        .redirect_fire  (redirect_fire),
-        .redirect_target(redirect_target),
-
-        .alloc_fire     (alloc_fire),
-
-        .kill           (kill),
-        .alloc_valid    (alloc_valid),
-        .alloc_pc       (alloc_pc)
-    );
+    logic pc_write;
+    logic [1:0] pc_write_slot;
+    logic [ADDR_WIDTH-1:0] pc_write_data;
+    logic instruction_write;
+    logic [1:0] instruction_write_slot;
+    logic [1:0] present_slot;
+    logic [1:0] fetch_slot;
 
     logic present_valid;
     logic [ADDR_WIDTH-1:0] present_pc;
@@ -56,28 +45,49 @@ module prefetch_unit
     logic raw_response_transfer;
     logic [INSTR_WIDTH-1:0] response_data;
 
+    fetch_controller_unit if_fetch_controller_unit (
+        .clk                    (clk),
+        .rst_n                  (rst_n),
+
+        .redirect_fire          (redirect_fire),
+        .redirect_target        (redirect_target),
+
+        .fetch_accept           (fetch_accept),
+
+        .request_fire           (request_fire),
+        .raw_response_transfer  (raw_response_transfer),
+
+        .present_valid          (present_valid),
+        .fetch_valid            (fetch_valid),
+
+        .pc_write               (pc_write),
+        .pc_write_slot          (pc_write_slot),
+        .pc_write_data          (pc_write_data),
+
+        .instruction_write      (instruction_write),
+        .instruction_write_slot (instruction_write_slot),
+
+        .present_slot           (present_slot),
+        .fetch_slot             (fetch_slot)
+    );
+
     fetch_buffer if_fetch_buffer (
-        .clk            (clk),
-        .rst_n          (rst_n),
+        .clk                    (clk),
 
-        .kill           (kill),
-        .alloc_valid    (alloc_valid),
-        .alloc_pc       (alloc_pc),
+        .pc_write               (pc_write),
+        .pc_write_slot          (pc_write_slot),
+        .pc_write_data          (pc_write_data),
 
-        .fetch_accept   (fetch_accept),
+        .instruction_write      (instruction_write),
+        .instruction_write_slot (instruction_write_slot),
+        .instruction_write_data (response_data),
 
-        .request_fire   (request_fire),
-        .raw_response_transfer(raw_response_transfer),
-        .response_data  (response_data),
+        .present_slot           (present_slot),
+        .fetch_slot             (fetch_slot),
 
-        .alloc_fire     (alloc_fire),
-
-        .present_valid  (present_valid),
-        .present_pc     (present_pc),
-
-        .fetch_valid    (fetch_valid),
-        .fetch_pc       (fetch_pc),
-        .fetch_instruction(fetch_instruction)
+        .present_pc             (present_pc),
+        .fetch_pc               (fetch_pc),
+        .fetch_instruction      (fetch_instruction)
     );
 
     fetch_obi_interface if_fetch_obi_interface (
