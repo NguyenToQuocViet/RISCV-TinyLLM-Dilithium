@@ -1,99 +1,154 @@
-# Fetch Buffer — Block Design
+# Fetch Buffer
 
-**Status:** Accepted by Việt on 2026-11-06 (IF-A3). Control content moved to [Fetch Controller Unit](fetch-controller-unit.md).
-**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner. Decisions FB-O8 and FB-O9 are in section 9 (2026-11-06).
-**Parent contract:** [five-stage BASE core](5-stage-baseline-core.md#instruction-fetch-organization) (IF-A3); [Fetch stage](fetch-stage.md) §3, §4.
-**RTL mapping:** `rtl/fetch_buffer.sv`, module `fetch_buffer`, instance `if_fetch_buffer` in `prefetch_unit`; RTL for this move is delegated (fetch-stage F-d).
+| Field | Value |
+| --- | --- |
+| Description | Indexed pc and instruction payload array; no reset and no control. |
+| Last modified | 2026-11-07 |
+| Status | Accepted by Việt on 2026-11-07 |
+| Owner | Nguyễn Tô Quốc Việt |
+| RTL | `rtl/fetch_buffer.sv`, module `fetch_buffer`, instance `if_fetch_buffer` in `prefetch_unit` |
+| Parent | [Five-stage BASE core](5-stage-baseline-core.md#instruction-fetch-organization) (IF-A3); [Fetch stage](fetch-stage.md) §3 and §4; [Fetch Controller Unit](fetch-controller-unit.md) |
 
-## 1. Purpose and boundary
+## 1. Overview
 
-`fetch_buffer` is the payload array of the instruction frontend: the `pc` and `instruction` of each of the
-`FETCH_DEPTH = 3` fetch entries. It holds no entry state, pointers, kill marks or choice of entry; the
-[Fetch Controller Unit](fetch-controller-unit.md) owns those. Success criterion: a read of slot `s` returns the last
-value written to `s` by a write whose enable was `1` on an earlier edge.
+- The fetch buffer stores the `pc` and the `instruction` of each of the three fetch slots.
+- It holds no slot state, pointer, killed mark or choice of slot, because the [Fetch Controller Unit](fetch-controller-unit.md) owns those.
+- A read of a slot returns the last value written to that slot on an earlier edge with its write enable high.
 
-## 2. Interface contract
+## 2. Block Design
 
-### Clock, reset and configuration
+```text
+                                                              clk
+                                                               |
+                                                  +--------------------------+
+pc_write <- fetch_controller_unit                 |                          | -> present_pc (fetch_obi_interface)
+pc_write_slot <- fetch_controller_unit            |                          | -> fetch_pc (fetch_stage)
+pc_write_data <- fetch_controller_unit            |                          | -> fetch_instruction (fetch_stage)
+instruction_write <- fetch_controller_unit        |       fetch_buffer       |
+instruction_write_slot <- fetch_controller_unit   |                          |
+instruction_write_data <- fetch_obi_interface     |                          |
+present_slot <- fetch_controller_unit             |                          |
+fetch_slot <- fetch_controller_unit               |                          |
+                                                  +--------------------------+
+```
 
-`clk` is the rising-edge clock of the arrays; there is no reset input. Slots `0..2`; `ADDR_WIDTH` and `INSTR_WIDTH` are
-`32` from `riscv_pkg`.
+## 3. Interface
 
-### Ports and payloads
+- `ADDR_WIDTH` and `INSTR_WIDTH` are both 32, from `riscv_pkg`.
+- The slots are numbered 0 to 2.
 
-All ports are individual signals: 9 inputs and 3 outputs.
-
-| Signal | Direction | Type / width | Meaning | Source |
+| Signal | Dir | Width | Peer | Description |
 | --- | --- | --- | --- | --- |
-| `clk` | Input | 1-bit `logic` | Rising-edge clock of the arrays | Reset architecture |
-| `pc_write` | Input | 1-bit `logic` | Write `pc` of slot `pc_write_slot` | Controller `pc_write` (FCU-O4) |
-| `pc_write_slot` | Input | `logic [1:0]` | Slot written by `pc_write` | Controller `head_ptr` (FCU-O4) |
-| `pc_write_data` | Input | `logic [ADDR_WIDTH-1:0]` | Fetch address stored in the slot | Controller `next_fetch_pc` (FCU-O4) |
-| `instruction_write` | Input | 1-bit `logic` | Write `instruction` of slot `instruction_write_slot` | Controller `response_fire` (FCU-O4) |
-| `instruction_write_slot` | Input | `logic [1:0]` | Slot written by `instruction_write` | Controller `prv` (FCU-O4) |
-| `instruction_write_data` | Input | `logic [INSTR_WIDTH-1:0]` | Instruction word stored in the slot | OBI leaf `response_data` (FOI-O6) |
-| `present_slot` | Input | `logic [1:0]` | Read address of `present_pc` | Controller `issue_ptr` (FCU-O9) |
-| `fetch_slot` | Input | `logic [1:0]` | Read address of `fetch_pc` and `fetch_instruction` | Controller `tail_ptr` (FCU-O7) |
-| `present_pc` | Output | `logic [ADDR_WIDTH-1:0]` | `pc[present_slot]` | OBI leaf (FOI-O1) |
-| `fetch_pc` | Output | `logic [ADDR_WIDTH-1:0]` | `pc[fetch_slot]` | Fetch stage output |
-| `fetch_instruction` | Output | `logic [INSTR_WIDTH-1:0]` | `instruction[fetch_slot]` | Fetch stage output |
+| `clk` | Input | 1 | Core clock | Rising-edge clock of the two arrays. |
+| `pc_write` | Input | 1 | `fetch_controller_unit` | Write enable of the `pc` array. |
+| `pc_write_slot` | Input | 2 | `fetch_controller_unit` | Slot that a `pc_write` writes. |
+| `pc_write_data` | Input | `ADDR_WIDTH` | `fetch_controller_unit` | Fetch address that a `pc_write` stores. |
+| `instruction_write` | Input | 1 | `fetch_controller_unit` | Write enable of the `instruction` array. |
+| `instruction_write_slot` | Input | 2 | `fetch_controller_unit` | Slot that an `instruction_write` writes. |
+| `instruction_write_data` | Input | `INSTR_WIDTH` | `fetch_obi_interface` | Instruction word that an `instruction_write` stores. It is the `response_data` of the OBI leaf. |
+| `present_slot` | Input | 2 | `fetch_controller_unit` | Slot that `present_pc` reads. |
+| `fetch_slot` | Input | 2 | `fetch_controller_unit` | Slot that `fetch_pc` and `fetch_instruction` read. |
+| `present_pc` | Output | `ADDR_WIDTH` | `fetch_obi_interface` | The stored `pc` of the slot that `present_slot` selects. |
+| `fetch_pc` | Output | `ADDR_WIDTH` | `fetch_stage` | The stored `pc` of the slot that `fetch_slot` selects. |
+| `fetch_instruction` | Output | `INSTR_WIDTH` | `fetch_stage` | The stored `instruction` of the slot that `fetch_slot` selects. |
 
-## 3. Internal organization
+## 4. Internal Structure
 
-Two indexed arrays, `pc[0..2]` and `instruction[0..2]`, and one read mux per output.
+- The buffer holds two arrays of three entries: one for `pc` and one for `instruction`.
+- It holds three read selectors, one for each output.
+- It has no sub-blocks.
 
-## 4. State and ownership
+## 5. State
 
-| State | Width / type | Reset | Meaning | Written by |
-| --- | --- | --- | --- | --- |
-| `pc[s]`, `s = 0..2` | `ADDR_WIDTH` | not reset | Fetch address of slot `s` | `pc_write` |
-| `instruction[s]`, `s = 0..2` | `INSTR_WIDTH` | not reset | Instruction payload of slot `s`; meaningful only while the controller marks the slot `READY` | `instruction_write` |
+| Register | Reset value | Updater |
+| --- | --- | --- |
+| `pc` array, three entries of `ADDR_WIDTH` bits | None; not reset | `pc_write`, at the rising edge |
+| `instruction` array, three entries of `INSTR_WIDTH` bits | None; not reset | `instruction_write`, at the rising edge |
 
+## 6. Behavior
 
-## 5. Behavioral and next-state rules
+- Each output is the stored value at its read slot, at all times.
+- Each array changes only on a rising edge that writes it.
 
-- **Write.** At a rising edge, `pc[pc_write_slot] := pc_write_data` when `pc_write = 1`, and
-  `instruction[instruction_write_slot] := instruction_write_data` when `instruction_write = 1`. Both may occur on one
-  edge. With an enable low the stored value holds. The buffer checks no slot state.
-- **Read.** `present_pc = pc[present_slot]`, `fetch_pc = pc[fetch_slot]`, `fetch_instruction = instruction[fetch_slot]`,
-  combinational from the arrays and the addresses. The addresses are controller registers, so outputs depend on
-  registered state only.
-- **Enables.** Enables and addresses come from controller inputs, may change within a cycle, and are sampled only at the
-  edge. They never reach the request or valid outputs (fetch-stage §2).
+| Condition at the edge | `pc` array after the edge | `instruction` array after the edge |
+| --- | --- | --- |
+| `pc_write` low, `instruction_write` low | Unchanged | Unchanged |
+| `pc_write` high, `instruction_write` low | The slot that `pc_write_slot` selects holds `pc_write_data`; other slots unchanged | Unchanged |
+| `pc_write` low, `instruction_write` high | Unchanged | The slot that `instruction_write_slot` selects holds `instruction_write_data`; other slots unchanged |
+| `pc_write` high, `instruction_write` high | As in the second row | As in the third row |
 
-## 6. Reset, cancellation, and exceptional conditions
+- The two writes need no priority, because they touch different arrays and cannot conflict.
+- The buffer checks no slot state and accepts a write to any slot.
 
-- **Reset.** No reset action on the arrays; writes still follow their enables. The controller holds every slot `FREE` in
-  reset, so `pc_write` may be 1 and a clocked write happens. The value has no meaning, since the controller reads only
-  valid entries.
-- **Preconditions.** Addresses are `0..2`; `3` is unreachable from reset (FCU-O11). Enables and addresses come from the
-  controller only.
+## 7. Timing and Control
 
-## 7. Representative examples or cycle traces
+- The arrays are registered storage and the three reads are combinational.
+- A written value appears at the outputs after the write edge, with no further delay.
+- The outputs depend only on the stored values and the two read slots, which the controller drives from registers.
+- Write enables, write slots and write data are sampled only at the edge and reach no output within a cycle ([fetch stage](fetch-stage.md) §2).
 
-Buffer-level only; the controller supplies the addresses and enables.
+### When valid
+
+| Signal group | When valid |
+| --- | --- |
+| `present_pc` | While `fetch_controller_unit` presents an entry in the selected slot, after that entry's `pc` write edge. It stays valid for a killed entry that is still presented, until its request fires. |
+| `fetch_pc`, `fetch_instruction` | While `fetch_controller_unit` reports a deliverable entry in the slot that `fetch_slot` selects. `fetch_instruction` also needs that entry's response written. |
+
+### Reset, stall, flush
+
+| Event | Effect on this block |
+| --- | --- |
+| Reset | The arrays are not reset. Writes still follow their enables. A write during reset has no meaning, because the controller holds every entry free and reads no payload. |
+| Stall | The buffer has no stall input. A slot holds its value until a write selects it. |
+| Flush | The buffer has no flush input and discards nothing. |
+
+- The trace uses the buffer alone, with the controller supplying the slots and enables.
+- Before E1, both arrays hold any value, because neither is reset.
+
 | Edge | Inputs | State after | Outputs after the edge |
 | --- | --- | --- | --- |
-| E1 | `pc_write=1`, `pc_write_slot=2`, `pc_write_data=0x20` | `pc[2] = 0x20` | `present_pc` with `present_slot=2` is `0x20` |
-| E2 | `instruction_write=1`, `instruction_write_slot=2`, `instruction_write_data=I1` | `instruction[2] = I1` | `fetch_pc`, `fetch_instruction` with `fetch_slot=2` are `0x20`, `I1` |
+| E1 | `pc_write` high, `pc_write_slot` 2, `pc_write_data` 0x20 | `pc` of slot 2 holds 0x20 | `present_pc` with `present_slot` 2 is 0x20 |
+| E2 | `instruction_write` high, `instruction_write_slot` 2, `instruction_write_data` I1 | `instruction` of slot 2 holds I1 | `fetch_pc` and `fetch_instruction` with `fetch_slot` 2 are 0x20 and I1 |
 
-## 8. Verification obligations
+## 8. Assumptions and Corner Cases
 
-Planned checks; no fetch-buffer test exists (checked 2026-11-06).
-
-| Requirement / invariant | Stimulus or scenario | Expected observation |
+| Assumption | Guaranteed by | If violated |
 | --- | --- | --- |
-| Write, then read; enable low (section 5) | `pc_write` to slot `s`, read `s` through `present_slot` or `fetch_slot`; then change the data with the enable low | Read returns the written value; stored value unchanged |
-| Independent writes (section 5) | `pc_write` and `instruction_write` on one edge, to different slots | Both arrays capture their own data |
-| Combinational read (section 5) | Change a read address within a cycle | Output follows the array with no edge |
-| Reset with enables low (section 6) | Reset asserted with `pc_write` and `instruction_write` held at 0 | Arrays unchanged |
+| The slot ports carry 0, 1 or 2 | `fetch_controller_unit` ([FCU-O11](fetch-controller-unit.md)) | Not specified; the controller never drives it. |
+| The write enables, slots and data come from the controller and the OBI leaf only | The wiring in [fetch stage](fetch-stage.md) §3 | The stored values no longer follow the controller's allocation and response events. |
+| A `pc_write` never selects the slot of a killed entry that is still presented | `fetch_controller_unit` ([pc write on a redirect](fetch-controller-unit.md)) | `present_pc` changes while the request is held, which breaks the OBI hold rule. |
 
-## 9. Rationale and open decisions
+| Case | Inputs | Result |
+| --- | --- | --- |
+| Both writes, different slots | `pc_write` and `instruction_write` high, slots differ | Each array captures its own data |
+| Both writes, same slot number | `pc_write` and `instruction_write` high, slots equal | Each array captures its own data in that slot |
+| Write during reset | `pc_write` high while the core is in reset | The write happens and has no meaning |
 
-**FB-O8. Payload array, not a FIFO (IF-A3).** Decision (Việt, 2026-11-06): an indexed payload array with no reset.
-Entries are allocated before their data arrives and a kill reloads the pointers, so a FIFO does not fit.
+## 9. Verification
 
-**FB-O9. Read muxes in the buffer (IF-A3).** Decision (Việt, 2026-11-06): payload does not pass through the controller.
+- No fetch-buffer test exists.
+- The checks below are planned.
 
-**Decision map and open items.** The only decision map is in [Fetch Controller Unit](fetch-controller-unit.md) §9, which
-also holds this design's open items (none here).
+| Requirement | Stimulus | Expected observation |
+| --- | --- | --- |
+| Write, then read; enable low (section 6) | `pc_write` to slot `s`, read `s` through `present_slot` or `fetch_slot`; then change the data with the enable low | Read returns the written value; stored value unchanged |
+| Independent writes (section 6) | `pc_write` and `instruction_write` on one edge, to different slots | Both arrays capture their own data |
+| Combinational read (section 6) | Change a read slot within a cycle | Output follows the array with no edge |
+| Reset with enables low (section 7) | Reset asserted with `pc_write` and `instruction_write` held at 0 | Arrays unchanged |
+
+## 10. Decisions and Open Items
+
+| ID | Decision | Reason |
+| --- | --- | --- |
+| FB-D1 | The buffer is an indexed payload array with no reset, not a FIFO. | Entries are allocated before their data arrives and a redirect reloads the pointers, so a FIFO does not fit. |
+| FB-D2 | The read selectors are in the buffer. | The controller handles only slot numbers, never payload. |
+
+- History: 2026-11-06 decisions settled (IF-A3); rewritten in the block spec format, IDs renumbered.
+
+| Old ID | New ID | Status |
+| --- | --- | --- |
+| FB-O8 | FB-D1 | Kept |
+| FB-O9 | FB-D2 | Kept |
+
+- FB-O1 to FB-O7 are mapped in [fetch-controller-unit.md](fetch-controller-unit.md), because the controller took over those decisions.
+- Open items: none.
