@@ -1,0 +1,16 @@
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{fancyvrb}
+\usepackage{fancyhdr}
+\setlength{\LTpre}{6pt}
+\setlength{\LTpost}{8pt}
+\renewcommand{\arraystretch}{1.25}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\specname}
+\fancyhead[R]{\small RISC-V core block spec}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\AtBeginDocument{\hypersetup{hidelinks}}
+\makeatletter\renewcommand{\maketitle}{\begin{center}{\LARGE\bfseries\@title\par}\end{center}\vspace{4pt}}\makeatother
+\fancypagestyle{plain}{\pagestyle{fancy}}
