@@ -26,6 +26,12 @@ target is allocated as a fresh `QUEUED` entry on the following edge, through the
 one more cycle: the target's `req` starts two cycles after the redirect cycle at the earliest. Recorded in
 [Stale instruction responses after redirect](#stale-instruction-responses-after-redirect) and refined by
 [Fetch Controller Unit](fetch-controller-unit.md).
+**Frontend amendment:** IF-A3, accepted by Việt on 2026-11-06. The Fetch Controller Unit owns all
+fetch control state: `next_fetch_pc`, the entry pointers, the entry lifecycle and the killed marks, with the logic on
+them. The Fetch Buffer stores only the `pc` and `instruction` payload of each entry, as an indexed array with no
+reset. Behavior is unchanged; this moves where the logic lives. Recorded in
+[Instruction-fetch organization](#instruction-fetch-organization) and refined by
+[Fetch Controller Unit](fetch-controller-unit.md).
 
 **Decision record:** Việt approved `BASE → BASE_CI → BASE_CI_IRQ`, BASE with
 37 integer operations plus FENCE, and one common elaboration-selected top.
@@ -367,7 +373,7 @@ The minimum EX/MEM semantic state is:
 valid
 ex_result
 store_data
-rd, reg_write
+rd, reg_write, wb_src
 mem_en, mem_write, mem_type
 ```
 
@@ -445,7 +451,7 @@ Next-state arbitration follows this BASE priority:
 4. Load-use hazard.
 5. Normal advance and qualified IF availability.
 
-Reset invalidates pipeline, Fetch Buffer ownership/control, and OBI ownership state and suppresses every architectural side effect. An unresolved MEM wait exists when a valid load or store owns MEM and its data transaction has not completed with `data_response_fire`. It holds IF/ID, ID/EX, EX/MEM, and MEM/WB; suppresses new fetch consumption and every pipeline retirement; and prevents any pipeline instruction from advancing. If `data_response_fire` occurs in the current cycle, the MEM wait is resolved for that edge's next-state arbitration. The held WB instruction may then retire, the completed memory instruction may replace it in MEM/WB, and a redirect or load-use event behind MEM may be processed without an extra release bubble.
+Reset invalidates pipeline, Fetch Controller Unit ownership/control, and OBI ownership state and suppresses every architectural side effect. An unresolved MEM wait exists when a valid load or store owns MEM and its data transaction has not completed with `data_response_fire`. It holds IF/ID, ID/EX, EX/MEM, and MEM/WB; suppresses new fetch consumption and every pipeline retirement; and prevents any pipeline instruction from advancing. If `data_response_fire` occurs in the current cycle, the MEM wait is resolved for that edge's next-state arbitration. The held WB instruction may then retire, the completed memory instruction may replace it in MEM/WB, and a redirect or load-use event behind MEM may be processed without an extra release bubble.
 
 This baseline deliberately propagates an unresolved MEM wait through WB.
 Retiring an older WB instruction early would require preserving its forwarding
@@ -486,7 +492,7 @@ ID/EX receives a bubble, and dependent IF/ID remains held.
 During a load-use hazard or an unresolved MEM wait, IF/ID does not consume a
 new instruction. Every other frontend activity continues: response capture,
 required `READY` creation, allocation of the next PC and presentation of
-queued requests, limited only by Fetch Buffer capacity and
+queued requests, limited only by fetch-entry capacity and
 `OBI_OUTSTANDING_MAX=1`. When every entry is occupied, allocation stops by
 capacity; no separate freeze exists.
 
@@ -496,17 +502,18 @@ so withholding instruction requests while MEM is busy protects no ordering or
 correctness property. A later shared memory path resolves instruction/data
 contention by its own arbitration through each port's `gnt` (see
 [MMIO, FENCE, and integration obligations](#mmio-fence-and-integration-obligations)).
-Because the frontend takes no data-port signal, no combinational path from
-`data_rvalid` to `instr_req` can exist. Global stall and flush events reach IF
-only as the parent's IF/ID delivery control; the EX redirect reaches IF
-directly because it changes only the fetch PC and the Fetch Buffer entries
+`instr_req` is driven from registered fetch state only, so no combinational path from `data_rvalid` to `instr_req`
+can exist. `data_rvalid` reaches frontend next-state logic only through the parent's control: `mem_wait` feeds
+`fetch_accept`, and `mem_wait` feeds `advance_allowed`, which gates `redirect_fire`. Global stall and flush events
+reach IF only as the parent's IF/ID delivery control; the EX redirect reaches IF directly because it changes only the
+fetch PC and the fetch entries
 (see [Stale instruction responses after redirect](#stale-instruction-responses-after-redirect)).
 
 Mandatory OBI progress continues during both load-use and MEM stalls. A request
 already asserted retains stable `req` and payload and may be granted, including
 on the MEM response edge; `instr_request_fire` is recorded; an expected
-outstanding response is accepted on `instr_response_fire`; and the Fetch Buffer
-performs every state transition required by those events. MEM stall freezes
+outstanding response is accepted on `instr_response_fire`; and the Fetch Controller Unit
+performs every state transition required by those events, with the Fetch Buffer capturing payload. MEM stall freezes
 architectural progress and IF/ID delivery, not fetch or protocol obligations.
 
 ### Pipeline-register local control
@@ -582,13 +589,13 @@ transaction. This ordering guarantee is separate from WB retirement timing.
 
 IF is an architectural pipeline boundary, not another name for the Prefetch Unit. In the baseline, the hierarchy is `core -> IF -> Prefetch Unit -> {Fetch Controller Unit, Fetch Buffer, OBI Interface}`. The Prefetch Unit converts the selected instruction-address stream into a valid instruction stream for the pipeline. A later IF design may also contain a branch predictor, including structures such as a BHT, PHT, BTB, or RAS, but the five-stage baseline contains no predictor. A future predictor would inform next-PC selection in the Fetch Controller Unit; it would not replace the Prefetch Unit.
 
-The Fetch Controller Unit is the instruction-fetch control plane. It owns current- and next-PC selection, sequential `PC + 4` progression, redirect selection, issue policy, and commands to drop or kill wrong-path work. It does not store the per-transaction metadata and does not directly implement OBI request stability or handshake state.
+The Fetch Controller Unit is the instruction-fetch control plane. It owns current- and next-PC selection, sequential `PC + 4` progression, redirect selection, and commands to drop or kill wrong-path work. It owns the fetch entries' lifecycle state, killed marks and pointers, and the issue policy, which presents the oldest `QUEUED` entry. It does not store the instruction or PC payload and does not directly implement OBI request stability or handshake state.
 
-The Fetch Buffer stores which fetch transactions exist, their lifecycle state, and completed instruction responses awaiting pipeline consumption. Its baseline capacity is `FETCH_DEPTH=3`. Each entry conceptually contains `{valid, pc, state, killed, protocol_committed, instruction}`; `instruction` is datapath payload and is meaningful only for a live `READY` entry. An implementation may encode equivalent state differently without changing the contract. The OBI Interface presents the selected entry as protocol signals and enforces the OBI hold, stability, and handshake rules.
+The Fetch Buffer is an indexed payload array of `FETCH_DEPTH=3` slots. It stores the `pc` and `instruction` of each fetch entry, with no reset and no lifecycle, ring or kill logic. `instruction` is datapath payload and is meaningful only for a live `READY` entry. Each fetch entry conceptually contains `{valid, pc, state, killed, protocol_committed, instruction}`; `valid`, `state`, `killed` and `protocol_committed` are held by the Fetch Controller Unit, and `pc` and `instruction` by the Fetch Buffer. An implementation may encode equivalent state differently without changing the contract. The OBI Interface presents the selected entry as protocol signals and enforces the OBI hold, stability, and handshake rules.
 
 ## Core memory boundary
 
-The core exposes two independent OBI 1.6.0 memory ports: a read-only instruction port for IF and a load/store data port for MEM. The data port permits at most one outstanding transaction. The instruction frontend has three Fetch Buffer entries, while the baseline core-level instruction-memory model accepts at most one granted-but-not-responded transaction; therefore the current instruction-port configuration has `FETCH_DEPTH=3` and `OBI_OUTSTANDING_MAX=1`. Memory responses may be delayed; the core must use the protocol handshake rather than assume a fixed response latency.
+The core exposes two independent OBI 1.6.0 memory ports: a read-only instruction port for IF and a load/store data port for MEM. The data port permits at most one outstanding transaction. The instruction frontend has three fetch entries, while the baseline core-level instruction-memory model accepts at most one granted-but-not-responded transaction; therefore the current instruction-port configuration has `FETCH_DEPTH=3` and `OBI_OUTSTANDING_MAX=1`. Memory responses may be delayed; the core must use the protocol handshake rather than assume a fixed response latency.
 
 The OBI configuration below classifies every signal or property as one of the following:
 
@@ -729,13 +736,13 @@ it does not decrement legitimate outstanding state, resolve a MEM wait, create
 a `READY` instruction, or capture a valid `load_result`. It only reports a protocol
 violation through verification.
 
-Instruction-side `rready` is tied to `1'b1`. Every instruction transaction reserves its Fetch Buffer entry before becoming `OUTSTANDING`, so an expected response always has storage in its own entry and a killed expected response can always be discarded. IF/ID stall and redirect therefore do not backpressure instruction responses. An unexpected instruction response is still drained, discarded, and reported as a protocol violation by verification; constant readiness must not conceal the violation.
+Instruction-side `rready` is tied to `1'b1`. Every instruction transaction reserves its fetch entry before becoming `OUTSTANDING`, so an expected response always has storage in its own entry and a killed expected response can always be discarded. IF/ID stall and redirect therefore do not backpressure instruction responses. An unexpected instruction response is still drained, discarded, and reported as a protocol violation by verification; constant readiness must not conceal the violation.
 
 Data-side `rready` is also tied to `1'b1`. With `DATA_OUTSTANDING_MAX=1`, the load or store that created the transaction retains ownership of MEM until `data_response_fire`. WB has no independent downstream backpressure, although the global unresolved-MEM interlock deliberately holds MEM/WB and suppresses retirement. The expected-response cycle releases that interlock: any held WB instruction retires on the same edge that the completed memory instruction enters MEM/WB. MEM/WB therefore remains the reserved destination for an expected load response; a store response requires no response payload storage. An unexpected data response is drained, discarded, and reported as a protocol violation by verification, without releasing the interlock.
 
-Reset clears pipeline-valid, Fetch Buffer entry-valid and lifecycle state, and
-per-port outstanding state. It does not reset the `pc` or `instruction` payload
-of an invalid Fetch Buffer entry. The baseline contains no separate
+Reset clears pipeline-valid, fetch-entry validity and lifecycle state (held by the
+Fetch Controller Unit), and per-port outstanding state. It does not reset the `pc` or `instruction` payload
+of an invalid fetch entry (Fetch Buffer). The baseline contains no separate
 data-response buffer. On reset assertion, after reset propagation and without
 requiring a clock edge, reset control state drives core `req=0`; each harness
 subordinate drives `rvalid=0` and clears all pending transaction and response
@@ -756,7 +763,7 @@ store whose address transfer was accepted before reset.
 
 ### Instruction fetch capacity and transaction states
 
-`FETCH_DEPTH=3` is frontend capacity, not a claim that the current memory accepts three outstanding transactions. A Fetch Buffer entry has the following conceptual lifecycle:
+`FETCH_DEPTH=3` is frontend capacity, not a claim that the current memory accepts three outstanding transactions. A fetch entry has the following conceptual lifecycle, held by the Fetch Controller Unit:
 
 ```text
 FREE
@@ -768,7 +775,7 @@ FREE
 
 The states have these meanings:
 
-- `QUEUED` means the fetch transaction exists in the Fetch Buffer but its address handshake has not completed.
+- `QUEUED` means the fetch transaction exists as a fetch entry but its address handshake has not completed.
 - `OUTSTANDING` means `instr_request_fire` accepted the address transfer and the corresponding response is mandatory.
 - `READY` means the memory transaction has completed and the entry holds `{pc, instruction}`, but IF/ID has not yet accepted that instruction.
 
@@ -776,9 +783,9 @@ The states have these meanings:
 
 A queued entry may either be internal and not yet presented to OBI, or be driving an asserted `req` while waiting for `gnt`. The conceptual `protocol_committed` state distinguishes these cases. Before presentation, `protocol_committed=0`, so a redirect may remove the entry immediately. Once `req` has been asserted, the entry is protocol-committed: its request payload remains stable and the request is not retracted merely because of a redirect. If the entry is then found to be on the wrong path, it is marked killed and its transaction is completed and drained without producing a valid instruction.
 
-The OBI Interface selects the oldest eligible `QUEUED` entry by allocation age for instruction-memory issue. A numerically lower PC does not imply an older entry. An older `READY` entry does not block issue because its memory transaction is already complete. Once a queued entry has been presented with `req=1` and is waiting for `gnt`, neither a younger queued entry nor a redirect target may bypass or replace it.
+The Fetch Controller Unit presents the oldest eligible `QUEUED` entry, by allocation age, to the OBI Interface for instruction-memory issue. A numerically lower PC does not imply an older entry. An older `READY` entry does not block issue because its memory transaction is already complete. Once a queued entry has been presented with `req=1` and is waiting for `gnt`, neither a younger queued entry nor a redirect target may bypass or replace it.
 
-The next queued entry may be presented while one older instruction transaction remains `OUTSTANDING`. The subordinate holds `gnt=0` until it has capacity to accept that request. It may assert `gnt` on the same edge that the older expected response fires, but it must not create a state in which more than one instruction transaction is granted but not responded. Verification enforces `next_outstanding <= OBI_OUTSTANDING_MAX`, where `OBI_OUTSTANDING_MAX=1`. On an edge sampling `rst_n=1`, `next_outstanding = current_outstanding + instr_request_fire - instr_response_fire`; reset assertion clears the count asynchronously and holds it zero while reset is active. A raw unexpected response does not decrement this count. The presented request exists in registered Fetch Buffer state and must not arise combinationally from the older response.
+The next queued entry may be presented while one older instruction transaction remains `OUTSTANDING`. The subordinate holds `gnt=0` until it has capacity to accept that request. It may assert `gnt` on the same edge that the older expected response fires, but it must not create a state in which more than one instruction transaction is granted but not responded. Verification enforces `next_outstanding <= OBI_OUTSTANDING_MAX`, where `OBI_OUTSTANDING_MAX=1`. On an edge sampling `rst_n=1`, `next_outstanding = current_outstanding + instr_request_fire - instr_response_fire`; reset assertion clears the count asynchronously and holds it zero while reset is active. A raw unexpected response does not decrement this count. The presented request exists in registered fetch-entry state and must not arise combinationally from the older response.
 
 No deasserted-`req` bubble is required between accepted instruction transactions. After `instr_request_fire` for one request on cycle N, the OBI Interface may select the next queued entry, change to its request payload after the accepting edge, and keep `req=1` during cycle N+1. Each individual entry's payload nevertheless remains stable from its first asserted `req` until its own `gnt`.
 
@@ -786,7 +793,7 @@ The Fetch Controller owns the registered `next_fetch_pc`; the Fetch Buffer does 
 
 The additional entries therefore allow the sequential next fetch to be prepared from registered frontend state while an older transaction awaits its response and an older completed instruction awaits pipeline consumption. A new instruction request must not be created through a combinational dependency on the current `rvalid`, `rdata`, or `gnt` of either OBI port. The frontend takes no data-port signal (IF-A1 in [Pipeline-control priority](#pipeline-control-priority)). If a later instruction memory, cache, or interconnect accepts more than one granted-but-not-responded transaction, multiple entries may become `OUTSTANDING` only after an explicit configuration-contract update; the Fetch Buffer architecture itself need not be replaced.
 
-When `instr_response_fire` occurs for a live `OUTSTANDING` entry, the Fetch Buffer captures `rdata` as that entry's instruction payload and changes the entry to `READY`, independently of whether IF/ID can accept an instruction on that cycle. The subordinate then has no further responsibility for that transaction. `RESPONSE_BYPASS=0`: a response cannot pass combinationally from OBI into IF/ID, and even an immediately consumable expected response must first become registered `READY` state. If the `OUTSTANDING` entry is killed, its expected response is accepted and discarded and the entry becomes `FREE` without ever becoming a valid `READY` instruction.
+When `instr_response_fire` occurs for a live `OUTSTANDING` entry, the Fetch Controller Unit changes the entry to `READY` and the Fetch Buffer captures `rdata` as its instruction payload, independently of whether IF/ID can accept an instruction on that cycle. The subordinate then has no further responsibility for that transaction. `RESPONSE_BYPASS=0`: a response cannot pass combinationally from OBI into IF/ID, and even an immediately consumable expected response must first become registered `READY` state. If the `OUTSTANDING` entry is killed, its expected response is accepted and discarded and the entry becomes `FREE` without ever becoming a valid `READY` instruction.
 
 Live `READY` entries are offered to IF/ID in oldest-first allocation order, not numerical-PC order. A younger entry cannot bypass an older live entry. When IF/ID accepts the oldest live `READY` entry, that entry becomes `FREE`. A killed `READY` entry is discarded without producing instruction-valid; after it is removed, the next live entry becomes oldest. A killed `OUTSTANDING` entry retains its ordering position until its mandatory response has been drained.
 
@@ -854,7 +861,7 @@ Memory controls, store data and data-port protocol ownership end in MEM.
 
 ### Stale instruction responses after redirect
 
-An EX branch/jump `redirect_fire` makes every younger Fetch Buffer entry
+An EX branch/jump `redirect_fire` makes every younger fetch entry
 allocated before it stale, regardless of matching PC. No stale entry is reused
 by matching PC. The Fetch Controller loads the target as its next fetch address on
 the redirect edge and allocates it freshly as QUEUED with new ownership on the
@@ -870,7 +877,7 @@ A protocol-committed queued request that is not granted on the redirect edge rem
 
 With `OBI_OUTSTANDING_MAX=1`, the fresh redirected fetch may occupy a slot reclaimed from a dropped, uncommitted queued entry but cannot become a second outstanding transaction. It remains queued until the stale outstanding transaction has been drained and the instruction-memory model can accept the redirected request. This is a consequence of the current memory configuration, not a permanent restriction of the three-entry Fetch Buffer architecture.
 
-The baseline has no `redirect_pending` state. With three Fetch Buffer entries, at most one entry can be `OUTSTANDING` and at most one other entry can be the single protocol-committed queued request currently presented on OBI. The remaining entry is already free or can be reclaimed from stale `READY` or unpresented `QUEUED` state on redirect. The Fetch Controller therefore loads the EX redirect target into its registered next-fetch state on the redirect edge (IF-A2), and allocates it as a fresh `QUEUED` entry on the following edge; that allocation advances the registered next-fetch state to the following sequential PC. Keeping at most two entries leaves one slot free after the redirect edge, so that following-edge allocation always finds one. The target request can first be presented in the cycle after that allocation, two cycles after the redirect cycle, if ordinary issue conditions allow it; there is no combinational redirect-to-OBI request path.
+The baseline has no `redirect_pending` state. With three fetch entries, at most one entry can be `OUTSTANDING` and at most one other entry can be the single protocol-committed queued request currently presented on OBI. The remaining entry is already free or can be reclaimed from stale `READY` or unpresented `QUEUED` state on redirect. The Fetch Controller therefore loads the EX redirect target into its registered next-fetch state on the redirect edge (IF-A2), and allocates it as a fresh `QUEUED` entry on the following edge; that allocation advances the registered next-fetch state to the following sequential PC. Keeping at most two entries leaves one slot free after the redirect edge, so that following-edge allocation always finds one. The target request can first be presented in the cycle after that allocation, two cycles after the redirect cycle, if ordinary issue conditions allow it; there is no combinational redirect-to-OBI request path.
 
 Request/outstanding ownership and killed state are control-plane state and are reset. Fetch-entry PC payload is not reset and has meaning only while its entry is valid. Constant instruction-side `rready=1'b1` drains a killed expected response on `instr_response_fire`; stale work cannot block forward progress merely because it will be discarded. A future configuration that cannot guarantee a reclaimable entry on redirect must revisit whether pending-target state is required.
 
@@ -954,7 +961,7 @@ Mandatory directed verification is organized around seven scenario groups:
    `instr_request_fire` for B, and the
    `READY + OUTSTANDING + QUEUED` steady state, and frontend progress during a
    load-use hazard and during a MEM wait: IF/ID delivery held, fetch continuing
-   until the Fetch Buffer is full, and no `READY` entry lost or reordered when
+   until the fetch entries are full, and no `READY` entry lost or reordered when
    delivery resumes (IF-A1). Cover every specified redirect disposition for `READY`,
    `OUTSTANDING`, presented `QUEUED`, and unpresented `QUEUED` entries.
 5. **Data OBI.** Cover delayed grant and expected response, duplicate-request

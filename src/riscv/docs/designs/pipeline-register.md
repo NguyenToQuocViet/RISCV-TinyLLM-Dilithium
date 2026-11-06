@@ -247,10 +247,8 @@ Local reasons:
 
 Open:
 
-- **OPEN: BASE EX/MEM minimum list is shorter than memory-stage.md.** The BASE EX/MEM minimum state does not list one
-  metadata field that [memory stage](memory-stage.md), which is Accepted and binding, carries through EX/MEM and
-  MEM/WB. This is a text gap in BASE only. Consequence: none for this block; the BASE list is to be aligned at the
-  next BASE amendment. Responsible owner: Việt.
+- **Closed: BASE EX/MEM minimum list.** The BASE EX/MEM minimum state now lists `wb_src` (BASE, frontend amendment
+  IF-A3, 2026-11-06), matching [memory stage](memory-stage.md). No change to this block.
 - **OPEN: random-payload check.** Section 8 lists a random initial payload check as a planned check, proposed for the
   Owner to adopt. No BASE record states it. Consequence: if it is not adopted, the payload qualification row has no
   evidence. Options: (a) adopt it in BASE's verification plan; (b) keep it as a planned check only. Recommendation:

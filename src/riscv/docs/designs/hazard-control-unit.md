@@ -33,7 +33,7 @@ Non-goals (HCU-O1):
 - It does not route the redirect to IF. The raw EX redirect goes to IF directly (fetch-stage F-e).
 - It does no forwarding. Forwarding is in the EX and register-file paths (BASE forwarding section).
 - It produces no `valid_i` for any pipeline register.
-- It does not decide the frontend allocation or the Fetch Buffer state. It supplies `fetch_accept` only.
+- It does not decide the frontend allocation or the fetch-entry state. It supplies `fetch_accept` only.
 
 Producers and consumers at the boundary:
 
@@ -116,16 +116,16 @@ They are compared for equality only. No width conversion exists in this block.
   1. `rvalid` → `mem_wait`: `data_obi_controller` drives `mem_wait = !rvalid` while the memory owner
      has an outstanding request (`rtl/data_obi_controller.sv`, line 64).
   2. `mem_wait` → `if_id_stall` → `fetch_accept` (HCU) → `fetch_fire` (`fetch_valid && fetch_accept`):
-     the Fetch Buffer frees its entry and IF/ID captures it, on the same edge, in the frontend next state.
+     the Fetch Controller Unit frees its entry and IF/ID captures it, on the same edge, in the frontend next state.
   3. `mem_wait` → `advance_allowed` (HCU) → `redirect_fire` (`rtl/redirect_unit.sv`, line 48) →
      `if_id_flush`, `id_ex_flush` (HCU), and `kill` to `fetch_controller_unit`
      (`rtl/fetch_controller_unit.sv`, line 37); `redirect_fire` → `if_id_flush` → `fetch_accept`.
   4. `mem_wait` → `advance_allowed` → `wb_retire_fire` (`rtl/writeback_stage.sv`, line 27) → the
      register-file write and the WB-to-ID bypass value that feeds ID/EX next state.
 
-  Each chain ends at registers: pipeline-register valid and payload, Fetch Buffer state, or the
+  Each chain ends at registers: pipeline-register valid and payload, fetch-entry state, or the
   register-file write. No chain reaches `req` or `addr`: the frontend's `req` comes from registered
-  Fetch Buffer state only (fetch-stage §2; BASE IF-A1). Section 5 gives the logic values for these
+  fetch-entry state only (fetch-stage §2; BASE IF-A1). Section 5 gives the logic values for these
   chains; this note gives no timing number.
 
 - The HCU has no cycle: `advance_allowed` depends only on `rst_n` and `mem_wait`, and `load_use`
@@ -141,7 +141,7 @@ The HCU has three groups of logic and no sub-blocks:
   flush equations of section 2. The `!mem_wait` guard on `id_ex_flush` is in section 5.
 - **Frontend qualification:** `fetch_accept` is `!if_id_stall && !if_id_flush`, so it is 1 exactly when
   IF/ID is in capture mode (PR-D1). A valid entry moves only on `fetch_fire = fetch_valid && fetch_accept`:
-  the Fetch Buffer frees that entry and IF/ID captures it on the same edge (fetch-stage D-3). With
+  the Fetch Controller Unit frees that entry and IF/ID captures it on the same edge (fetch-stage D-3). With
   `fetch_valid = 0`, `fetch_accept` may be 1 and no entry moves.
 
 No width, signedness, extension or overflow semantics apply beyond the 5-bit equality compare.
@@ -149,7 +149,7 @@ No width, signedness, extension or overflow semantics apply beyond the 5-bit equ
 ## 4. State and ownership
 
 The HCU is stateless. It stores nothing and has no reset value. The stored state that it controls
-(pipeline-register valid and payload, Fetch Buffer state) belongs to those blocks, under their own
+(pipeline-register valid and payload, fetch-entry state) belongs to those blocks, under their own
 reset and hold rules.
 
 ## 5. Behavioral and next-state rules
@@ -211,9 +211,9 @@ Under P1 and P2:
   `load_use` are 0, so `if_id_stall` is 0. `id_ex_flush` is 1 only when `id_ex_stall = mem_wait` is 0.
   PR-D1's "simultaneous flush and stall invalidates" case never occurs in BASE.
 - `fetch_accept = 1` exactly when IF/ID is in capture mode (not stalled, not flushed). A valid entry moves
-  only on `fetch_fire = fetch_valid && fetch_accept`: the Fetch Buffer frees that entry and IF/ID captures
+  only on `fetch_fire = fetch_valid && fetch_accept`: the Fetch Controller Unit frees that entry and IF/ID captures
   it on that edge (fetch-stage D-3). With `fetch_valid = 0`, no entry moves.
-- `fetch_accept = 0` on every redirect edge (HCU-O5, option A). The Fetch Buffer frees its `READY`
+- `fetch_accept = 0` on every redirect edge (HCU-O5, option A). The Fetch Controller Unit frees its `READY`
   entries on a redirect whatever `fetch_accept` is (fetch-stage §5.2), so A is a choice that does not
   depend on that detail.
 
@@ -221,12 +221,12 @@ Under P1 and P2:
 
 **Reset.** The HCU has no reset state. `rst_n = 0` forces `advance_allowed = 0`, which suppresses
 retirement (`wb_retire_fire = 0`, WB-D2) and EX advance. The pipeline registers clear their valid
-asynchronously (PR-D1, reset row). `fetch_accept` is not gated by `rst_n` in the HCU: the Fetch Buffer
+asynchronously (PR-D1, reset row). `fetch_accept` is not gated by `rst_n` in the HCU: the fetch entries
 has no transfer, delivery or allocation effect on an edge with `rst_n = 0` (fetch-stage §2).
 
 **Cancellation.** Two cancellations exist in the HCU:
 - The EX redirect flushes IF/ID and ID/EX (`redirect_fire`). IF frees its `READY` entries through the
-  Fetch Buffer, not through the HCU.
+  Fetch Controller Unit, not through the HCU.
 - The load-use bubble invalidates ID/EX for one cycle (`load_use && !mem_wait`). No instruction is
   discarded: the consumer is held in IF/ID and the load advances.
 
@@ -251,7 +251,7 @@ Register values are shown as the instruction name.
 ### Trace 1: load-use bubble, MEM wait, then release
 
 Pre-edge: IF/ID `C` (`ADD x6, x5, x1`, uses `x5`); ID/EX `Lx` (`LW x5, 0(x2)`); EX/MEM `A` (ALU);
-MEM/WB `B` (valid). `fetch_valid=1`: `D`, the oldest live `READY` Fetch Buffer entry, is on the delivery
+MEM/WB `B` (valid). `fetch_valid=1`: `D`, the oldest live `READY` fetch entry, is on the delivery
 outputs (`fetch_valid`, `fetch_pc`, `fetch_instruction`).
 
 | Cycle / edge | Inputs (HCU) | State before (IF/ID, ID/EX, EX/MEM, MEM/WB) | Outputs | State after |
@@ -289,7 +289,7 @@ Pre-edge: IF/ID `D1` (wrong-path); ID/EX `Bx` (taken branch, `mem_en = 0`); EX/M
 | --- | --- | --- | --- | --- |
 | R | `mem_wait=0`; `redirect_fire=1`; `load_use=0` (P2) | `D1`, `Bx`, `A`, `B` | `if_id_flush=1`; `id_ex_flush=1`; `ex_mem_stall=0`; `mem_wb_stall=0`; `fetch_accept=0`; `advance_allowed=1`; `B` retires | IF/ID invalid; ID/EX invalid; EX/MEM `Bx`; MEM/WB `A` |
 
-No fetch entry is taken on R (`fetch_accept=0`). The Fetch Buffer's own redirect behavior (kill, target
+No fetch entry is taken on R (`fetch_accept=0`). The fetch controller's own redirect behavior (kill, target
 allocation on the next edge) is in [fetch-stage.md](fetch-stage.md) §5.2 and is not part of the HCU.
 
 ### Trace 4: response plus redirect on one edge
@@ -322,12 +322,12 @@ planned. Expected values come from the BASE rows and the equations in section 2,
 | Load-use bubble and release | Trace 1, cycles 1–3 | Bubble on cycle 1; hold on cycle 2; release and `fetch_accept=1` on cycle 3 |
 | Redirect frontend effect | Trace 3 | `fetch_accept=0` on R |
 | No stall and flush together | Any input within P1 and P2 | `if_id_stall & if_id_flush = 0`; `id_ex_stall & id_ex_flush = 0` |
-| `fetch_accept` consistency (D-3) | Any input within P1 and P2 | `fetch_accept = !if_id_stall && !if_id_flush`; on `fetch_fire = fetch_valid && fetch_accept` the Fetch Buffer frees one entry and IF/ID captures a valid entry; with `fetch_valid = 0` no entry moves |
+| `fetch_accept` consistency (D-3) | Any input within P1 and P2 | `fetch_accept = !if_id_stall && !if_id_flush`; on `fetch_fire = fetch_valid && fetch_accept` the Fetch Controller Unit frees one entry and IF/ID captures a valid entry; with `fetch_valid = 0` no entry moves |
 | Precondition P1 and P2 | Excluded inputs (`redirect_fire=1` with `mem_wait=1` or `load_use=1`) | Outside the contract; not driven in HCU tests |
 | Stateless (section 4) | Interface and elaboration | No clock input, no register, no latch |
 
 Boundaries: these checks cover the HCU's combinational outputs for the listed vectors. They do not show
-the pipeline registers' valid and payload behavior, the Fetch Buffer's response to `fetch_accept`, or
+the pipeline registers' valid and payload behavior, the fetch controller's response to `fetch_accept`, or
 whole-core execution.
 
 ## 9. Rationale and open decisions
@@ -347,7 +347,7 @@ Settled by the Owner, 2026-11-05. Numbers HCU-O1 onward are local to this docume
 - **HCU-O4 (`rst_n` input).** `rst_n` is an input only so that `advance_allowed = 0` during reset
   (WB-D2).
 - **HCU-O5 (`fetch_accept` option A).** `fetch_accept = !if_id_stall && !if_id_flush`. It is 0 on a
-  redirect edge. The Fetch Buffer would behave the same with 1, because `kill` frees `READY` entries
+  redirect edge. The Fetch Controller Unit would behave the same with 1, because `kill` frees `READY` entries
   whatever `fetch_accept` is. Option A is chosen so the HCU does not depend on that buffer detail.
 - **HCU-O6 (equations).** The equations in section 2, settled by the Owner, 2026-11-05.
 - **HCU-O7 (`!mem_wait` in `id_ex_flush`).** PR-D1 gives flush priority over stall. Without this guard, a

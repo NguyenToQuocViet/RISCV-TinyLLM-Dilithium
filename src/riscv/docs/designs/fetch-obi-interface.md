@@ -13,30 +13,31 @@ Layout precedent: [data-obi-controller.md](data-obi-controller.md).
 **RTL mapping:** `rtl/fetch_obi_interface.sv` exists (commit `04f4535`). Module
 `fetch_obi_interface`, file `fetch_obi_interface.sv`, instance `if_fetch_obi_interface` inside
 `prefetch_unit` (fetch-stage §3, fetch-stage N1). The RTL is written by Việt (F-d).
-**Amendment (accepted by Việt on 2026-11-04):** the buffer, not the controller, keeps the presented entry
-([fetch-buffer.md](fetch-buffer.md), FB-O1, FB-O4). Wording below follows it; the port list is unchanged.
+**Amendment (accepted by Việt on 2026-11-04; IF-A3 wording accepted by Việt on 2026-11-06):** the fetch controller keeps the
+presented entry ([fetch-controller-unit.md](fetch-controller-unit.md), FCU-O9, FCU-O13); the
+[Fetch Buffer](fetch-buffer.md) stores the `pc` only. Wording below follows it; the port list is unchanged.
 This document is neither implementation nor verification evidence.
 
 ## 1. Purpose and boundary
 
 `fetch_obi_interface` is the instruction-port OBI leaf of the Prefetch Unit. It presents the
-entry at `issue` that the Fetch Buffer presents (FB-O1, FB-O4) as the protocol signals of the
-instruction port, and it reports the request and response transfers to the Fetch Buffer
+entry at `issue` that the Fetch Controller Unit presents (FCU-O9, FCU-O13) as the protocol signals of the
+instruction port, and it reports the request and response transfers to the Fetch Controller Unit
 (fetch-stage §3, leaf responsibilities). It drives the constant port fields of the read-only
 instruction port (fetch-stage F-c; BASE
 [OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration)).
 
 Non-goals:
 
-- No entry lifecycle, no `protocol_committed` storage and no `pc` or `instruction` storage. The
-  Fetch Buffer owns them (fetch-stage §4).
-- No outstanding count. Its owner is the Fetch Buffer (fetch-stage §4; deferred to the
-  `fetch_buffer` design as fetch-stage O2).
-- No entry selection and no allocation. The Fetch Buffer presents the entry at `issue` (FB-O1); the
-  Fetch Controller Unit allocates.
-- No instruction capture. The Fetch Buffer captures `rdata` on the qualified response event
+- No entry lifecycle and no `protocol_committed` storage: the Fetch Controller Unit owns them. No `pc` or
+  `instruction` storage: the Fetch Buffer owns them (fetch-stage §4).
+- No outstanding count. Its owner is the Fetch Controller Unit (FCU-O8; fetch-stage O2).
+- No entry selection and no allocation. The Fetch Controller Unit presents the entry at `issue` (FCU-O13) and
+  allocates.
+- No instruction capture. The response is written into the Fetch Buffer as payload on the controller's qualified
+  response event (`instruction_write`)
   (BASE [capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states)).
-- No flush, kill or redirect input. A redirect reaches this leaf only through the Fetch Buffer
+- No flush, kill or redirect input. A redirect reaches this leaf only through the Fetch Controller Unit
   and Fetch Controller (fetch-stage §5.2).
 - No bus-error, timeout or address-range check. BASE has none at this boundary (BASE
   [OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration); fetch-stage §1).
@@ -51,8 +52,8 @@ that edge (sections 2 and 3).
 ### Clock, reset and configuration
 
 The leaf has no clock. It holds no state (FOI-O1), so no sampled register exists in it. `rst_n` is
-an input only for event qualification (section 3). Reset effects on `req` come from the Fetch
-Buffer (section 4; FOI-O5).
+an input only for event qualification (section 3). Reset effects on `req` come from the Fetch Controller Unit
+(section 4; FOI-O5).
 
 Constants and parameters: `ADDR_WIDTH`, `DATA_WIDTH` and `INSTR_WIDTH` from `riscv_pkg`, all `32`
 in the supported configuration (`rtl/riscv_pkg.sv`). `DATA_WIDTH` sets the `wdata` width.
@@ -71,7 +72,7 @@ adds the `instr_` prefix. Leaf-to-buffer names are defined in this document.
 | `gnt` | Input | 1-bit `logic` | Instruction OBI grant, sampled with `req` | Each edge | [OBI baseline](5-stage-baseline-core.md#obi-baseline-configuration); F-c |
 | `rvalid` | Input | 1-bit `logic` | Instruction OBI response valid | Each edge; with `rready = 1` a raw transfer | [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset); F-c |
 | `rdata` | Input | `logic [INSTR_WIDTH-1:0]` | Instruction word returned by the port | Meaningful when `raw_response_transfer = 1` | OBI response validity; F-c |
-| `present_valid` | Input | 1-bit `logic` | A presented entry exists: the entry at `issue` is `QUEUED`. Held until that entry's `request_fire` (section 3). Derived only from registered Fetch Buffer state, never combinationally from `gnt`, `rvalid` or `rdata` | Registered state | [Capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states) ("the presented request exists in registered Fetch Buffer state"); FB-O4 |
+| `present_valid` | Input | 1-bit `logic` | A presented entry exists: the entry at `issue` is `QUEUED`. Held until that entry's `request_fire` (section 3). Derived only from registered Fetch Controller Unit state, never combinationally from `gnt`, `rvalid` or `rdata` | Registered state | [Capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states) ("the presented request exists in registered fetch-entry state"); FCU-O9 |
 | `present_pc` | Input | `logic [ADDR_WIDTH-1:0]` | `pc` of the presented entry | When `present_valid = 1`; registered, as `present_valid` | Fetch-stage §3 wiring (`fetch_buffer -> presented entry pc`) |
 | `req` | Output | 1-bit `logic` | Instruction request for the presented entry | `= present_valid` (section 3) | [Capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states); F-c |
 | `addr` | Output | `logic [ADDR_WIDTH-1:0]` | `pc` of the presented entry | When `req = 1` | Capacity and transaction states; F-c |
@@ -79,12 +80,12 @@ adds the `instr_` prefix. Leaf-to-buffer names are defined in this document.
 | `be` | Output | `logic [3:0]` | Constant `4'b1111` (full word) | Always | OBI baseline; F-c |
 | `wdata` | Output | `logic [DATA_WIDTH-1:0]` | Constant `0` | Always | OBI baseline; F-c |
 | `rready` | Output | 1-bit `logic` | Constant `1`; a killed expected response is drained | Always, including reset | [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset) (constant port fields keep their values during reset); F-c |
-| `request_fire` | Output | 1-bit `logic` | BASE request event, to the Fetch Buffer | Each edge (section 3) | [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset); FOI-O4 |
-| `raw_response_transfer` | Output | 1-bit `logic` | BASE raw response transfer, to the Fetch Buffer. Not yet an expected response (FOI-O2) | Each edge (section 3) | OBI response validity; FOI-O2, FOI-O4 |
+| `request_fire` | Output | 1-bit `logic` | BASE request event, to the Fetch Controller Unit | Each edge (section 3) | [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset); FOI-O4 |
+| `raw_response_transfer` | Output | 1-bit `logic` | BASE raw response transfer, to the Fetch Controller Unit. Not yet an expected response (FOI-O2) | Each edge (section 3) | OBI response validity; FOI-O2, FOI-O4 |
 | `response_data` | Output | `logic [INSTR_WIDTH-1:0]` | Pass-through of `rdata` to the Fetch Buffer | Meaningful when `raw_response_transfer = 1` | Fetch-stage §3 wiring (`gnt, rvalid, rdata -> fetch_obi_interface -> fetch_buffer`); FOI-O6 |
 
 The leaf does not generate `response_fire`, `outstanding` or `unexpected` signals. Their
-qualification is in the Fetch Buffer (FOI-O2, FOI-O3). `response_data` is `rdata` unchanged; it is
+qualification is in the Fetch Controller Unit (FOI-O2, FOI-O3). `response_data` is `rdata` unchanged; it is
 a port only because of the fetch-stage wiring (FOI-O6).
 
 ### Transfer and timing rules
@@ -116,25 +117,26 @@ response_data         = rdata
 
 These are the BASE definitions of `request_fire` and `raw_response_transfer` (BASE
 [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset)). Their
-`outstanding` term, which gives `response_fire`, is applied in the Fetch Buffer (FOI-O2).
+`outstanding` term, which gives `response_fire`, is applied in the Fetch Controller Unit (FOI-O2).
 
 **Hold rule.** Once `req = 1` for an entry, `present_valid` and `present_pc` stay on that entry
-until its `request_fire`. The Fetch Buffer keeps that entry at `issue` until its `request_fire` moves
-`issue` (fetch-buffer.md FB-O2, FB-O4). Neither a younger queued entry nor a redirect target may bypass or
+until its `request_fire`. The Fetch Controller Unit keeps that entry at `issue` until its `request_fire` moves
+`issue` (fetch-controller-unit.md FCU-O7, FCU-O9). Neither a younger queued entry nor a redirect target may bypass or
 replace it (BASE capacity and transaction states, paragraph beginning "Once a queued entry has
 been presented"; BASE stale-response section, "protocol-committed queued request"). An entry is protocol-committed from the first cycle in which it drives `req = 1`, not from the
 following edge (BASE capacity and transaction states, "Once `req` has been asserted"). A redirect on
 that first edge therefore keeps the entry. The leaf does
 not enforce this rule by itself (FOI-O1). Its effect on the port is that `req` and `addr` cannot
-change while `gnt = 0` unless the Fetch Buffer changes `present_valid` or `present_pc`.
+change while `gnt = 0` unless the Fetch Controller Unit changes `present_valid` or the Fetch Buffer changes `present_pc`.
 
 **No bubble.** After `request_fire` for one entry, the next presented entry may drive `req = 1` in
 the following cycle without an intervening `req = 0` cycle (BASE capacity and transaction states,
 paragraph beginning "No deasserted-`req` bubble"). The leaf adds no cycle of its own.
 
-**Event boundary.** `request_fire` moves the presented entry to `OUTSTANDING` in the Fetch Buffer
+**Event boundary.** `request_fire` moves the presented entry to `OUTSTANDING` in the Fetch Controller Unit
 (fetch-stage §5.3). `raw_response_transfer` and `response_data` are consumed there: the Fetch
-Buffer captures `response_data` as an entry's instruction only when its own `response_fire` holds
+Controller Unit's `response_fire` gates the write of `response_data` into the Fetch Buffer, so the buffer captures it as
+an entry's instruction only when that `response_fire` holds
 (fetch-stage §5.3; BASE capacity and transaction states, paragraph beginning "When
 `instr_response_fire` occurs").
 
@@ -144,7 +146,7 @@ Buffer captures `response_data` as an entry's instruction only when its own `res
 if the subordinate shows `gnt = 1` or `rvalid = 1`. BASE gives reset priority over those
 transfers (BASE [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset),
 "On an edge sampling `rst_n=0`"). `req` falls after reset propagation, without a clock edge,
-under FOI-O5(a): the Fetch Buffer clears presentation state asynchronously (fetch-stage §6; BASE
+under FOI-O5(a): the Fetch Controller Unit clears presentation state asynchronously (fetch-stage §6; BASE
 [reset architecture](5-stage-baseline-core.md#reset-architecture)). `rready` stays `1` during
 reset (BASE OBI response validity, constant port fields keep their values). After release, the
 subordinate must not return a response for a pre-reset transaction (BASE OBI response validity and
@@ -154,7 +156,7 @@ reset, paragraph beginning "On reset assertion").
 It changes no state and is reported as a protocol violation by verification (BASE OBI response
 validity and reset, "An unexpected response is"; fetch-stage §5.3). The leaf cannot tell an
 unexpected response from an expected one without the outstanding count, so it reports neither
-(FOI-O3). Detection is in the Fetch Buffer and in verification (section 5).
+(FOI-O3). Detection is in the Fetch Controller Unit and in verification (section 5).
 
 **Environment.** The inputs are `0` or `1` only (fetch-stage O4, Owner decision). A reset edge
 with a raised `req` is a defined case (section 5, edge 5). A subordinate that responds to a
@@ -164,15 +166,15 @@ pre-reset transaction is outside the contract (BASE OBI response validity and re
 
 The trace uses one sequence with three scenarios: a grant held low for two cycles with `req`
 stable; a grant and an older expected response on the same edge; and reset during a raised `req`.
-The Fetch Buffer state is in the comments of the first column, and the leaf outputs are in the
+The fetch-entry state is in the comments of the first column, and the leaf outputs are in the
 columns for `req` and `addr`.
 
 Pre-trace: entry `S2` is `OUTSTANDING` with `pc = 0x0C`. Entry `S3` is `QUEUED`, presented from
 cycle c1 with `pc = 0x10`. `S2`'s response has not yet arrived. `present_valid` and `present_pc`
-are the registered Fetch Buffer state (fetch-buffer.md, FB-O4); their timing belongs to the
-`fetch_buffer` design.
+are the registered controller state (fetch-controller-unit.md, FCU-O9); their timing belongs to that
+design.
 
-| Cycle / edge | `present_valid`, `present_pc` | `gnt`, `rvalid`, `rdata` | `req`, `addr`, `rready` | `request_fire`, `raw_response_transfer`, `response_data` | Fetch Buffer effect at the edge |
+| Cycle / edge | `present_valid`, `present_pc` | `gnt`, `rvalid`, `rdata` | `req`, `addr`, `rready` | `request_fire`, `raw_response_transfer`, `response_data` | Fetch Controller Unit and buffer effect at the edge |
 | --- | --- | --- | --- | --- | --- |
 | c1 / edge 1 | 1, `0x10` | 0, 0, — | 1, `0x10`, 1 | 0, 0, — | None. `S3` stays protocol-committed; `S2` stays `OUTSTANDING`. |
 | c2 / edge 2 | 1, `0x10` | 0, 0, — | 1, `0x10`, 1 | 0, 0, — | None. `req` and `addr` unchanged while waiting for grant. |
@@ -208,18 +210,18 @@ also drives `present_valid` and `present_pc`:
 | Unexpected response (section 4) | `rvalid = 1` with no entry presented | `raw_response_transfer = 1`; `request_fire` unchanged |
 
 A pass of these checks shows the leaf's combinational behavior for these vectors. It does not show
-the Fetch Buffer's lifecycle, the entry selection at `issue`, OBI compliance of the subordinate, or
+the Fetch Controller Unit's lifecycle, the entry selection at `issue`, OBI compliance of the subordinate, or
 whole-core fetch behavior.
 
 **Composition-level checks** (planned at stage level in [fetch-stage.md](fetch-stage.md) §8, not in the leaf).
-These depend on the Fetch Buffer state that the leaf test drives by proxy:
+These depend on the fetch-entry state (controller and payload) that the leaf test drives by proxy:
 
-- Reset: `req` is `0` after reset propagation because the buffer clears `present_valid` (FOI-O5(a));
+- Reset: `req` is `0` after reset propagation because the controller clears `present_valid` (FOI-O5(a));
   all entries `FREE`; the outstanding count is `0`.
 - Unexpected response: `raw_response_transfer && !response_fire` is the violation, observed on the
-  buffer side with no leaf port (FOI-O3).
+  controller side with no leaf port (FOI-O3).
 - Hold rule: `present_valid` and `present_pc` stay on the committed entry until its `request_fire`
-  (section 3); the Fetch Buffer keeps that entry at `issue` (fetch-buffer.md).
+  (section 3); the Fetch Controller Unit keeps that entry at `issue` (fetch-controller-unit.md).
 - Trace edges 1–6: entry states, `req` and reset, as in the table above. The table has no `next_fetch_pc`
   column; `next_fetch_pc` appears there only at reset (edge 5).
 
@@ -231,30 +233,30 @@ local to this document (FOI-*); fetch-stage decisions and open items are cited a
 **FOI-O1. Does the leaf hold any state?**
 - Options:
   - (a) Stateless. `req = present_valid` and `addr = present_pc`. The hold rule (section 3)
-    is a condition on the Fetch Buffer's presentation state (FB-O2, FB-O4). The leaf
+    is a condition on the Fetch Controller Unit's presentation state (FCU-O7, FCU-O9). The leaf
     has no `clk` port.
   - (b) A one-bit `req_held` register. `req` stays `1` while held, which needs `addr` to stay stable.
     The leaf would then need a latched address of `ADDR_WIDTH` bits, or a guarantee from the buffer
     that `present_pc` is stable. A latch duplicates the entry `pc` that the buffer already holds.
 - Decision (Việt, 2026-11-01): (a). The leaf cannot enforce address stability alone without
   duplicating the buffer's `pc` storage, and a second record of the pending request would give
-  `protocol_committed` a second owner. The hold obligation sits with the Fetch Buffer (section 3;
-  fetch-buffer.md FB-O1, FB-O2); fetch-stage §3 is refined to say so.
+  `protocol_committed` a second owner. The hold obligation sits with the Fetch Controller Unit (section 3;
+  fetch-controller-unit.md FCU-O7, FCU-O9, FCU-O13); fetch-stage §3 is refined to say so.
 
 **FOI-O2. Where is `response_fire` qualified by `outstanding`?**
 - Options:
-  - (a) In the Fetch Buffer. The leaf outputs `raw_response_transfer`; the buffer
+  - (a) In the Fetch Controller Unit. The leaf outputs `raw_response_transfer`; the controller
     computes `response_fire = outstanding && raw_response_transfer`.
   - (b) In the leaf. The buffer supplies `outstanding` as an input, so the leaf depends on where the
-    count is kept (fetch-stage §4; deferred to the `fetch_buffer` design as fetch-stage O2).
+    count is kept (fetch-stage §4; resolved in the controller design, FCU-O8, as fetch-stage O2).
 - Decision (Việt, 2026-11-01): (a). It makes this leaf's ports independent of the outstanding-count decision,
-  which is open in the `fetch_buffer` design. Under (a) the leaf's port list is fixed whichever way
+  which is decided in the controller design (FCU-O8). Under (a) the leaf's port list is fixed whichever way
   that decision goes.
 
 **FOI-O3. Where is an unexpected `rvalid` observed?**
 - Options:
   - (a) No port in the leaf. The unexpected event is `raw_response_transfer && !response_fire`,
-    derived from the Fetch Buffer's qualified event. Verification observes it there.
+    derived from the controller's qualified event. Verification observes it there.
   - (b) A leaf output `unexpected_response = raw_response_transfer && !outstanding`. This needs the
     count as an input, which conflicts with FOI-O2(a).
 - Decision (Việt, 2026-11-01): (a). BASE requires only that an unexpected response is drained and reported by
@@ -263,25 +265,25 @@ local to this document (FOI-*); fetch-stage decisions and open items are cited a
 **FOI-O4. Which events are leaf outputs: `request_fire` and `response_fire`?**
 - Options:
   - (a) `request_fire` and `raw_response_transfer` are leaf outputs. `response_fire`
-    is in the buffer (FOI-O2(a)).
+    is in the controller (FOI-O2(a)).
   - (b) Both `request_fire` and `response_fire` are leaf outputs. This needs the outstanding count
     as an input (FOI-O2(b)).
-  - (c) No event outputs. The buffer takes `req`, `gnt` and `rvalid` directly. This adds
-    ports to the buffer and duplicates the `req` and `gnt` path.
+  - (c) No event outputs. The fetch control takes `req`, `gnt` and `rvalid` directly. This adds
+    ports to the fetch control and duplicates the `req` and `gnt` path.
 - Decision (Việt, 2026-11-01): (a), the same choice as FOI-O2(a). It keeps the leaf's events to the two that depend
   only on its own inputs.
 
 **FOI-O5. Is `req` gated by `rst_n` inside the leaf?**
 - Options:
   - (a) No. `req = present_valid`, and `present_valid` is reset state in the Fetch
-    Buffer, cleared asynchronously. `req` falls after reset propagation, without a clock edge
+    Controller Unit, cleared asynchronously. `req` falls after reset propagation, without a clock edge
     (fetch-stage §6; BASE reset architecture, "reset control state drives core `req=0`"). Event
     qualification keeps `rst_n` (section 3).
   - (b) Yes. `req = rst_n && present_valid`. This makes the leaf self-contained for reset, at the
     cost of one gate on a port path. It differs from the data-port precedent, where reset gating was
     deliberately left to the parent valid (data-obi-controller DOC-D3).
 - Decision (Việt, 2026-11-01): (a). It follows the BASE reset wording and keeps the port path free of a reset
-  term. The Fetch Buffer design must state that `present_valid` is cleared asynchronously.
+  term. The Fetch Controller Unit design must state that `present_valid` is cleared asynchronously.
 
 **FOI-O6. Does `rdata` pass through the leaf (`response_data`)?**
 - Options:
@@ -295,12 +297,12 @@ local to this document (FOI-*); fetch-stage decisions and open items are cited a
 
 ## 7. Dependencies
 
-- Depends on the `fetch_buffer` design for the presentation state (`present_valid`, `present_pc`) and
-  for the qualification of `response_fire` (FOI-O2); both are decided in [fetch-buffer.md](fetch-buffer.md). The leaf's ports do not depend on fetch-stage
-  O2 or O3 (outstanding count and age encoding, deferred to the `fetch_buffer` design; fetch-stage
-  §9). Either outcome leaves this port list unchanged.
-- The presentation choice is in the `fetch_buffer` (FB-O1, FB-O4). The `fetch_controller_unit` design does
-  not choose the presented entry.
+- Depends on the controller design for the presentation state (`present_valid`) and for the qualification of
+  `response_fire` (FOI-O2), both decided in [fetch-controller-unit.md](fetch-controller-unit.md); and on the
+  [Fetch Buffer](fetch-buffer.md) for `present_pc`. The leaf's ports do not depend on fetch-stage O2 or O3 (outstanding
+  count and age encoding; FCU-O8 and FCU-O7; fetch-stage §9). Either outcome leaves this port list unchanged.
+- The presentation choice is in the `fetch_controller_unit` (FCU-O13, FCU-O9). The Fetch Buffer does not choose
+  the presented entry.
 - Package dependency: `ADDR_WIDTH`, `DATA_WIDTH` and `INSTR_WIDTH` from `riscv_pkg`, all `32`. The
   `wdata` port uses `DATA_WIDTH`. `PC_RESET_VEC` is resolved in the package (fetch-stage D-1) and is
   not used here.

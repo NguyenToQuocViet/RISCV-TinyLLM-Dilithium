@@ -235,7 +235,7 @@ releases ownership without effects.
 Issue into ID/EX only when all three older stages are empty pre-edge. At the
 issue edge, IF/ID becomes invalid and accepts no replacement instruction.
 Ownership blocks younger instructions through WB retirement; admission may
-resume only from the following cycle. Neither the Fetch Buffer nor instruction
+resume only from the following cycle. Neither the fetch entries nor instruction
 OBI must be empty; prefetch follows capacity and BASE MEM rules. All
 already-presented requests/responses continue progressing; serialization does
 not freeze the memory fabric or adapters. IRQ-specific admission/redirect

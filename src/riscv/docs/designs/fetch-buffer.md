@@ -1,403 +1,99 @@
 # Fetch Buffer — Block Design
 
-**Status:** Accepted by Việt on 2026-11-04
-**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner. The decisions FB-O1..FB-O7 in section 9 are
-the Owner's of 2026-11-04.
-**Amendment (IF-A2, accepted by Việt on 2026-11-05).** The redirect edge no longer allocates the
-target. FB-O1 (`alloc_pc` on every cycle) and FB-O7 (no allocation on a kill edge) are amended for it in section 9.
-See [five-stage BASE core](5-stage-baseline-core.md) IF-A2 and
-[Fetch Controller Unit](fetch-controller-unit.md).
-**Parent contract:** [Fetch stage](fetch-stage.md) (§2 timing, §3 leaf responsibilities, §4 state,
-§5 behavior and the four redirect cases, §6 reset, §7 traces, §8 obligations; O2 and O3 are resolved
-here), [Fetch OBI interface](fetch-obi-interface.md) (buffer-side ports; FOI-O2, FOI-O3, FOI-O5), and
-the [five-stage BASE core](5-stage-baseline-core.md): [instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization) (Fetch Controller Unit role),
-[instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization),
-[instruction fetch capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states),
-[stale instruction responses after redirect](5-stage-baseline-core.md#stale-instruction-responses-after-redirect),
-[OBI response validity and reset](5-stage-baseline-core.md#obi-response-validity-and-reset) and
-[reset architecture](5-stage-baseline-core.md#reset-architecture).
-Layout precedent: [data-obi-controller.md](data-obi-controller.md).
-**RTL mapping:** `rtl/fetch_buffer.sv`. Module `fetch_buffer`, file `fetch_buffer.sv`, instance `if_fetch_buffer` inside `prefetch_unit` (fetch-stage §3).
-The RTL is written by Việt (F-d). This document is neither implementation nor verification evidence.
+**Status:** Accepted by Việt on 2026-11-06 (IF-A3). Control content moved to [Fetch Controller Unit](fetch-controller-unit.md).
+**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner. Decisions FB-O8 and FB-O9 are in section 9 (2026-11-06).
+**Parent contract:** [five-stage BASE core](5-stage-baseline-core.md#instruction-fetch-organization) (IF-A3); [Fetch stage](fetch-stage.md) §3, §4.
+**RTL mapping:** `rtl/fetch_buffer.sv`, module `fetch_buffer`, instance `if_fetch_buffer` in `prefetch_unit`; RTL for this move is delegated (fetch-stage F-d).
 
 ## 1. Purpose and boundary
 
-`fetch_buffer` holds the `FETCH_DEPTH = 3` entries of the instruction frontend (BASE
-[instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization)). It keeps each
-entry's lifecycle, `pc`, `instruction` and killed marker, and it keeps the allocation order. It presents
-the oldest `QUEUED` entry to the instruction OBI leaf, qualifies the response, delivers the oldest
-`READY` entry to IF/ID, and applies the redirect kill to the entries it holds.
-
-Non-goals:
-
-- No PC arithmetic and no choice of the next address. The Fetch Controller Unit owns `next_fetch_pc`
-  (BASE [instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization); FB-O1).
-- No OBI signals beyond those in section 2. The leaf drives them (fetch-obi-interface.md).
-- No hazard or MEM knowledge. The HCU supplies `fetch_accept` (fetch-stage F-b).
-- No IF/ID register (fetch-stage F-a).
-- No outstanding counter (FB-O3), no unexpected-response port (FOI-O3), no per-entry age field (FB-O2).
-
-Observable success criterion: each delivery on `fetch_fire` returns the `pc` and word of the oldest live
-entry in allocation order; no entry killed at a redirect edge is delivered; at most one entry is
-`OUTSTANDING` at any time (BASE capacity and transaction states; fetch-stage §1 criterion).
+`fetch_buffer` is the payload array of the instruction frontend: the `pc` and `instruction` of each of the
+`FETCH_DEPTH = 3` fetch entries. It holds no entry state, pointers, kill marks or choice of entry; the
+[Fetch Controller Unit](fetch-controller-unit.md) owns those. Success criterion: a read of slot `s` returns the last
+value written to `s` by a write whose enable was `1` on an earlier edge.
 
 ## 2. Interface contract
 
 ### Clock, reset and configuration
 
-`clk` is the rising-edge clock of the state in section 3. `rst_n` is asynchronous assert, synchronized
-release (BASE [reset architecture](5-stage-baseline-core.md#reset-architecture); fetch-stage N3). The
-buffer has `FETCH_DEPTH = 3` slots, indexed `0..2` (fetch-stage N2; FB-O6). `ADDR_WIDTH` and
-`INSTR_WIDTH` come from `riscv_pkg`, both `32`.
+`clk` is the rising-edge clock of the arrays; there is no reset input. Slots `0..2`; `ADDR_WIDTH` and `INSTR_WIDTH` are
+`32` from `riscv_pkg`.
 
 ### Ports and payloads
 
-All ports are individual signals, no packed struct. There are 9 inputs and 6 outputs. Names of the leaf
-side match [fetch-obi-interface.md](fetch-obi-interface.md) §2 exactly. Controller-side names follow
-FB-O1.
+All ports are individual signals: 9 inputs and 3 outputs.
 
-| Signal | Direction | Type / width | Meaning | Valid when | Source |
-| --- | --- | --- | --- | --- | --- |
-| `clk` | Input | 1-bit `logic` | Rising-edge clock of the state | Always | Reset architecture |
-| `rst_n` | Input | 1-bit `logic` | Active-low reset, async clear of the state | Always | Reset architecture; fetch-stage N3 |
-| `kill` | Input | 1-bit `logic` | Redirect edge; the controller's broadcast, equal to `redirect_fire` | Each edge | FB-O1; fetch-stage §3 |
-| `alloc_valid` | Input | 1-bit `logic` | Controller asks to allocate `alloc_pc` this edge. Ignored on a kill edge (FB-O7, IF-A2). Does not depend on `alloc_fire` | Each edge | FB-O1; FB-O7; FCU-O3 (tie-off `1`) |
-| `alloc_pc` | Input | `logic [ADDR_WIDTH-1:0]` | `next_fetch_pc`, on every cycle (IF-A2). `redirect_target` has no combinational path to it; it reaches `alloc_pc` one cycle later, through `next_fetch_pc` | When `alloc_valid = 1` | FB-O1 (amended by IF-A2); FCU-O4 |
-| `fetch_accept` | Input | 1-bit `logic` | HCU: IF/ID takes an instruction this edge. `fetch_fire = fetch_valid && fetch_accept` | Each edge | fetch-stage F-b, O5 |
-| `request_fire` | Input | 1-bit `logic` | Request transfer of the presented entry: `rst_n && req && gnt` | Each edge | [FOI-O4](fetch-obi-interface.md#6-owner-decisions) (leaf output) |
-| `raw_response_transfer` | Input | 1-bit `logic` | Raw response transfer: `rst_n && rvalid && rready`, with `rready = 1` (constant on the instruction side). Not yet an expected response | Each edge | FOI-O2, FOI-O4 (leaf output) |
-| `response_data` | Input | `logic [INSTR_WIDTH-1:0]` | Pass-through of `rdata` | Meaningful when `raw_response_transfer = 1` | FOI-O6 (leaf output) |
-| `alloc_fire` | Output | 1-bit `logic` | `alloc_valid && (!full || tail_free)`, with no kill term. On a kill edge the value is a don't-care for the controller (FCU-O6), and the buffer allocates nothing (section 4.3). Goes only to the `next_fetch_pc` register | Computed from the pre-edge state and the inputs | FB-O1; FB-O7 (replaced); FCU-O6 |
-| `present_valid` | Output | 1-bit `logic` | The entry at `issue` is `QUEUED` | From flops only | FB-O4; FOI-O1 (leaf input) |
-| `present_pc` | Output | `logic [ADDR_WIDTH-1:0]` | `pc` of the entry at `issue` | From flops only | FOI-O1 (leaf input) |
-| `fetch_valid` | Output | 1-bit `logic` | The entry at `tail` is `READY` | From flops only | fetch-stage §2; FB-O5 |
-| `fetch_pc` | Output | `logic [ADDR_WIDTH-1:0]` | `pc` of the entry at `tail` | From flops only | fetch-stage §2 |
-| `fetch_instruction` | Output | `logic [INSTR_WIDTH-1:0]` | `instruction` of the entry at `tail` | From flops only | fetch-stage §2 |
-
-The buffer does not receive `redirect_fire` or `redirect_target`. Only `kill` and `alloc_pc` come from the
-controller (FB-O1). `redirect_target` has no combinational path to `alloc_pc`; it reaches the buffer one cycle later,
-through `next_fetch_pc` (IF-A2).
-
-### Transfer and timing rules
-
-- The outputs `present_valid`, `present_pc`, `fetch_valid`, `fetch_pc` and `fetch_instruction` are
-  functions of the state flops only. No output depends combinationally on an input (fetch-stage §2; BASE
-  [capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states),
-  "the presented request exists in registered Fetch Buffer state").
-- The only output computed from inputs is `alloc_fire`. It feeds only the controller's `next_fetch_pc`
-  register (FB-O1). Next-state values never reach the read path.
-- A delivery waits: `fetch_valid`, `fetch_pc` and `fetch_instruction` show the same entry until
-  `fetch_fire` or a kill frees it (fetch-stage §2).
-
-## 3. State, derived signals and invariants
-
-### State
-
-| State | Width / type | Reset | Meaning | Updated by |
+| Signal | Direction | Type / width | Meaning | Source |
 | --- | --- | --- | --- | --- |
-| `life[s]`, `s = 0..2` | `FREE`, `QUEUED`, `OUTSTANDING`, `READY` | `FREE` | Lifecycle of slot `s` (BASE lifecycle) | Allocation, request, response, delivery, kill |
-| `killed[s]` | 1 bit | `0` | Wrong-path marker (fetch-stage §4) | Kill (set); freeing or allocation (cleared) |
-| `head` | 2-bit slot index | `0` | Next slot to allocate (write end) | Allocation; kill |
-| `issue` | 2-bit slot index | `0` | Oldest `QUEUED` entry, the presented one; the first `QUEUED` slot, or `head` when none | Request; kill |
-| `tail` | 2-bit slot index | `0` | Oldest entry (read end) | Delivery; killed drain; kill |
-| `pc[s]` | `ADDR_WIDTH` | not reset | Fetch address of slot `s` | Allocation |
-| `instruction[s]` | `INSTR_WIDTH` | not reset | Payload of slot `s`; meaningful only as `READY` | Response (captured) |
+| `clk` | Input | 1-bit `logic` | Rising-edge clock of the arrays | Reset architecture |
+| `pc_write` | Input | 1-bit `logic` | Write `pc` of slot `pc_write_slot` | Controller `pc_write` (FCU-O4) |
+| `pc_write_slot` | Input | `logic [1:0]` | Slot written by `pc_write` | Controller `head_ptr` (FCU-O4) |
+| `pc_write_data` | Input | `logic [ADDR_WIDTH-1:0]` | Fetch address stored in the slot | Controller `next_fetch_pc` (FCU-O4) |
+| `instruction_write` | Input | 1-bit `logic` | Write `instruction` of slot `instruction_write_slot` | Controller `response_fire` (FCU-O4) |
+| `instruction_write_slot` | Input | `logic [1:0]` | Slot written by `instruction_write` | Controller `prv` (FCU-O4) |
+| `instruction_write_data` | Input | `logic [INSTR_WIDTH-1:0]` | Instruction word stored in the slot | OBI leaf `response_data` (FOI-O6) |
+| `present_slot` | Input | `logic [1:0]` | Read address of `present_pc` | Controller `issue_ptr` (FCU-O9) |
+| `fetch_slot` | Input | `logic [1:0]` | Read address of `fetch_pc` and `fetch_instruction` | Controller `tail_ptr` (FCU-O7) |
+| `present_pc` | Output | `logic [ADDR_WIDTH-1:0]` | `pc[present_slot]` | OBI leaf (FOI-O1) |
+| `fetch_pc` | Output | `logic [ADDR_WIDTH-1:0]` | `pc[fetch_slot]` | Fetch stage output |
+| `fetch_instruction` | Output | `logic [INSTR_WIDTH-1:0]` | `instruction[fetch_slot]` | Fetch stage output |
 
-`pc` and `instruction` are not reset (BASE [reset architecture](5-stage-baseline-core.md#reset-architecture);
-fetch-stage §4).
+## 3. Internal organization
 
-RTL names: `head`, `issue` and `tail` are `head_ptr`, `issue_ptr` and `tail_ptr`; `next` and `prev` are
-`next_slot` and `prev_slot`; lifecycle values are `LIFE_FREE`, `LIFE_QUEUED`, `LIFE_OUTSTANDING` and
-`LIFE_READY` of `life_t`, which `riscv_pkg` defines with `FETCH_DEPTH` (fetch-stage N2).
+Two indexed arrays, `pc[0..2]` and `instruction[0..2]`, and one read mux per output.
 
-### Derived signals (from state only)
+## 4. State and ownership
 
-- `prv = prev(issue)`; `outst = (life[prv] == OUTSTANDING)`. This is the outstanding count (FB-O3).
-- `full = (life[head] != FREE)`. This resolves `head == tail` (FB-O2). If `head != tail`, slot `head` is
-  past the youngest entry and therefore `FREE`.
-- `present_valid = (life[issue] == QUEUED)`; `present_pc = pc[issue]`.
-- `fetch_valid = (life[tail] == READY)`; `fetch_pc = pc[tail]`; `fetch_instruction = instruction[tail]`.
-- Pointer helpers (FB-O6): `next(s) = (s == 2) ? 0 : s + 1`; `prev(s) = (s == 0) ? 2 : s - 1`. Value `3` is
-  unused and cannot be reached from reset.
-
-### Structural invariants
-
-These hold after every edge. Each one is checked by the traces in section 5.
-
-- **I1. Occupancy.** The slots from `tail` up to `head - 1` (in ring order) are occupied. All other slots are
-  `FREE`. The buffer is full when `life[head] != FREE`.
-- **I2. Order.** Walking from `tail`: `READY` entries first, then at most one `OUTSTANDING` entry at `prv`,
-  then `QUEUED` entries up to `head - 1`. `issue` is the first `QUEUED` slot, or `head` if there is none.
-- **I3. Killed.** A killed entry is never `READY`. A killed `OUTSTANDING` entry is always at `tail`. This
-  holds because a `request_fire` needs the older outstanding entry gone, or answered on the same edge
-  (BASE capacity and transaction states: the subordinate holds `gnt = 0` until it can accept). So at most
-  one outstanding entry exists, and it is the oldest.
-- **I4. Ambiguous full case.** When `full` and `issue == tail`: if `life[tail] == QUEUED`, all three
-  entries are `QUEUED`; otherwise all three are issued (`READY` or `OUTSTANDING`).
-
-## 4. Behavioral and next-state rules
-
-### 4.1 Events (pre-edge)
-
-- `F = fetch_valid && fetch_accept` (`fetch_fire`; fetch-stage O5).
-- `P = outst && raw_response_transfer` (`response_fire`; FB-O3, FOI-O2).
-- `Q = request_fire` (the leaf asserts it only while `present_valid = 1`).
-- `K = kill`.
-- `killed_resp = P && killed[prv]`.
-- `tail_free = F || killed_resp` (no kill). Both cases free slot `tail`: a killed `OUTSTANDING` entry is at
-  `tail` (I3).
-- `A = alloc_fire`: on a non-kill edge, `A = alloc_valid && (!full || tail_free)`. On a kill edge `A` is not used:
-  the buffer allocates nothing, and `alloc_valid` is ignored (FB-O7, IF-A2).
-
-### 4.2 Rules without a kill (`K = 0`)
-
-- **P (response).** `life[prv] := killed[prv] ? FREE : READY`. `instruction[prv] := response_data` on every
-  `response_fire`; a killed entry never becomes `READY`, so its payload is never read (fetch-stage §5.3; BASE
-  capacity and transaction states, "a live `OUTSTANDING` entry captures `rdata`").
-- **Q (request).** `life[issue] := OUTSTANDING`; `issue := next(issue)`. The killed flag is unchanged.
-  Non-killed entries follow BASE capacity and transaction states.
-- **Delivery / killed drain (`tail_free`).** `life[tail] := FREE`; `killed[tail] := 0`; `tail := next(tail)`.
-- **A (allocation).** `life[head] := QUEUED`; `pc[head] := alloc_pc`; `killed[head] := 0`;
-  `head := next(head)`. When `full`, `head == tail`, and the slot is reused only if `tail_free` freed it on
-  this edge (BASE capacity and transaction states, same-edge reuse).
-
-Combined: `tail' = tail + tail_free`, `head' = head + A`, `issue' = issue + Q`.
-
-### 4.3 Rules on a kill edge (`K = 1`)
-
-All values come from the pre-edge state.
-
-- `kept_out = outst && !P`: the outstanding entry at `prv` is kept as killed. A response on the kill edge
-  discards it instead (BASE stale-response section, second bullet).
-- `kept_q = (life[issue] == QUEUED)`: the entry at `issue` is kept as killed. By FB-O4 it is committed and
-  presented, so it is the committed entry of BASE's stale-response rule.
-- Every `READY` entry is freed. Its delivery on `fetch_accept` is ignored: `F` does not apply on a kill
-  edge (fetch-stage §5.2, first rule).
-- Every `QUEUED` entry beyond `issue` is freed. These are uncommitted (FB-O4).
-- `tail' = kept_out ? prv : issue`.
-- `restart = kept_q ? next(issue) : issue`: the first free slot after the kept entries. It is never a kept slot.
-  At most two entries are kept (one `OUTSTANDING`, one committed `QUEUED`), so `restart` is free when the kill
-  completes, and the target can be allocated on the next edge (IF-A2).
-- `head' = restart`. The kill edge allocates nothing: no slot becomes `QUEUED`, and `alloc_valid` is ignored
-  (FB-O7, IF-A2).
-- `killed[prv] := 1` if `kept_out`; `killed[issue] := 1` if `kept_q`.
-- `issue' = Q ? next(issue) : issue`. If `Q = 1` the killed entry at `issue` becomes `OUTSTANDING`, and `issue`
-  moves to `next(issue)`, which is `restart`.
-- Every slot not named above becomes `FREE` with `killed = 0`. With nothing kept, `tail' = head' = issue`, so the
-  ring is empty.
-- **pc write.** `pc[head] := alloc_pc` whenever `alloc_fire = 1`, with no kill condition (FB-O7). It is safe, as a
-  checked property: on a kill edge the written slot is `FREE` or freed on that edge, so no kept entry changes.
-  If not `full`, `head` is `FREE`, so it is not kept. If `full`, `head = tail`. A kept `tail` is `OUTSTANDING`
-  with `P = 0` (`fetch_valid = 0`, `tail_free = 0`), or `QUEUED` with `P = 0` (an all-`QUEUED` ring, I4, so
-  `tail_free = 0`); either way `alloc_fire = 0`. A freed `tail` (`READY`, or an `OUTSTANDING` answered on this
-  edge) may be written.
-
-### 4.4 Same-edge combinations
-
-| Combination | Result |
-| --- | --- |
-| `F` and `P` | `tail` is freed; `prv` becomes `READY`. Allowed. Slot `tail` can be reused by `head` when full (trace A). |
-| `Q` and `P` | Count stays `1`: `prv` (old outstanding) becomes `READY`; `issue` becomes `OUTSTANDING`; the new `prv` is the old `issue`. |
-| `Q` with an outstanding entry and no `P` | Outside the contract (section 6). |
-| `F` with `K = 1` | `F` is ignored. Every `READY` is freed; the HCU flush discards the IF/ID capture (fetch-stage §5.2). |
-| `P` with `K = 1` | The response is discarded and `prv` is `FREE` (BASE, second case of the stale-response section). |
-| `Q` with `K = 1` | The killed entry at `issue` becomes killed `OUTSTANDING`; `issue` moves to `restart` (trace D). |
-| `killed_resp` with `A` when full | The killed drain frees `tail`, which `head` reuses (trace W, edge 4). |
-| Empty buffer, `A` | `issue == head`: the new `QUEUED` entry is `issue` and is presented from the next cycle. |
-| Raw response with `outst = 0` | No state change (BASE OBI response validity and reset; FOI-O3). |
-
-### 4.5 Redirect cases
-
-The four BASE cases (BASE stale-response section; fetch-stage §5.2) and the two cases that keep an entry:
-
-| BASE case | Entry before the edge | Rule |
-| --- | --- | --- |
-| 1. Wrong-path `READY` freed | `READY` | Freed by the kill. `tail` moves past it (`tail' = kept_out ? prv : issue`). |
-| 2. Outstanding entry with a response on the redirect edge | `OUTSTANDING` at `prv`, `P = 1` | Freed by `P`. Not kept (`kept_out = 0`). |
-| 3. Committed `QUEUED` granted on the redirect edge | `QUEUED` at `issue`, `Q = 1` | Kept as killed. Becomes killed `OUTSTANDING`. `issue` moves to `restart`. |
-| 4. Unpresented `QUEUED` freed | `QUEUED` beyond `issue` | Freed. `head := restart` rewinds over them. |
-| Kept: outstanding entry without a response | `OUTSTANDING` at `prv`, `P = 0` | Kept as killed. `tail := prv`. It is drained, never `READY` (BASE). |
-| Kept: committed `QUEUED` not granted | `QUEUED` at `issue`, `Q = 0` | Kept as killed. `issue` stays, so the entry stays presented with stable `req` (BASE). |
-
-BASE says the redirected fetch "remains queued" until the stale outstanding entry drains (BASE stale-response
-section). Here the target is allocated on the edge after the redirect edge (IF-A2). It is presented only when
-`issue` reaches it, and `gnt` stays `0` until the stale response is taken. This is the presented-while-outstanding
-case of BASE capacity and transaction states, so it is not a conflict.
-
-### 4.6 Pointer encoding
-
-Each pointer is a 2-bit slot index. `next` and `prev` wrap `2 -> 0` and `0 -> 2` (FB-O6). Value `3` is
-never written. Reset sets all three pointers to `0`.
-
-## 5. Representative traces
-
-Each row is one edge. Pointers are shown after the edge. `life` lists slots `0 / 1 / 2`. The `pc` is
-written in hex and the `killed` flag is shown as `(k)`.
-
-### Trace A: steady state, same-edge reuse when full (fetch-stage Trace A)
-
-Pre-edge: `head = 0`, `issue = 2`, `tail = 0`; `life = READY 0x08 / OUTSTANDING 0x0C / QUEUED 0x10`
-(full). `fetch_accept = 1`, `kill = 0`, `request_fire = 1` (`gnt = 1`), `raw_response_transfer = 1`
-(`rvalid = 1`), `response_data = I2`, `alloc_valid = 1`, `alloc_pc = 0x14`.
-
-| Edge | Events | `head / issue / tail` | `life 0 / 1 / 2` | Notes |
+| State | Width / type | Reset | Meaning | Written by |
 | --- | --- | --- | --- | --- |
-| E | `F = 1` (frees `0`); `P = 1` (`outst = life[1]`); `Q = 1`; `A = 1` (`head = 0` reused) | `1 / 0 / 1` | `QUEUED 0x14 / READY 0x0C / OUTSTANDING 0x10` | Slot 0 is `issue`, so it is presented from the next cycle. Its `QUEUED` entry is committed (FB-O4). Matches fetch-stage Trace A except for this label. |
+| `pc[s]`, `s = 0..2` | `ADDR_WIDTH` | not reset | Fetch address of slot `s` | `pc_write` |
+| `instruction[s]`, `s = 0..2` | `INSTR_WIDTH` | not reset | Instruction payload of slot `s`; meaningful only while the controller marks the slot `READY` | `instruction_write` |
 
-### Trace B: redirect with a committed wrong-path entry not yet granted (fetch-stage Trace B)
 
-Pre-edge: `head = 0`, `issue = 2`, `tail = 0`; `life = READY 0x1C / OUTSTANDING 0x20 / QUEUED 0x24`
-(presented, full). `kill = 1`; `alloc_valid = 1` and `alloc_pc = 0x28` (`next_fetch_pc`), both ignored on the kill
-edge (FB-O7, IF-A2); `fetch_accept = 0`, `gnt = 0`, `rvalid = 0`.
+## 5. Behavioral and next-state rules
 
-| Edge | Events | `head / issue / tail` | `life 0 / 1 / 2` | Notes |
-| --- | --- | --- | --- | --- |
-| R | `K = 1`; `P = 0`; `Q = 0`; `kept_out = 1`; `kept_q = 1`; `restart = next(2) = 0`; no allocation | `0 / 2 / 1` | `FREE / OUTSTANDING 0x20 (k) / QUEUED 0x24 (k)` | `fetch_valid = 0` (`life[1]` is `OUTSTANDING`). `present_valid = 1` on slot 2, with `req` stable. `outst = life[1] == OUTSTANDING`. The controller loads `next_fetch_pc := 0x100`. |
-| R+1 | `alloc_valid = 1`; not `full` (`life[0] = FREE`); `alloc_fire = 1`; `alloc_pc = 0x100`; no kill | `1 / 2 / 1` | `QUEUED 0x100 / OUTSTANDING 0x20 (k) / QUEUED 0x24 (k)` | The target is allocated one edge after the redirect edge (IF-A2). `full` again (`life[1] != FREE`). `issue` stays on slot 2, and `req` stays on the killed entry. The controller's `next_fetch_pc` becomes `0x104`. |
+- **Write.** At a rising edge, `pc[pc_write_slot] := pc_write_data` when `pc_write = 1`, and
+  `instruction[instruction_write_slot] := instruction_write_data` when `instruction_write = 1`. Both may occur on one
+  edge. With an enable low the stored value holds. The buffer checks no slot state.
+- **Read.** `present_pc = pc[present_slot]`, `fetch_pc = pc[fetch_slot]`, `fetch_instruction = instruction[fetch_slot]`,
+  combinational from the arrays and the addresses. The addresses are controller registers, so outputs depend on
+  registered state only.
+- **Enables.** Enables and addresses come from controller inputs, may change within a cycle, and are sampled only at the
+  edge. They never reach the request or valid outputs (fetch-stage §2).
 
-Afterwards, slot 2 waits for `gnt`. The target at slot 0 is not presented while slot 2 is pending: `issue`
-stays on slot 2. When slot 2 is granted (after the stale response on slot 1), it becomes killed
-`OUTSTANDING`, and its response is drained to `FREE` (trace D shows the same-edge version).
+## 6. Reset, cancellation, and exceptional conditions
 
-### Trace D: redirect with a grant and the older response on the same edge
+- **Reset.** No reset action on the arrays; writes still follow their enables. The controller holds every slot `FREE` in
+  reset, so `pc_write` may be 1 and a clocked write happens. The value has no meaning, since the controller reads only
+  valid entries.
+- **Preconditions.** Addresses are `0..2`; `3` is unreachable from reset (FCU-O11). Enables and addresses come from the
+  controller only.
 
-Pre-edge: as trace B. `kill = 1`; `alloc_valid` and `alloc_pc` ignored (FB-O7, IF-A2); `gnt = 1` (grants slot 2),
-`rvalid = 1` (answers slot 1), `fetch_accept = 0`.
+## 7. Representative examples or cycle traces
 
-| Edge | Events | `head / issue / tail` | `life 0 / 1 / 2` | Notes |
-| --- | --- | --- | --- | --- |
-| R | `K = 1`; `P = 1` (slot 1 freed, response discarded); `Q = 1` (slot 2 killed `OUTSTANDING`); `kept_out = 0`; `tail' = issue = 2`; `restart = next(2) = 0`; no allocation | `0 / 0 / 2` | `FREE / FREE / OUTSTANDING 0x24 (k)` | `outst = life[2] == OUTSTANDING` (killed). `issue = head`, so no `QUEUED` entry is presented (`present_valid = 0`). A killed `OUTSTANDING` at `tail` (I3). The controller loads `next_fetch_pc := 0x100`. |
-| R+1 | `alloc_valid = 1`; not `full`; `alloc_fire = 1`; `alloc_pc = 0x100`; no kill | `1 / 0 / 2` | `QUEUED 0x100 / FREE / OUTSTANDING 0x24 (k)` | The target is allocated at `issue` (slot 0). It is presented from the next cycle, but `gnt = 0` until the killed response on slot 2 is taken (BASE, `OBI_OUTSTANDING_MAX=1`). |
+Buffer-level only; the controller supplies the addresses and enables.
+| Edge | Inputs | State after | Outputs after the edge |
+| --- | --- | --- | --- |
+| E1 | `pc_write=1`, `pc_write_slot=2`, `pc_write_data=0x20` | `pc[2] = 0x20` | `present_pc` with `present_slot=2` is `0x20` |
+| E2 | `instruction_write=1`, `instruction_write_slot=2`, `instruction_write_data=I1` | `instruction[2] = I1` | `fetch_pc`, `fetch_instruction` with `fetch_slot=2` are `0x20`, `I1` |
 
-Next edge (not shown): `rvalid` answers slot 2, `P = 1` with `killed[2] = 1`, so `killed_resp = 1`. Slot 2
-becomes `FREE`, `tail := 0`. The target at slot 0 can be granted on that same edge (`P = 1` allows `Q = 1`; BASE
-capacity and transaction states).
+## 8. Verification obligations
 
-### Trace W: pointer wrap past the third slot
-
-Start: empty, `head = issue = tail = 2`. Inputs per edge: `alloc_valid = 1` on E1..E6, `fetch_accept = 1`
-on E4..E6, `gnt = 1` on E2..E6 when `issue` is `QUEUED`, `rvalid = 1` on E3..E6 for the outstanding entry.
-`alloc_pc = 0x20, 0x24, 0x28, 0x2C, 0x30, 0x34` on E1..E6.
-
-| Edge | Events | `head / issue / tail` | `life 0 / 1 / 2` | Wrap |
-| --- | --- | --- | --- | --- |
-| E1 | `A`: slot 2 gets `0x20`; `head` `2 -> 0` | `0 / 2 / 2` | `FREE / FREE / QUEUED 0x20` | `head` wraps |
-| E2 | `Q` on slot 2 (`issue` `2 -> 0`); `A`: slot 0 gets `0x24` | `1 / 0 / 2` | `QUEUED 0x24 / FREE / OUTSTANDING 0x20` | `issue` wraps |
-| E3 | `P` on slot 2 (`READY`); `Q` on slot 0; `A`: slot 1 gets `0x28` | `2 / 1 / 2` | `OUTSTANDING 0x24 / QUEUED 0x28 / READY 0x20` | Full (`life[2] = READY`) |
-| E4 | `F` frees slot 2 (`tail` `2 -> 0`); `P` on slot 0; `Q` on slot 1 (`issue` `1 -> 2`); `A` reuses slot 2 (`head` `2 -> 0`) | `0 / 2 / 0` | `READY 0x24 / OUTSTANDING 0x28 / QUEUED 0x2C` | `head` and `tail` wrap. Full: `life[0] = READY` |
-| E5 | `F` frees slot 0 (`tail` `0 -> 1`); `P` on slot 1; `Q` on slot 2 (`issue` `2 -> 0`); `A` reuses slot 0 (`head` `0 -> 1`) | `1 / 0 / 1` | `QUEUED 0x30 / READY 0x28 / OUTSTANDING 0x2C` | `issue` wraps |
-| E6 | `F` frees slot 1 (`tail` `1 -> 2`); `P` on slot 2; `Q` on slot 0 (`issue` `0 -> 1`); `A` reuses slot 1 (`head` `1 -> 2`) | `2 / 1 / 2` | `OUTSTANDING 0x30 / QUEUED 0x34 / READY 0x2C` | Delivery order `0x20, 0x24, 0x28` follows allocation order |
-
-Every invariant in section 3 holds after each edge. The three pointer values are always consistent with the
-lifecycle state, which is the check on FB-O2.
-
-## 6. Reset, cancellation and environment
-
-**Reset.** On `rst_n = 0`, the state becomes `life = FREE`, `killed = 0`, `head = issue = tail = 0`. This
-is asynchronous: the outputs reach their reset values after reset propagation, without a clock edge
-(BASE [reset architecture](5-stage-baseline-core.md#reset-architecture)). So `present_valid = 0` and
-`fetch_valid = 0` then, and `req` falls as FOI-O5(a) assumes. No edge with `rst_n = 0` counts a request,
-response, delivery or allocation (BASE OBI response validity and reset). `pc` and `instruction` are not
-reset. After release, the subordinate returns no response for a pre-reset transaction (BASE OBI response
-validity and reset).
-
-**Cancellation.** A kill is the only cancellation inside the buffer (section 4.3, fetch-stage §6). A
-committed entry is never removed before its `gnt`; it is kept as killed (BASE capacity and transaction
-states).
-
-**Environment preconditions.**
-
-- A `request_fire` requires that no older outstanding entry remains after the edge: either `outst = 0`, or
-  `P = 1` on the same edge. This is the subordinate's obligation (BASE capacity and transaction states:
-  `gnt = 0` until capacity; `OBI_OUTSTANDING_MAX = 1`). The buffer does not guard it. A violation makes two
-  entries `OUTSTANDING`, which is outside the contract.
-- `kill` may be asserted only on an edge where `rst_n = 1`. Outside reset, `kill` equals `redirect_fire`
-  (FB-O1).
-- Inputs are `0` or `1` only (fetch-stage O4).
-- A raw unexpected response (`raw_response_transfer && !outst`) changes no state (section 4.4; FOI-O3).
-
-## 7. Verification obligations
-
-No fetch-buffer test exists (`tb/runners/` has no fetch runner, checked 2026-11-04). The following are
-planned. Expected values come from section 4, not from the DUT.
+Planned checks; no fetch-buffer test exists (checked 2026-11-06).
 
 | Requirement / invariant | Stimulus or scenario | Expected observation |
 | --- | --- | --- |
-| Steady state and same-edge reuse (fetch-stage Trace A) | Trace A | Pointers `1 / 0 / 1`; `life` as in section 5 |
-| Redirect with a committed entry not granted (fetch-stage Trace B) | Trace B | `issue` stays on the killed entry; `req` stable; `fetch_valid = 0` |
-| Redirect with grant and response on one edge | Trace D | Response discards slot 1; slot 2 becomes killed `OUTSTANDING`; no allocation on the edge; `head = issue = 0` (free) |
-| Four redirect cases (section 4.5) | One stimulus per case | Each case gives the stated `life` result |
-| Pointer wrap (trace W) | Six allocations and deliveries from `head = 2` | Pointers wrap as shown; delivery order is allocation order |
-| Full / empty by `life[head]` (I1, I4) | Full with all `QUEUED`; full with all issued; empty | `full` and `issue` as stated; no ambiguity |
-| Delivery ignored on kill (fetch-stage §5.2) | `fetch_accept = 1` on a kill edge with a `READY` tail | Tail `READY` freed; no delivery effect |
-| Kill with `alloc_valid` 0 or 1 (FB-O7, IF-A2) | Trace B with each value | No slot allocated on the kill edge; `head = 0` for both values |
-| Target allocated one edge after the redirect (IF-A2) | Trace B, edges R and R+1 | `alloc_fire = 1` on R+1 only; slot 0 `QUEUED` with `pc = 0x100` |
-| `pc` write on a kill edge (section 4.3, FB-O7) | Full ring with a `READY` tail, `fetch_accept = 1`, `alloc_valid = 1`, `kill = 1` | `alloc_fire = 1` writes `pc[head]` into the freed `READY` slot; kept entries and their `pc` unchanged |
-| Killed drain at `tail` (I3) | Killed `OUTSTANDING` answered | Entry `FREE`; never `READY` |
-| Reset (section 6) | Reset with entries in every state | All `FREE`; pointers `0`; `present_valid = 0` after propagation |
-| Unexpected response (section 4.4) | Raw response with no outstanding entry | No state change |
+| Write, then read; enable low (section 5) | `pc_write` to slot `s`, read `s` through `present_slot` or `fetch_slot`; then change the data with the enable low | Read returns the written value; stored value unchanged |
+| Independent writes (section 5) | `pc_write` and `instruction_write` on one edge, to different slots | Both arrays capture their own data |
+| Combinational read (section 5) | Change a read address within a cycle | Output follows the array with no edge |
+| Reset with enables low (section 6) | Reset asserted with `pc_write` and `instruction_write` held at 0 | Arrays unchanged |
 
-## 8. Open items
+## 9. Rationale and open decisions
 
-No open items in this document. IF-A2 (BASE) changes the redirect edge; its effect here is recorded
-in section 9 (FB-O1 amended, FB-O7 replaced).
+**FB-O8. Payload array, not a FIFO (IF-A3).** Decision (Việt, 2026-11-06): an indexed payload array with no reset.
+Entries are allocated before their data arrives and a kill reloads the pointers, so a FIFO does not fit.
 
-## 9. Rationale and decisions
+**FB-O9. Read muxes in the buffer (IF-A3).** Decision (Việt, 2026-11-06): payload does not pass through the controller.
 
-Each decision below is the Owner's, dated 2026-11-04. Each one is written as settled.
-
-**FB-O1. Controller boundary.** Decision (Việt, 2026-11-04): the controller drives `alloc_valid`,
-`alloc_pc` (`ADDR_WIDTH`) and `kill`; the buffer returns `alloc_fire`. `alloc_pc` is `next_fetch_pc` on every
-cycle (amended by IF-A2, 2026-11-05; the 2026-11-04 wording was `redirect_target` on a redirect edge). `kill` equals `redirect_fire`, a single broadcast. The buffer
-applies the four redirect cases per entry (section 4.5) and chooses the presented entry, always the oldest
-`QUEUED`. The controller reads no per-entry state and has no `gnt` input. `alloc_valid` must not depend on
-`alloc_fire`; `alloc_fire` goes only to the `next_fetch_pc` register. On a kill edge, `alloc_valid` is
-ignored and nothing is allocated (FB-O7, IF-A2).
-
-**FB-O2. Age order (fetch-stage O3).** Decision (Việt, 2026-11-04): a ring over the three slots with three
-pointers, in the Owner's naming. `head` is the write end, the next slot to allocate. `tail` is the oldest
-entry. `issue` is the oldest `QUEUED` entry. Allocation writes at `head`, then `head + 1`. `request_fire`
-moves the entry at `issue` to `OUTSTANDING`, then `issue + 1`. Delivery or a killed drain frees the entry at
-`tail`, then `tail + 1`. There is no count; the per-slot lifecycle stays. `head == tail` is resolved by
-`life[head]`: `FREE` means empty, otherwise full. On a redirect edge: `tail = (an OUTSTANDING entry is kept) ?
-issue - 1 : issue`; `head = restart = (life[issue] == QUEUED) ? issue + 1 : issue`, and no target is written
-there (IF-A2: the target is allocated on the next edge at `head`); `issue` changes only through `request_fire`. ("Kept" means not answered on the same edge; section 4.3.)
-
-**FB-O3. Outstanding (fetch-stage O2).** Decision (Việt, 2026-11-04): derived, not stored:
-`outstanding = life[issue - 1] == OUTSTANDING`. `response_fire = outstanding && raw_response_transfer`, and
-the response lands in slot `issue - 1`.
-
-**FB-O4. Committed.** Decision (Việt, 2026-11-04): derived, not stored: the entry at `issue` is committed when
-`life[issue] == QUEUED`. Every other `QUEUED` entry is uncommitted. This realises BASE's conceptual
-`protocol_committed`. Consequence: `present_valid` equals `life[issue] == QUEUED`. An entry is presented from the first cycle in
-which it is `QUEUED` at `issue`, not one cycle later. Uncommitted entries are never at `issue`.
-
-**FB-O5. Killed.** Decision (Việt, 2026-11-04): one bit per entry. Set on the redirect edge for each kept
-entry. Cleared when the slot is freed or allocated, and on reset. Only the response path reads it.
-`fetch_valid = life[tail] == READY`, because a killed `READY` entry never exists.
-
-**FB-O6. Pointer encoding.** Decision (Việt, 2026-11-04): each pointer is a 2-bit slot index, with `next`
-and `prev` helpers that wrap `2 -> 0` and `0 -> 2`. Value `3` is unused and unreachable from reset.
-
-**FB-O7. Kill edge allocates nothing.** Decision (Việt, 2026-11-05), replacing the 2026-11-04 decision (b). On a
-kill edge the buffer performs no allocation: `alloc_valid` is ignored and no slot becomes `QUEUED` from it. The
-formula is `alloc_fire = alloc_valid && (!full || tail_free)`, with no kill term. The 2026-11-04 rule that the
-target is always allocated with `alloc_fire = 1` on a kill edge is withdrawn, because the target is now allocated
-on the following edge (IF-A2). `alloc_fire` on a kill edge is a don't-care for the controller (FCU-O6). A free slot
-for the target is guaranteed by `restart` (section 4.3), one edge after the redirect.
-
-Reasons, as recorded for the Owner. FB-O1 keeps the controller free of per-entry state, so the controller
-stays one module. FB-O2 and FB-O3 remove the count and the age field, so there is one source of truth for
-order (ring) and one for outstanding (`life`). FB-O4 removes a stored `protocol_committed` state and realises
-it by position. FB-O5 keeps the killed marker to the one path that reads it.
-
-### Dependencies
-
-- `fetch_controller_unit` is defined in [fetch-controller-unit.md](fetch-controller-unit.md) (Accepted,
-  FCU-O1..FCU-O6): its inputs are `redirect_fire`, `redirect_target`, `alloc_fire`; its outputs are `kill`,
-  `alloc_valid`, `alloc_pc`. On a kill edge `alloc_valid` stays `1` and is ignored (FB-O7), and its `next_fetch_pc`
-  loads `redirect_target`, which has priority over `alloc_fire` (FCU-O5, FCU-O6).
-- `rtl/fetch_buffer.sv` implements section 4.3: `alloc_fire` has no `kill` term, and a kill edge allocates nothing.
-- The HCU design (fetch-stage D-3) must still drive `fetch_accept` and the IF/ID `stall` and `flush`
-  consistently with the kill rule of section 4.3.
-- The RTL is written by Việt (fetch-stage F-d). Agent assistance on `rtl/fetch_buffer.sv` is disclosed in the PR.
+**Decision map and open items.** The only decision map is in [Fetch Controller Unit](fetch-controller-unit.md) §9, which
+also holds this design's open items (none here).
