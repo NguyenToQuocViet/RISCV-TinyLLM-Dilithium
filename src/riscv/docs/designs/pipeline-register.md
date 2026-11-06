@@ -20,7 +20,7 @@ ports, the PR-D1 behavior and the code shape. It does not define any register's 
 
 - Success criterion: each register is an instance of this template, and its stored valid and payload follow the
   PR-D1 table in section 5.
-- Non-goals: field lists and field types (inherited from the boundary sections above, PR-O7); the HCU equations
+- Non-goals: field lists and field types (inherited from the boundary sections above, PR-O7); the HCU priority table
   (see [hazard control unit](hazard-control-unit.md)); the core top, which instantiates the four modules and ties
   unused controls; any BASE amendment.
 - Producers and consumers: the source stage drives `valid_i` and `<field>_i`; the destination stage reads
@@ -175,10 +175,10 @@ produces a stored valid of 1 while `flush=1`.
   without `valid_o`.
 - **Flush and the payload enable.** `capture` contains `!flush`, so `flush` reaches the enable of `payload_reg`.
   In the core top the HCU drives `flush` for IF/ID from `redirect_fire` (`if_id_flush = redirect_fire`), and for
-  ID/EX from `redirect_fire` or a load-use with no MEM wait (`id_ex_flush`, [hazard control unit](hazard-control-unit.md#2-interface-contract)).
+  ID/EX from `redirect_fire` or a load-use with no MEM wait (`id_ex_flush`, [hazard control unit](hazard-control-unit.md#6-behavior)).
   Both therefore reach the payload enable of their register. This is a fact about the wiring, not a timing target.
 - **Preconditions.** This block assumes nothing about `stall` and `flush` beyond their sampled values. The HCU
-  preconditions P1–P3 in [hazard control unit](hazard-control-unit.md#5-behavioral-and-next-state-rules) are the
+  preconditions P1–P3 in [hazard control unit](hazard-control-unit.md#8-assumptions-and-corner-cases) are the
   source's concern.
 
 ## 7. Representative examples or cycle traces
@@ -211,7 +211,7 @@ All rows are planned checks.
 | PR-D1: flush retains payload | `flush=1`, `stall=0`, `valid_i=1`, `<field>_i` differs from stored | `valid_o=0`; payload unchanged |
 | PR-D1: capture | `valid_i=1`, `stall=0`, `flush=0` | `valid_o=1`; payload equals `<field>_i` |
 | Payload qualification (section 4) | Random initial payload at power-up, with `valid_o=0` on the first cycles; run through the core with bubbles | No architectural effect from a dead entry; a consumer that ignores `valid_o` produces a mismatch against the reference model (falsifies the qualifier) |
-| Integration: per-boundary arbitration | Core-level run with the HCU driving `stall`/`flush` per register | Each boundary's observed stall and flush match the HCU's table (see [hazard control unit](hazard-control-unit.md#8-verification-obligations)) |
+| Integration: per-boundary arbitration | Core-level run with the HCU driving `stall`/`flush` per register | Each boundary's observed stall and flush match the HCU's table (see [hazard control unit](hazard-control-unit.md#6-behavior)) |
 
 Expected values follow from section 5 and PR-D1, not from the RTL. The random-payload row is a planned check
 proposed for the Owner to adopt; section 9 keeps it OPEN.
@@ -233,7 +233,7 @@ Settled by the Owner, 2026-11-06:
 - **PR-O5. Capture.** One intermediate signal, `capture = valid_i && !stall && !flush`.
 - **PR-O6. Both controls on all four.** Every module has `stall` and `flush`, even where the core top ties `flush` to 0.
   The EX/MEM and MEM/WB `flush` inputs are never 1 in BASE; the HCU has no output for them
-  ([hazard control unit](hazard-control-unit.md#2-interface-contract)).
+  ([hazard control unit](hazard-control-unit.md#6-behavior)).
 - **PR-O7. Field lists stay out.** This document names no field. The boundary sections above are the authority.
 - **PR-O8. Reference.** The format descends from an older project's pipeline register, changed to meet PR-D1. The
   design reasons for the differences that matter:

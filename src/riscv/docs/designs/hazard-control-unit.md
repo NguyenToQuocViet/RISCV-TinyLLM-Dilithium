@@ -1,376 +1,195 @@
-# Hazard Control Unit — Block Design
+# Hazard Control Unit
 
-**Status:** Accepted by Việt on 2026-11-05
-**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md), in particular
-[pipeline-control priority](5-stage-baseline-core.md#pipeline-control-priority),
-[pipeline-register local control](5-stage-baseline-core.md#pipeline-register-local-control) (PR-D1),
-[forwarding and load-use hazards](5-stage-baseline-core.md#forwarding-and-load-use-hazards),
-[register-file timing and WB-to-ID bypass](5-stage-baseline-core.md#register-file-timing-and-wb-to-id-bypass) (load-use definition) and
-[reset architecture](5-stage-baseline-core.md#reset-architecture); [fetch-stage.md](fetch-stage.md) §2
-(`fetch_accept`), §5.2 (redirect row) and D-3; [decode-stage.md](decode-stage.md) (`rs1_id`, `rs2_id`,
-`rs1_used`, `rs2_used`; decisions D2 and O2); [redirect-unit.md](redirect-unit.md) (`redirect_fire` gated
-by `advance_allowed`); [memory-stage.md](memory-stage.md) (`mem_wait`); [writeback-stage.md](writeback-stage.md)
-(WB-D2, reset).
-**RTL mapping:** `rtl/hazard_control_unit.sv`, module `hazard_control_unit` (HCU-O2). The RTL is written by
-Việt (HCU-O2). The instance name belongs to the later core top design.
-This document is neither implementation nor verification evidence.
+| Field | Value |
+| --- | --- |
+| Description | Detects load-use and drives pipeline stall, flush, advance and fetch acceptance from the MEM wait and EX redirect events. |
+| Last modified | 2026-11-06 |
+| Status | Accepted by Việt on 2026-11-06 |
+| Owner | Nguyễn Tô Quốc Việt |
+| RTL | `rtl/hazard_control_unit.sv`, module `hazard_control_unit` |
+| Parent | [Five-stage BASE core](5-stage-baseline-core.md) (pipeline-control priority, pipeline-register local control, load-use definition, reset architecture); [Fetch stage](fetch-stage.md) §2 and D-3 |
 
-## 1. Purpose and boundary
+## 1. Overview
 
-The HCU is the core-level arbiter for the pipeline-control signals of the five-stage core. It detects
-load-use and turns the MEM wait, the EX redirect and load-use into per-register `stall` and `flush`,
-and into `advance_allowed` and `fetch_accept`. Its success criterion is that every pipeline register
-and the frontend take the next state that the BASE next-state table gives for each condition
-([pipeline-control priority](5-stage-baseline-core.md#pipeline-control-priority)), and that `fetch_accept`
-is consistent with the IF/ID `stall` and `flush` (fetch-stage D-3).
+- The HCU is the only block that turns core events into per-register control, because under [PR-D1](5-stage-baseline-core.md#pipeline-register-local-control), a pipeline register obeys its inputs and arbitrates nothing.
+- It handles the MEM wait, the EX redirect and load-use.
+  - It detects load-use itself, because it sees the ID and EX instructions together.
+- It is purely combinational, because every decision depends only on the current cycle.
+- It does not create `redirect_fire`, route the redirect to IF, forward operands, or produce any `valid_i`.
 
-The HCU is one purely combinational module: no `clk`, no state (HCU-O1).
+## 2. Block Design
 
-Non-goals (HCU-O1):
+```text
+                                              rst_n (core reset)
+                                                |
+                                 +------------------------------+
+mem_wait <- memory_stage         |                              | -> advance_allowed (execute_stage, writeback_stage)
+redirect_fire <- execute_stage   |                              | -> fetch_accept (fetch_stage)
+id_valid <- IF/ID                |                              | -> if_id_stall (IF/ID)
+id_rs1_id <- decode_stage        |                              | -> if_id_flush (IF/ID)
+id_rs2_id <- decode_stage        |                              | -> id_ex_stall (ID/EX)
+id_rs1_used <- decode_stage      |     hazard_control_unit      | -> id_ex_flush (ID/EX)
+id_rs2_used <- decode_stage      |                              | -> ex_mem_stall (EX/MEM)
+ex_valid <- ID/EX                |                              | -> mem_wb_stall (MEM/WB)
+ex_mem_en <- ID/EX               |                              |
+ex_mem_write <- ID/EX            |                              |
+ex_rd <- ID/EX                   |                              |
+                                 +------------------------------+
+```
 
-- It does not create `redirect_fire`. The EX `redirect_unit` qualifies it.
-- It does not route the redirect to IF. The raw EX redirect goes to IF directly (fetch-stage F-e).
-- It does no forwarding. Forwarding is in the EX and register-file paths (BASE forwarding section).
-- It produces no `valid_i` for any pipeline register.
-- It does not decide the frontend allocation or the fetch-entry state. It supplies `fetch_accept` only.
+## 3. Interface
 
-Producers and consumers at the boundary:
+- The HCU has 12 inputs and 8 outputs.
+- Each port is 1 bit wide, except the three 5-bit register identifiers.
 
-- Producers: `memory_stage` (`mem_wait`), `execute_stage` (`redirect_fire`), `decode_stage`
-  (`rs1_id`, `rs2_id`, `rs1_used`, `rs2_used`), and the IF/ID and ID/EX pipeline registers (their
-  valid and fields; not yet written, see section 2).
-- Consumers: `execute_stage` and `writeback_stage` (`advance_allowed`), `fetch_stage` (`fetch_accept`),
-  and the four pipeline registers (`stall`, `flush`).
-
-Inherited by reference, not restated: the BASE next-state table, PR-D1, the load-use definition and
-reset architecture. Local decisions are in section 9.
-
-## 2. Interface contract
-
-### Clock, reset and configuration
-
-The HCU has no clock. It holds no state, so no sampled register exists in it (HCU-O1). `rst_n` is an
-input only so that `advance_allowed = 0` during reset (HCU-O4, WB-D2; BASE
-[reset architecture](5-stage-baseline-core.md#reset-architecture)). Reset of the pipeline registers
-is handled by those registers (PR-D1, reset has priority 1).
-
-Constants: none. The three 5-bit fields are register identifiers (`logic [4:0]`) and take no
-configuration. The supported configuration is the BASE five-stage core.
-
-### Ports and payloads
-
-All ports are individual signals; there is no packed struct. There are 12 inputs and 8 outputs
-(20 ports). Every port is 1-bit `logic` except the three 5-bit register-identifier fields.
-
-| Signal | Direction | Type / width | Meaning | Valid when | Source |
-| --- | --- | --- | --- | --- | --- |
-| `rst_n` | Input | 1-bit `logic` | Active-low core reset | Always | Core reset (core top, not yet written); [reset architecture](5-stage-baseline-core.md#reset-architecture); HCU-O4 |
-| `mem_wait` | Input | 1-bit `logic` | Unresolved MEM wait: a live memory owner has not completed | Always | `memory_stage` output `mem_wait` (`rtl/memory_stage.sv`, line 23) |
-| `redirect_fire` | Input | 1-bit `logic` | Qualified EX redirect, already gated by `advance_allowed` | Always | `execute_stage` output `redirect_fire` (`rtl/execute_stage.sv`, line 44); [redirect-unit.md](redirect-unit.md) |
-| `id_valid` | Input | 1-bit `logic` | The instruction in ID is valid | Always | IF/ID register `valid_o`: not yet written |
-| `id_rs1_id` | Input | `logic [4:0]` | Raw `rs1` field of the ID instruction | Qualified by `id_rs1_used` | `decode_stage` output `rs1_id` (`rtl/decode_stage.sv`, line 24) |
-| `id_rs2_id` | Input | `logic [4:0]` | Raw `rs2` field of the ID instruction | Qualified by `id_rs2_used` | `decode_stage` output `rs2_id` (`rtl/decode_stage.sv`, line 25) |
-| `id_rs1_used` | Input | 1-bit `logic` | ID instruction semantically reads `rs1` | Supported encodings | `decode_stage` output `rs1_used` (`rtl/decode_stage.sv`, line 29) |
-| `id_rs2_used` | Input | 1-bit `logic` | ID instruction semantically reads `rs2` | Supported encodings | `decode_stage` output `rs2_used` (`rtl/decode_stage.sv`, line 30) |
-| `ex_valid` | Input | 1-bit `logic` | The instruction in EX is valid | Always | ID/EX register `valid_o`: not yet written |
-| `ex_mem_en` | Input | 1-bit `logic` | The instruction in EX accesses memory | Always | ID/EX register, from `decode_stage` `mem_en`: not yet written |
-| `ex_mem_write` | Input | 1-bit `logic` | The memory access in EX is a store | Qualified by `ex_mem_en` | ID/EX register, from `decode_stage` `mem_write`: not yet written |
-| `ex_rd` | Input | `logic [4:0]` | Destination register of the instruction in EX | Qualified by `ex_valid` | ID/EX register `rd`: not yet written |
-| `advance_allowed` | Output | 1-bit `logic` | The core permits EX and WB to advance on this edge | Combinational | Consumers: `execute_stage` (`rtl/execute_stage.sv`, line 28), `writeback_stage` (`rtl/writeback_stage.sv`, line 18) |
-| `fetch_accept` | Output | 1-bit `logic` | IF/ID may take a frontend entry on this edge (capture mode). A valid entry moves only on `fetch_fire = fetch_valid && fetch_accept` | Combinational | Consumer: `fetch_stage` (`rtl/fetch_stage.sv`, line 14) |
-| `if_id_stall` | Output | 1-bit `logic` | Hold the IF/ID register | Combinational | IF/ID register (not yet written) |
-| `if_id_flush` | Output | 1-bit `logic` | Invalidate the IF/ID register | Combinational | IF/ID register (not yet written) |
-| `id_ex_stall` | Output | 1-bit `logic` | Hold the ID/EX register | Combinational | ID/EX register (not yet written) |
-| `id_ex_flush` | Output | 1-bit `logic` | Invalidate the ID/EX register | Combinational | ID/EX register (not yet written) |
-| `ex_mem_stall` | Output | 1-bit `logic` | Hold the EX/MEM register | Combinational | EX/MEM register (not yet written) |
-| `mem_wb_stall` | Output | 1-bit `logic` | Hold the MEM/WB register | Combinational | MEM/WB register (not yet written) |
-
-Four separate `stall` outputs are used, not one shared signal (HCU-O3). There is no `ex_mem_flush`
-and no `mem_wb_flush` output: in BASE the EX/MEM and MEM/WB flush inputs are never 1, and the core top
-ties them to 0 (HCU-O3).
-
-Width domains: the three register identifiers are 5-bit architectural register numbers (`x0`..`x31`).
-They are compared for equality only. No width conversion exists in this block.
-
-### Transfer and timing rules
-
-- All outputs are combinational functions of the inputs. Each output is defined by the equations below,
-  and nothing is registered inside the HCU.
-- Equations (HCU-O6, settled by the Owner, 2026-11-05):
-
-  ```systemverilog
-  load_use = id_valid && ex_valid && ex_mem_en && !ex_mem_write && (ex_rd != 5'd0)
-          && ((id_rs1_used && (id_rs1_id == ex_rd)) || (id_rs2_used && (id_rs2_id == ex_rd)));
-  mem_wb_stall    = mem_wait;
-  ex_mem_stall    = mem_wait;
-  id_ex_stall     = mem_wait;
-  if_id_stall     = mem_wait || load_use;
-  if_id_flush     = redirect_fire;
-  id_ex_flush     = redirect_fire || (load_use && !mem_wait);
-  advance_allowed = rst_n && !mem_wait;
-  fetch_accept    = !if_id_stall && !if_id_flush;
-  ```
-
-- **Timing note (fact, not a target).** The combinational chains that cross the HCU are:
-  1. `rvalid` → `mem_wait`: `data_obi_controller` drives `mem_wait = !rvalid` while the memory owner
-     has an outstanding request (`rtl/data_obi_controller.sv`, line 64).
-  2. `mem_wait` → `if_id_stall` → `fetch_accept` (HCU) → `fetch_fire` (`fetch_valid && fetch_accept`):
-     the Fetch Controller Unit frees its entry and IF/ID captures it, on the same edge, in the frontend next state.
-  3. `mem_wait` → `advance_allowed` (HCU) → `redirect_fire` (`rtl/redirect_unit.sv`, line 48) →
-     `if_id_flush`, `id_ex_flush` (HCU), and `kill` to `fetch_controller_unit`
-     (`rtl/fetch_controller_unit.sv`, line 37); `redirect_fire` → `if_id_flush` → `fetch_accept`.
-  4. `mem_wait` → `advance_allowed` → `wb_retire_fire` (`rtl/writeback_stage.sv`, line 27) → the
-     register-file write and the WB-to-ID bypass value that feeds ID/EX next state.
-
-  Each chain ends at registers: pipeline-register valid and payload, fetch-entry state, or the
-  register-file write. No chain reaches `req` or `addr`: the frontend's `req` comes from registered
-  fetch-entry state only (fetch-stage §2; BASE IF-A1). Section 5 gives the logic values for these
-  chains; this note gives no timing number.
-
-- The HCU has no cycle: `advance_allowed` depends only on `rst_n` and `mem_wait`, and `load_use`
-  depends only on registers and decode outputs. Neither depends on `redirect_fire`, so the
-  `redirect_fire` gating in [redirect-unit.md](redirect-unit.md) is not circular through the HCU.
-
-## 3. Internal organization
-
-The HCU has three groups of logic and no sub-blocks:
-
-- **Hazard detect:** `load_use`, from the ID instruction's used sources and the EX load's destination.
-- **MEM wait and redirect decode:** `mem_wait`, `redirect_fire` and `load_use` drive the stall and
-  flush equations of section 2. The `!mem_wait` guard on `id_ex_flush` is in section 5.
-- **Frontend qualification:** `fetch_accept` is `!if_id_stall && !if_id_flush`, so it is 1 exactly when
-  IF/ID is in capture mode (PR-D1). A valid entry moves only on `fetch_fire = fetch_valid && fetch_accept`:
-  the Fetch Controller Unit frees that entry and IF/ID captures it on the same edge (fetch-stage D-3). With
-  `fetch_valid = 0`, `fetch_accept` may be 1 and no entry moves.
-
-No width, signedness, extension or overflow semantics apply beyond the 5-bit equality compare.
-
-## 4. State and ownership
-
-The HCU is stateless. It stores nothing and has no reset value. The stored state that it controls
-(pipeline-register valid and payload, fetch-entry state) belongs to those blocks, under their own
-reset and hold rules.
-
-## 5. Behavioral and next-state rules
-
-### 5.1 Preconditions used by the table
-
-The table relies on three facts that the HCU does not check. Each is enforced elsewhere:
-
-- **P1. `redirect_fire = 1` implies `mem_wait = 0` and `rst_n = 1`.** `redirect_fire` is
-  `redirect_req && instruction_valid && advance_allowed` (`rtl/redirect_unit.sv`, line 48), and
-  `advance_allowed = rst_n && !mem_wait` (HCU). The MEM wait and redirect are therefore never both 1.
-- **P2. `redirect_fire = 1` implies `load_use = 0`.** A load in EX has `mem_en = 1` and `mem_write = 0`.
-  A control-flow instruction has `mem_en = 0`: `rtl/control_unit.sv` sets `mem_en` only in the load and
-  store decode, and clears it for unsupported encodings (line 300). One EX instruction cannot be both.
-  This is HCU-O8: "redirect wins" then costs no logic.
-- **P3. Pipeline inputs are the stage's own instruction.** `id_*` fields are the ID instruction
-  qualified by `id_valid`; `ex_*` fields are the EX instruction qualified by `ex_valid`. These come from
-  registers not yet written, so this is a requirement on those registers.
-
-Inputs are `0` or `1` only; X and Z are outside the contract (the same precedent as fetch-stage O4).
-
-### 5.2 BASE next-state rows against the equations
-
-The rows follow the BASE next-state table and its priority (reset > MEM wait > redirect > load-use >
-normal). "Hold" is `stall=1`, `flush=0`. PR-D1 gives reset priority over flush and stall.
-
-| BASE row (first applicable) | Input condition | HCU outputs | Pipeline registers under PR-D1 | `wb_retire_fire` |
+| Signal | Dir | Width | Peer | Description |
 | --- | --- | --- | --- | --- |
-| Reset asserted | `rst_n=0` | `advance_allowed=0`; `fetch_accept` may read `1` (fetch ignores it under reset, fetch-stage §2); stall and flush values are masked | IF/ID, ID/EX, EX/MEM, MEM/WB invalid (reset dominates) | `0` |
-| Unresolved MEM wait | `rst_n=1`, `mem_wait=1`, `redirect_fire=0` (P1) | `if_id_stall=1`, `if_id_flush=0`, `id_ex_stall=1`, `id_ex_flush=0` (guard), `ex_mem_stall=1`, `mem_wb_stall=1`, `fetch_accept=0` | All four hold | `0` |
-| `redirect_fire` | `rst_n=1`, `mem_wait=0`, `redirect_fire=1`, `load_use=0` (P1, P2) | `if_id_stall=0`, `if_id_flush=1`, `id_ex_stall=0`, `id_ex_flush=1`, `ex_mem_stall=0`, `mem_wb_stall=0`, `fetch_accept=0` | IF/ID invalid; ID/EX invalid; EX/MEM captures EX output; MEM/WB captures MEM output | Current MEM/WB valid |
-| Load-use hazard | `rst_n=1`, `mem_wait=0`, `redirect_fire=0`, `load_use=1` | `if_id_stall=1`, `if_id_flush=0`, `id_ex_stall=0`, `id_ex_flush=1`, `ex_mem_stall=0`, `mem_wb_stall=0`, `fetch_accept=0` | IF/ID holds the dependent instruction; ID/EX invalid bubble; EX/MEM captures the load; MEM/WB captures MEM output | Current MEM/WB valid |
-| Normal / IF availability | `rst_n=1`, all of the above `0` | All stalls and flushes `0`; `fetch_accept=1` | ID/EX captures ID output; EX/MEM and MEM/WB capture; IF/ID captures the oldest `READY` entry when `fetch_valid=1`, else invalid | Current MEM/WB valid |
+| `rst_n` | Input | 1 | Core reset | Active-low core reset. Only `advance_allowed` depends on it. |
+| `mem_wait` | Input | 1 | `memory_stage` | MEM holds an unresolved wait: a memory owner has not completed. |
+| `redirect_fire` | Input | 1 | `execute_stage` | EX takes a control-flow redirect this cycle. The redirect unit already gates it with `advance_allowed`. |
+| `id_valid` | Input | 1 | IF/ID | The instruction in ID is valid. |
+| `id_rs1_id` | Input | 5 | `decode_stage` | `rs1` field of the ID instruction. |
+| `id_rs2_id` | Input | 5 | `decode_stage` | `rs2` field of the ID instruction. |
+| `id_rs1_used` | Input | 1 | `decode_stage` | The ID instruction reads `rs1`. |
+| `id_rs2_used` | Input | 1 | `decode_stage` | The ID instruction reads `rs2`. |
+| `ex_valid` | Input | 1 | ID/EX | The instruction in EX is valid. |
+| `ex_mem_en` | Input | 1 | ID/EX | The EX instruction accesses memory. |
+| `ex_mem_write` | Input | 1 | ID/EX | The EX memory access is a store. |
+| `ex_rd` | Input | 5 | ID/EX | Destination register of the EX instruction. |
+| `advance_allowed` | Output | 1 | `execute_stage`, `writeback_stage` | EX and WB may advance this cycle. |
+| `fetch_accept` | Output | 1 | `fetch_stage` | `1` lets IF/ID take a fetch entry this cycle, if one is valid; `0` blocks it. |
+| `if_id_stall` | Output | 1 | IF/ID | Holds the IF/ID register. |
+| `if_id_flush` | Output | 1 | IF/ID | Invalidates the IF/ID register. |
+| `id_ex_stall` | Output | 1 | ID/EX | Holds the ID/EX register. |
+| `id_ex_flush` | Output | 1 | ID/EX | Invalidates the ID/EX register. |
+| `ex_mem_stall` | Output | 1 | EX/MEM | Holds the EX/MEM register. |
+| `mem_wb_stall` | Output | 1 | MEM/WB | Holds the MEM/WB register. |
 
-### 5.3 Combined cases
+## 4. Internal Structure
 
-| Case | Input condition | Equation result | Matches | Note |
+- None, because the HCU has no sub-blocks.
+
+## 5. State
+
+- None, because every decision depends only on the current cycle (section 1).
+
+## 6. Behavior
+
+- The HCU applies the next-state priority of the BASE core: reset, MEM wait, redirect, load-use, then normal advance ([pipeline-control priority](5-stage-baseline-core.md#pipeline-control-priority)).
+- A load-use exists when EX holds a valid load with a nonzero destination and ID reads that destination through `rs1` or `rs2`, because the loaded value is not ready until MEM ([load-use definition](5-stage-baseline-core.md#register-file-timing-and-wb-to-id-bypass)).
+  - The `x0` destination never counts, because a write to `x0` creates no dependency.
+- The table gives each output for each condition, in priority order.
+
+| Condition | advance_allowed | fetch_accept | if_id_stall | if_id_flush | id_ex_stall | id_ex_flush | ex_mem_stall | mem_wb_stall |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Reset (`rst_n` low) | 0 | any | any | any | any | any | any | any |
+| MEM wait (`mem_wait` high) | 0 | 0 | 1 | 0 | 1 | 0 | 1 | 1 |
+| Redirect (`redirect_fire` high, no MEM wait) | 1 | 0 | 0 | 1 | 0 | 1 | 0 | 0 |
+| Load-use (load-use present, no MEM wait, no redirect) | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
+| Normal (none of the above) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+- Reset makes `advance_allowed` 0 and leaves the other outputs any, because register reset beats stall and flush under PR-D1, and fetch ignores `fetch_accept` during reset.
+- A MEM wait stalls all four registers, because nothing may move until MEM completes.
+- A load-use holds IF/ID and flushes ID/EX, because the dependent instruction must wait, a bubble must enter EX, and the load must still advance to EX/MEM.
+- A load-use does not flush ID/EX during a MEM wait, because PR-D1 gives flush priority over stall, so without this exception the load in ID/EX would be cleared while it must hold.
+- Outside reset, `fetch_accept` is 1 exactly when IF/ID is neither stalled nor flushed, because a fetch entry is released only when IF/ID takes it.
+- No other exception exists, because a redirect never coincides with a MEM wait or a load-use ([section 8](#8-assumptions-and-corner-cases) gives the enforcement).
+
+## 7. Timing and Control
+
+- Every output is combinational in the same cycle, because the block holds no state that could delay a value.
+- No combinational loop passes through the block, because the redirect path leaves through `if_id_flush`, `id_ex_flush` and `fetch_accept` and never reaches `advance_allowed` or the load-use decision.
+- `data_obi_controller` drives `mem_wait` high while its owner waits for a response.
+  - `mem_wait` stays high until `rvalid` arrives, because the response is what completes the wait.
+  - The path from `rvalid` through `mem_wait` reaches frontend next-state logic and the register control inputs that this block drives.
+  - No path from `rvalid` reaches `req`, because `req` depends only on registered fetch-entry state.
+
+### When valid
+
+| Signal group | When valid |
+| --- | --- |
+| All eight outputs | Every cycle, combinational from the inputs of that cycle |
+
+### Reset, stall, flush
+
+| Event | Effect on this block |
+| --- | --- |
+| Reset (`rst_n` low) | Forces `advance_allowed` to 0. The other outputs are any: register reset beats stall and flush under PR-D1, and fetch ignores `fetch_accept` during reset. |
+| Stall | Drives the four `*_stall` outputs from `mem_wait` and the load-use decision. Holds no stall state. |
+| Flush | Drives the `*_flush` outputs. Clears no register itself; each register applies its own flush. |
+
+- The trace shows the hardest case: a load-use behind a MEM wait, then the response.
+- Before edge 1, `C` (reads `x5`) is in IF/ID, `Lx` (`LW x5, 0(x2)`) is in ID/EX, `S` waits in EX/MEM, and `B` is in MEM/WB.
+
+| Cycle / edge | Inputs | State before (IF/ID, ID/EX, EX/MEM, MEM/WB) | Outputs | State after |
 | --- | --- | --- | --- | --- |
-| MEM wait with load-use (guard case) | `mem_wait=1`, `load_use=1` | `id_ex_flush = redirect_fire || (1 && !1) = 0`; `id_ex_stall = 1`; `if_id_stall = 1`; all others as the MEM-wait row | Unresolved MEM wait: all hold | Without `!mem_wait`, `id_ex_flush` would be `1` and erase the load in ID/EX, although BASE holds ID/EX (and PR-D1 gives flush priority over stall). See section 5.4 |
-| Response plus load-use | `mem_wait=0` on the `data_response_fire` edge, `load_use=1` | Same values as the load-use row | BASE text on the response-plus-load-use edge: MEM/WB takes the completed memory instruction, EX/MEM takes the load, ID/EX takes a bubble, IF/ID holds the dependent instruction | `mem_wait=0` on that edge (`memory-stage.md`: `mem_wait=0` means the expected response is available) |
-| Response plus redirect | `mem_wait=0` on the response edge, `redirect_fire=1` | Same values as the redirect row | BASE text on the response-plus-redirect edge: MEM/WB takes the completed memory instruction, EX/MEM takes the redirecting instruction, younger entries invalid | Redirect is allowed on this edge because `advance_allowed` is 1 |
+| 1 | `mem_wait` high (S waits, `rvalid` low); load-use present | `C`, `Lx`, `S`, `B` | `id_ex_flush` low; all stalls high; `fetch_accept` low; `advance_allowed` low | Unchanged |
+| 2 | `mem_wait` low (`rvalid` high for S); load-use present | `C`, `Lx`, `S`, `B` | `id_ex_flush` high; `if_id_stall` high; `fetch_accept` low; `advance_allowed` high; `B` retires | `C` held in IF/ID; bubble in ID/EX; `Lx` in EX/MEM; `S` completes in MEM/WB |
 
-### 5.4 Why the guard, and where it matters
+- Without the exception, edge 1 raises both stall and flush on ID/EX, and flush wins under PR-D1, so the load is cleared although BASE holds it.
+- After edge 2, `Lx` owns MEM and waits for its own response.
 
-PR-D1 says flush beats stall. Under a MEM wait, ID/EX must hold its load (BASE: the MEM wait holds all
-four registers). With the guard, `id_ex_flush` is 0 under a MEM wait, so the MEM-wait row holds.
-Without it, a store waiting in MEM, a load in EX and its consumer in ID would clear the load.
-Trace 2 (section 7) shows this case.
+## 8. Assumptions and Corner Cases
 
-No other guard is needed (HCU-O8). `redirect_fire` and `mem_wait` are never both 1 (P1), and
-`redirect_fire` and `load_use` are never both 1 (P2), so the redirect term in `id_ex_flush` and
-`if_id_flush` costs no logic.
+- The behavior relies on three preconditions that the HCU does not check, because the HCU sees only its inputs and each precondition is guaranteed upstream.
 
-### 5.5 Derived properties
-
-Under P1 and P2:
-
-- No register is stalled and flushed in the same cycle. `if_id_flush` is 1 only when `mem_wait` and
-  `load_use` are 0, so `if_id_stall` is 0. `id_ex_flush` is 1 only when `id_ex_stall = mem_wait` is 0.
-  PR-D1's "simultaneous flush and stall invalidates" case never occurs in BASE.
-- `fetch_accept = 1` exactly when IF/ID is in capture mode (not stalled, not flushed). A valid entry moves
-  only on `fetch_fire = fetch_valid && fetch_accept`: the Fetch Controller Unit frees that entry and IF/ID captures
-  it on that edge (fetch-stage D-3). With `fetch_valid = 0`, no entry moves.
-- `fetch_accept = 0` on every redirect edge (HCU-O5, option A). The Fetch Controller Unit frees its `READY`
-  entries on a redirect whatever `fetch_accept` is (fetch-stage §5.2), so A is a choice that does not
-  depend on that detail.
-
-## 6. Reset, cancellation and exceptional conditions
-
-**Reset.** The HCU has no reset state. `rst_n = 0` forces `advance_allowed = 0`, which suppresses
-retirement (`wb_retire_fire = 0`, WB-D2) and EX advance. The pipeline registers clear their valid
-asynchronously (PR-D1, reset row). `fetch_accept` is not gated by `rst_n` in the HCU: the fetch entries
-has no transfer, delivery or allocation effect on an edge with `rst_n = 0` (fetch-stage §2).
-
-**Cancellation.** Two cancellations exist in the HCU:
-- The EX redirect flushes IF/ID and ID/EX (`redirect_fire`). IF frees its `READY` entries through the
-  Fetch Controller Unit, not through the HCU.
-- The load-use bubble invalidates ID/EX for one cycle (`load_use && !mem_wait`). No instruction is
-  discarded: the consumer is held in IF/ID and the load advances.
-
-**Preconditions and their enforcement:**
-
-- P1 (`redirect_fire` implies no MEM wait): enforced by `redirect_unit` gating with `advance_allowed`.
-- P2 (`redirect_fire` and `load_use` exclusive): enforced by `control_unit` `mem_en` and `control_flow`
-  decode.
-- P3 (pipeline inputs are the stage's own instruction): enforced by the IF/ID and ID/EX registers, not
-  yet written.
-
-Behavior outside these preconditions is not defined by this document. In particular `redirect_fire = 1`
-with `mem_wait = 1` is not a legal input.
-
-## 7. Representative examples or cycle traces
-
-Stimulus notes. The memory of a load or store is modelled as `data_obi_controller` drives it (section 2,
-timing note): `mem_wait = 1` while the owner has not been granted, and `mem_wait = !rvalid` while it is
-outstanding. In these traces `ID/EX` and `IF/ID` names are the instructions in those registers.
-Register values are shown as the instruction name.
-
-### Trace 1: load-use bubble, MEM wait, then release
-
-Pre-edge: IF/ID `C` (`ADD x6, x5, x1`, uses `x5`); ID/EX `Lx` (`LW x5, 0(x2)`); EX/MEM `A` (ALU);
-MEM/WB `B` (valid). `fetch_valid=1`: `D`, the oldest live `READY` fetch entry, is on the delivery
-outputs (`fetch_valid`, `fetch_pc`, `fetch_instruction`).
-
-| Cycle / edge | Inputs (HCU) | State before (IF/ID, ID/EX, EX/MEM, MEM/WB) | Outputs | State after |
-| --- | --- | --- | --- | --- |
-| 1 | `mem_wait=0` (`Lx` is in EX, no memory owner); `load_use=1` | `C`, `Lx`, `A`, `B` | `if_id_stall=1`; `id_ex_flush=1`; `fetch_accept=0`; `advance_allowed=1`; `B` retires | `C` (held), bubble, `Lx`, `A` |
-| 2 | `mem_wait=1` (`Lx` owns MEM, not granted); `load_use=0` (bubble in ID/EX) | `C`, bubble, `Lx`, `A` | All stalls `1`; `fetch_accept=0`; `advance_allowed=0`; no retire | Unchanged |
-| 3 | `mem_wait=0` (`rvalid=1`, response available); `load_use=0` | `C`, bubble, `Lx`, `A` | All stalls and flushes `0`; `fetch_accept=1`; `advance_allowed=1`; `A` retires | `C` (ID/EX), `D` (IF/ID), bubble (EX/MEM), `Lx` completed (MEM/WB) |
-
-At edge 3, `Lx` moves to MEM/WB and `C` moves to ID/EX, so `C` reads `x5` through MEM/WB forwarding
-in its next EX cycle (BASE forwarding section). The load-use bubble and the MEM wait are separate
-mechanisms (BASE register-file timing section).
-
-### Trace 2: load-use behind a MEM wait (guard case), then response
-
-Pre-edge: EX/MEM `S` (store, outstanding, waiting for its response); ID/EX `Lx` (`LW x5, 0(x2)`);
-IF/ID `C` (uses `x5`); MEM/WB `B` (valid).
-
-| Cycle / edge | Inputs (HCU) | State before | Outputs | State after |
-| --- | --- | --- | --- | --- |
-| 1 | `mem_wait=1` (`S` waits, `rvalid=0`); `load_use=1` | `C`, `Lx`, `S`, `B` | `id_ex_flush=0` (guard); all stalls `1`; `fetch_accept=0`; no retire | Unchanged |
-| 2 | `mem_wait=0` (`rvalid=1` for `S`); `load_use=1` | `C`, `Lx`, `S`, `B` | `id_ex_flush=1`; `if_id_stall=1`; `fetch_accept=0`; `advance_allowed=1`; `B` retires | `C` (held), bubble (ID/EX), `Lx` (EX/MEM), `S` completed (MEM/WB) |
-
-Cycle 3 continues as Trace 1 from its cycle 2: `Lx` now owns MEM and waits for its own response.
-
-Without the guard, edge 1 would give `id_ex_flush = 1` while `id_ex_stall = 1`. PR-D1 gives flush
-priority, so `Lx` would be cleared although BASE holds it. Edge 2 is the response-plus-load-use case
-in section 5.3.
-
-### Trace 3: EX redirect
-
-Pre-edge: IF/ID `D1` (wrong-path); ID/EX `Bx` (taken branch, `mem_en = 0`); EX/MEM `A`; MEM/WB `B`
-(valid). `fetch_valid=1`.
-
-| Edge | Inputs (HCU) | State before | Outputs | State after |
-| --- | --- | --- | --- | --- |
-| R | `mem_wait=0`; `redirect_fire=1`; `load_use=0` (P2) | `D1`, `Bx`, `A`, `B` | `if_id_flush=1`; `id_ex_flush=1`; `ex_mem_stall=0`; `mem_wb_stall=0`; `fetch_accept=0`; `advance_allowed=1`; `B` retires | IF/ID invalid; ID/EX invalid; EX/MEM `Bx`; MEM/WB `A` |
-
-No fetch entry is taken on R (`fetch_accept=0`). The fetch controller's own redirect behavior (kill, target
-allocation on the next edge) is in [fetch-stage.md](fetch-stage.md) §5.2 and is not part of the HCU.
-
-### Trace 4: response plus redirect on one edge
-
-Pre-edge: EX/MEM `Mx` (memory owner, outstanding); ID/EX `Bx` (taken branch); IF/ID `D1`; MEM/WB `B`.
-
-| Edge | Inputs (HCU) | State before | Outputs | State after |
-| --- | --- | --- | --- | --- |
-| R | `rvalid=1` → `mem_wait=0`; `redirect_fire=1` (allowed because `advance_allowed=1`); `load_use=0` | `D1`, `Bx`, `Mx`, `B` | `if_id_flush=1`; `id_ex_flush=1`; stalls `0`; `fetch_accept=0`; `B` retires | IF/ID invalid; ID/EX invalid; EX/MEM `Bx`; MEM/WB `Mx` completed |
-
-Without the response in the same cycle, `mem_wait=1`, `advance_allowed=0` and `redirect_fire=0`: the
-branch waits in EX. The redirect is taken on the response edge, as BASE requires ("a redirect or
-load-use event behind MEM may be processed without an extra release bubble").
-
-## 8. Verification obligations
-
-No HCU test exists. `tb/runners/` has no hazard runner (checked 2026-11-05). The checks below are
-planned. Expected values come from the BASE rows and the equations in section 2, not from the DUT.
-
-| Requirement/invariant | Stimulus or scenario | Expected observation |
+| Assumption | Guaranteed by | If violated |
 | --- | --- | --- |
-| Reset row (BASE pipeline-control priority) | `rst_n=0` with any other input | `advance_allowed=0`; `wb_retire_fire=0` through the WB leaf (WB-D2) |
-| MEM wait row | `mem_wait=1`, `load_use=0`, `redirect_fire=0` | All four stalls `1`; both flushes `0`; `fetch_accept=0`; `advance_allowed=0` |
-| Redirect row | `redirect_fire=1`, `mem_wait=0`, `load_use=0` | Both IF/ID and ID/EX flushes `1`; EX/MEM and MEM/WB stalls `0`; `fetch_accept=0`; `advance_allowed=1` |
-| Load-use row | `load_use=1`, `mem_wait=0`, `redirect_fire=0` | `if_id_stall=1`; `id_ex_flush=1`; `id_ex_stall=0`; `fetch_accept=0` |
-| Normal row | All inputs `0` | All stalls and flushes `0`; `fetch_accept=1`; `advance_allowed=1` |
-| MEM wait with load-use (guard) | `mem_wait=1` and `load_use=1` (Trace 2, cycle 1) | `id_ex_flush=0`; ID/EX holds the load. A falsifying implementation without `!mem_wait` gives `id_ex_flush=1` |
-| Response plus load-use | `mem_wait=0`, `load_use=1` on a response edge (Trace 2, cycle 2) | Load-use row values, and the BASE response-plus-load-use outcome |
-| Response plus redirect | `mem_wait=0`, `redirect_fire=1` (Trace 4) | Redirect row values |
-| Load-use bubble and release | Trace 1, cycles 1–3 | Bubble on cycle 1; hold on cycle 2; release and `fetch_accept=1` on cycle 3 |
-| Redirect frontend effect | Trace 3 | `fetch_accept=0` on R |
-| No stall and flush together | Any input within P1 and P2 | `if_id_stall & if_id_flush = 0`; `id_ex_stall & id_ex_flush = 0` |
-| `fetch_accept` consistency (D-3) | Any input within P1 and P2 | `fetch_accept = !if_id_stall && !if_id_flush`; on `fetch_fire = fetch_valid && fetch_accept` the Fetch Controller Unit frees one entry and IF/ID captures a valid entry; with `fetch_valid = 0` no entry moves |
-| Precondition P1 and P2 | Excluded inputs (`redirect_fire=1` with `mem_wait=1` or `load_use=1`) | Outside the contract; not driven in HCU tests |
-| Stateless (section 4) | Interface and elaboration | No clock input, no register, no latch |
+| P1: `redirect_fire` is high only when `mem_wait` is low and `rst_n` is high | `redirect_unit`, which gates `redirect_fire` with `advance_allowed` | ID/EX receives stall and flush together, and flush wins, so the instruction held by MEM wait is cleared. Outside the contract. |
+| P2: `redirect_fire` never occurs together with a load-use | `control_unit`: `mem_en` is set only for loads and stores, and cleared for unsupported encodings | IF/ID receives stall and flush together, and flush wins. The EX instruction would be a load and a redirect at once, which the decoder does not produce. |
+| P3: the `id_*` inputs are the ID instruction's fields, and the `ex_*` inputs are the EX instruction's | The IF/ID and ID/EX pipeline registers and the decode stage | A wrong `ex_rd` or source field gives a false or missed load-use stall. |
 
-Boundaries: these checks cover the HCU's combinational outputs for the listed vectors. They do not show
-the pipeline registers' valid and payload behavior, the fetch controller's response to `fetch_accept`, or
-whole-core execution.
+- Three corner cases combine two events on one edge.
 
-## 9. Rationale and open decisions
+| Case | Inputs | Result | Reason |
+| --- | --- | --- | --- |
+| MEM wait with load-use | MEM wait high and load-use present | All four registers hold; `id_ex_flush` low | The MEM-wait exception in section 6 keeps the load in ID/EX. |
+| Response with load-use | MEM wait low and load-use present on the response edge | Load-use outputs; the completed memory instruction enters MEM/WB, the load enters EX/MEM, a bubble enters ID/EX | `mem_wait` is low on the response edge ([memory stage](memory-stage.md)). |
+| Response with redirect | MEM wait low and `redirect_fire` high on the response edge | Redirect outputs; the completed memory instruction enters MEM/WB, the redirecting instruction enters EX/MEM | `advance_allowed` is high on that edge, so the redirect is allowed. |
 
-### Decisions recorded (Owner, 2026-11-05)
+- No register is stalled and flushed in the same cycle, because P1 and P2 exclude each input pair that would set both.
 
-Settled by the Owner, 2026-11-05. Numbers HCU-O1 onward are local to this document.
+## 9. Verification
 
-- **HCU-O1 (boundary).** One purely combinational module with no `clk` and no state. It detects
-  load-use and turns MEM wait, redirect and load-use into per-register `stall` and `flush`, `fetch_accept`
-  and `advance_allowed`. It does not create `redirect_fire`, does not route redirect to IF (raw EX to IF,
-  fetch-stage F-e), does no forwarding, and produces no `valid_i`.
-- **HCU-O2 (name).** Module and file `hazard_control_unit`, `rtl/hazard_control_unit.sv`. The RTL is
-  written by Việt. The instance name belongs to the later core top design.
-- **HCU-O3 (four stalls, no EX/MEM or MEM/WB flush).** Four separate `stall` outputs. The EX/MEM and
-  MEM/WB `flush` inputs are never 1 in BASE: the HCU has no output for them, and the core top ties them to 0.
-- **HCU-O4 (`rst_n` input).** `rst_n` is an input only so that `advance_allowed = 0` during reset
-  (WB-D2).
-- **HCU-O5 (`fetch_accept` option A).** `fetch_accept = !if_id_stall && !if_id_flush`. It is 0 on a
-  redirect edge. The Fetch Controller Unit would behave the same with 1, because `kill` frees `READY` entries
-  whatever `fetch_accept` is. Option A is chosen so the HCU does not depend on that buffer detail.
-- **HCU-O6 (equations).** The equations in section 2, settled by the Owner, 2026-11-05.
-- **HCU-O7 (`!mem_wait` in `id_ex_flush`).** PR-D1 gives flush priority over stall. Without this guard, a
-  store waiting in MEM, a load in EX and its consumer in ID would erase the load (Trace 2).
-- **HCU-O8 (no guard elsewhere).** `redirect_fire` and `mem_wait` are never both 1 (P1, enforced by
-  `redirect_unit`). `redirect_fire` and `load_use` are never both 1 (P2, because the one EX entry cannot be
-  a load and a control-flow instruction). BASE's "redirect wins" therefore costs no logic, and at IF/ID
-  flush beats stall anyway.
+- No HCU test exists.
+- The checks below are planned. Expected values follow from the priority table in section 6.
 
-### Open items
+| Requirement | Stimulus | Expected observation |
+| --- | --- | --- |
+| Reset row | `rst_n` low; other inputs any | `advance_allowed` 0 |
+| MEM wait row | `mem_wait` high; no load-use; no redirect | All four stalls high; both flushes low; `fetch_accept` low; `advance_allowed` low |
+| Redirect row | `redirect_fire` high; `mem_wait` low; no load-use | Both flushes high; the four stalls low; `fetch_accept` low; `advance_allowed` high |
+| Load-use row | ID reads the destination of a valid load in EX; `mem_wait` low; no redirect | `if_id_stall` high; `id_ex_flush` high; `id_ex_stall`, `ex_mem_stall` and `mem_wb_stall` low; `fetch_accept` low |
+| Normal row | All inputs 0 | All stalls and flushes low; `fetch_accept` high; `advance_allowed` high |
+| MEM wait with load-use (exception) | `mem_wait` high; load-use present | `id_ex_flush` low; `id_ex_stall` high. A design that raises `id_ex_flush` here fails this row. |
+| Response with load-use | `mem_wait` low on the response edge; load-use present | Load-use row values, with the completed memory instruction entering MEM/WB |
+| Response with redirect | `mem_wait` low and `redirect_fire` high on the response edge | Redirect row values, with the completed memory instruction entering MEM/WB |
+| Stateless | Any input sequence | Outputs depend only on the current inputs; no clock input exists |
 
-None inside this document's boundary. Every row of the BASE next-state table is traced to the equations
-(section 5.2). The combined cases are in section 5.3: MEM wait with load-use, response plus load-use, and
-response plus redirect.
+## 10. Decisions and Open Items
 
-### What can proceed and what stays blocked
+- The Owner settled these decisions on 2026-11-05.
 
-- Done: the HCU RTL, `rtl/hazard_control_unit.sv`, against section 2 and section 5. This design closes D-3
-  in [fetch-stage.md](fetch-stage.md).
-- Blocked for integration, not for the HCU design: the IF/ID, ID/EX, EX/MEM and MEM/WB registers and the
-  core top are not written. The sources of `id_valid`, `ex_valid`, `ex_mem_en`, `ex_mem_write` and `ex_rd`
-  are therefore not yet checked against RTL.
-- Not established by this document: any simulation result, any timing or area number, and any behavior of
-  the core as a whole. Section 8 lists obligations only.
-- Extensions (for example the IRQ profile) state their own additions to the next-state rows. They are not
-  part of this document.
+| ID | Decision | Reason |
+| --- | --- | --- |
+| HCU-D1 | One purely combinational module with no clock and no state. It does not create `redirect_fire`, route the redirect to IF, forward operands, or produce `valid_i`. | Each event is decided in the cycle it occurs, and each responsibility stays with its owner block. |
+| HCU-D2 | Four separate `stall` outputs. No EX/MEM or MEM/WB flush output exists. | BASE never sets those two flushes, and the core top ties them to 0. |
+| HCU-D3 | `rst_n` is an input, used only for `advance_allowed`. | Reset must suppress EX and WB advance (WB-D2). |
+| HCU-D4 | `fetch_accept` is 0 whenever IF/ID is stalled or flushed, so it is 0 on a redirect edge. | The HCU does not depend on how the Fetch Controller Unit treats `READY` entries on a redirect; the kill frees them either way. |
+| HCU-D5 | A load-use does not flush ID/EX during a MEM wait. | PR-D1 gives flush priority over stall, so without this exception the load in ID/EX would be cleared under a MEM wait. |
+| HCU-D6 | No other exception exists. | Preconditions P1 and P2 in section 8 exclude the other coinciding pairs, so another exception would add logic and no case. |
+
+- History: 2026-11-05 decisions settled; 2026-11-06 rewritten in the block spec format, IDs renumbered.
+
+| Old ID | New ID | Status |
+| --- | --- | --- |
+| HCU-O1 | HCU-D1 | Kept |
+| HCU-O2 | none | Retired: the module name is in the header |
+| HCU-O3 | HCU-D2 | Kept |
+| HCU-O4 | HCU-D3 | Kept |
+| HCU-O5 | HCU-D4 | Kept |
+| HCU-O6 | none | Retired: behavior is defined by the table in section 6 |
+| HCU-O7 | HCU-D5 | Kept |
+| HCU-O8 | HCU-D6 | Kept |
+
+- Open items: none.

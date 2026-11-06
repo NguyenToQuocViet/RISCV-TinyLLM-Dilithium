@@ -450,7 +450,7 @@ Leaf-level checks are in the leaf designs; the rows below are the stage (composi
   removed first-presentation rule.
 - **D-3.** The HCU design must drive `fetch_accept` consistently with the IF/ID `stall` and `flush` it
   drives, so that IF frees an entry exactly when IF/ID captures it. Resolved by
-  [hazard-control-unit.md](hazard-control-unit.md) (HCU-O5), accepted by Việt on 2026-11-05.
+  [hazard-control-unit.md](hazard-control-unit.md) (HCU-D4), accepted by Việt on 2026-11-05.
 
 ### Open items resolved in the controller design
 
