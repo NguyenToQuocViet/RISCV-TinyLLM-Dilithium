@@ -1,6 +1,6 @@
 # Pipeline Register — Block Design
 
-**Status:** Proposed
+**Status:** Accepted by Việt on 2026-11-06
 **Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner. The decisions PR-O1..PR-O8 in section 9 are the Owner's of 2026-11-06.
 **Parent contract:** [pipeline-register local control](5-stage-baseline-core.md#pipeline-register-local-control) (PR-D1),
 [reset architecture](5-stage-baseline-core.md#reset-architecture), and the boundary sections that name each register's
