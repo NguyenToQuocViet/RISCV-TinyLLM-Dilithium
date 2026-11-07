@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | Description | Fixes the structure, writing rules, decision IDs, length, process and PDF layout of every block spec. |
-| Last modified | 2026-11-06 |
+| Last modified | 2026-11-07 |
 | Status | Accepted by Việt on 2026-11-06 |
 | Owner | Nguyễn Tô Quốc Việt |
 | RTL | None, because this standard governs specs, not RTL. |
@@ -96,8 +96,8 @@
 
 | Block kind | Limit |
 | --- | --- |
-| Combinational leaf | 1-2 pages |
-| Stateful block | 3-5 pages |
+| Leaf with fewer than 8 ports | 2-3 pages |
+| Larger leaf or stateful block | 3-5 pages |
 | Wrapper or stage | 2-4 pages |
 
 - A spec that exceeds its limit must state the reason in Decisions and Open Items.
@@ -135,7 +135,7 @@
 | STD-D8 | Outline approval before prose, then a person reads every line. | [Process](#7-process) | Machine checks alone passed a version with eight errors. |
 | STD-D9 | PDF built by script, with a fixed layout. | [PDF](#8-pdf) | Every PDF looks the same. |
 
-- History: 2026-11-06, the Owner settled these decisions, and this standard records them.
+- History: 2026-11-06, the Owner settled these decisions, and this standard records them. 2026-11-07, the Owner widened the leaf length limits.
 - Old ID map: none, because this standard renumbers no IDs.
 - Open items:
   - The Architecture Spec format for BASE and the CI and IRQ extensions is not defined.
