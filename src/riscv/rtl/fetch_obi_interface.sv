@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 // Module      : fetch_obi_interface
 // Description : Stateless instruction OBI port for the selected fetch entry,
-//               with request and raw response events to the fetch buffer.
+//               with request and raw response events to the fetch controller.
 // Author      : Viet Nguyen To Quoc
 // Date        : 2026-11-02
 //------------------------------------------------------------------------------
