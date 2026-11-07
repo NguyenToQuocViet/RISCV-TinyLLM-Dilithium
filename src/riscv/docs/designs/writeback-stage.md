@@ -1,215 +1,192 @@
-# Writeback Stage — Block Design
+# Writeback Stage
 
-**Status:** Accepted by Nguyễn Tô Quốc Việt on 2026-10-24 after reviewing the
-block design and confirming that no open decisions remain. BASE behavior is
-inherited; `wb_src` naming and WB-generated retirement are selected locally.
-**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** WB D2 / 2026-10-24; Việt selected internal retirement
-qualification with only data and RF-write permission exposed.
-**Parent contract:** [BASE result selection](5-stage-baseline-core.md#exmem-boundary-and-data-request-ownership),
-[MEM/WB payload](5-stage-baseline-core.md#mem-data-formatting-and-memwb-boundary),
-[architectural side effects](5-stage-baseline-core.md#architectural-side-effects),
-and [MEM routing](memory-stage.md#3-internal-organization-and-wiring).
-**RTL mapping:** Leaf `writeback_stage` in [rtl/writeback_stage.sv](../../rtl/writeback_stage.sv);
-instance `wb_stage` belongs to future core integration. Việt created the initial
-module and result mux, then delegated the internal-retirement/RF-write update
-on 2026-10-24. This mapping is not functional verification evidence.
+| Field | Value |
+| --- | --- |
+| Description | Select writeback data and qualify register-file writes. |
+| Last modified | 2026-11-07 |
+| Status | Accepted by Việt on 2026-11-07 |
+| Owner | Nguyễn Tô Quốc Việt |
+| RTL | `rtl/writeback_stage.sv`, module `writeback_stage`, instance name `wb_stage` |
+| Parent | [Five-stage BASE core](5-stage-baseline-core.md) ([result selection](5-stage-baseline-core.md#exmem-boundary-and-data-request-ownership), [MEM/WB payload](5-stage-baseline-core.md#mem-data-formatting-and-memwb-boundary), [architectural side effects](5-stage-baseline-core.md#architectural-side-effects), [reset architecture](5-stage-baseline-core.md#reset-architecture)); [Memory stage](memory-stage.md#10-decisions-and-open-items) (MEM-D2, MEM-D3); [Hazard control unit](hazard-control-unit.md); [Register file](register-file.md) |
 
-## 1. Purpose and boundary
+## 1. Overview
 
-Select the current MEM/WB instruction's architectural result and qualify its
-register-file write. The selected decomposition is one combinational leaf,
-without a separate wrapper, mux leaf or write-control leaf.
+- `writeback_stage` selects the architectural result of the MEM/WB instruction and qualifies the register-file write of that instruction.
+- It is one combinational leaf with no clock, reset, state, stall or flush port.
+- It has no wrapper, mux leaf or write-control leaf, because separate leaves would add hierarchy without separating a storage or protocol responsibility.
+- BASE owns result semantics, retirement and the interlock rules, and this spec refines the local WB interface.
+- It does no instruction decode, arithmetic, load formatting, pipeline storage or arbitration.
+- The register file owns storage, the read ports and the WB-to-ID bypass, and the EX forwarding unit owns producer matching and operand selection. This block only supplies `wb_data`.
+- CI, CSR/MRET and IRQ are outside the block, and it reserves no extension result input.
 
-BASE owns result semantics, retirement and interlock rules. This document
-refines the local WB interface; it does not move instruction decode, arithmetic,
-load formatting, pipeline storage or arbitration into WB. CI, CSR/MRET and IRQ
-are outside this BASE leaf. No extension result inputs are reserved.
+## 2. Block Design
 
-RF owns storage, read ports and read-port forwarding. EX's forwarding unit owns
-producer matching and operand selection. WB supplies the selected `wb_data`;
-neither forwarding function is part of this leaf.
+```text
+ex_result, load_result, wb_src <- MEM/WB register       +-----------------+
+rd, reg_write, instruction_valid <- MEM/WB register     |                 | -> wb_data (decode_stage, execute_stage)
+                                                        | writeback_stage |
+                                                        |                 | -> rf_write_fire (decode_stage)
+                                                        +-----------------+
+                                                                 ^
+                                                  advance_allowed <- hazard_control_unit
+```
 
-## 2. Interface contract
+## 3. Interface
 
-### Clock, reset and configuration
+| Signal | Dir | Width | Peer | Description |
+| --- | --- | --- | --- | --- |
+| `ex_result` | Input | `DATA_WIDTH` | MEM/WB register | EX result of the MEM/WB instruction. |
+| `load_result` | Input | `DATA_WIDTH` | MEM/WB register | Formatted load value of the MEM/WB instruction. |
+| `rd` | Input | 5 | MEM/WB register | Destination register of the MEM/WB instruction. |
+| `wb_src` | Input | 1 | MEM/WB register | Result selector decoded in ID and retained in MEM/WB. |
+| `reg_write` | Input | 1 | MEM/WB register | Register-write intent of the MEM/WB instruction. |
+| `instruction_valid` | Input | 1 | MEM/WB register | The MEM/WB entry is live. |
+| `advance_allowed` | Input | 1 | `hazard_control_unit` | The core permits WB to advance at the next rising edge. |
+| `wb_data` | Output | `DATA_WIDTH` | `decode_stage`, `execute_stage` | Selected writeback value. |
+| `rf_write_fire` | Output | 1 | `decode_stage` | Permission for the register file to write `rd` with `wb_data` at the rising edge. |
 
-Combinational; no clock, reset, storage, local stall or flush ports. Data vectors
-use `riscv_pkg::DATA_WIDTH`; the supported BASE configuration is
-`DATA_WIDTH = ADDR_WIDTH = 32`. There are no module width parameters or width
-conversions. All vectors are unsigned bit patterns.
+- `ex_result` is architectural when a live writer has `wb_src` 0, and `load_result` is architectural when a live writer has `wb_src` 1.
+- `wb_src` and `rd` are meaningful for a live writer only.
+- The core also routes the MEM/WB destination, valid and `reg_write` directly to the register file and EX forwarding, so the block has no pass-through output for them.
+- The block has no module parameter. Data vectors use `DATA_WIDTH`, and the supported configuration is `DATA_WIDTH` 32. All vectors are unsigned bit patterns with no width conversion.
+- `riscv_pkg` has no shared WB-selector type, and the block adds none ([WB-D3](#10-decisions-and-open-items)).
 
-### Ports
+## 4. Internal Structure
 
-This table applies the owner-selected WB-D2 interface from section 9.
-There are seven inputs and two outputs.
-
-| Port | Direction | Type / width | Meaning and validity |
+| Module | Instance | File | Spec |
 | --- | --- | --- | --- |
-| `ex_result` | Input | `logic [DATA_WIDTH-1:0]` | MEM/WB EX result; architectural value when a live writer selects `wb_src=0` |
-| `load_result` | Input | `logic [DATA_WIDTH-1:0]` | MEM/WB formatted load value; architectural value when a live load selects `wb_src=1` |
-| `wb_src` | Input | 1-bit `logic` | ID-decoded selector retained in MEM/WB: `0` selects EX, `1` selects load; meaningful for a live writer |
-| `rd` | Input | `logic [4:0]` | MEM/WB destination; meaningful for a live writer |
-| `reg_write` | Input | 1-bit `logic` | MEM/WB semantic register-write intent; consumed for write qualification only when retirement is permitted |
-| `instruction_valid` | Input | 1-bit `logic` | Current MEM/WB entry is live; zero throughout reset after reset propagation |
-| `advance_allowed` | Input | 1-bit `logic` | Core permits WB to advance at the next rising edge; zero during active reset or unresolved MEM wait |
-| `wb_data` | Output | `logic [DATA_WIDTH-1:0]` | Selected data; usable by forwarding for an eligible live producer even when it cannot retire; consumed by RF for a write only with `rf_write_fire` |
-| `rf_write_fire` | Output | 1-bit `logic` | Permission for RF to write the current `rd` with `wb_data` at the rising edge |
+| `writeback_stage` | `wb_stage` | `rtl/writeback_stage.sv` | This spec |
 
-No shared WB-selector enum currently exists in `riscv_pkg`. This design keeps
-the already selected one-bit encoding and introduces no new type or package edit.
+### Internal nets
 
-### Timing and consumption
+| Net | Width | Driver | Consumers |
+| --- | --- | --- | --- |
+| `wb_retire_fire` | 1 | `wb_stage` logic, from ports `instruction_valid` and `advance_allowed` | `wb_stage` logic of port `rf_write_fire` |
 
-Outputs follow current inputs after combinational settling; there is no
-additional registered latency or transaction handshake. Core and RF own
-setup/hold and rising-edge consumption. Consecutive instructions require no
-WB-local bubble. This is a logical contract, not a physical timing claim.
+- The block has no sub-module. It has one two-input data selection for `wb_data` and one write qualification for `rf_write_fire`.
+- `wb_retire_fire` is a combinational net. It is not an output port and holds no state, because BASE has no functional consumer for a public retirement port ([WB-D2](#10-decisions-and-open-items)).
+- The RTL has no instantiation of the block yet, and `wb_stage` is the instance name for the core integration.
 
-The core routes MEM/WB `rd`, `valid` and `reg_write` directly to their consumers.
-RF receives the destination directly; EX forwarding receives producer metadata
-directly. This design adds no pass-through ports for those fields.
+## 5. State
 
-## 3. Internal organization
+- None, because the block is purely combinational (section 1).
+- The core owns the MEM/WB validity, the payload retention and replacement, and the permission to advance.
+- The register file owns the architectural registers.
 
-One two-input data mux and register-write qualification implement the selected
-leaf. `wb_retire_fire` is an internal combinational signal, not an output port
-or stored state. BASE has no separately identified functional consumer requiring
-a public retirement port. Selection preserves every data bit without arithmetic or sign conversion.
-JAL/JALR's `pc + 4` has already been selected into `ex_result` in EX; no PC,
-`pc_plus_4` input or third WB data source is needed.
+## 6. Behavior
 
-## 4. State and ownership
+### Output table
 
-The leaf owns no state. The core owns MEM/WB validity, payload retention,
-replacement and permission to advance. The selected WB interface combines that
-permission with current validity to form internal retirement qualification; it does
-not arbitrate reset or memory wait. RF owns the architectural registers
-and read-port forwarding. The core must associate every input with the same
-pre-edge MEM/WB instruction; incoming MEM data does not replace that current
-instruction's write data before its retirement edge.
+| Output | Equals | Rule owner |
+| --- | --- | --- |
+| `wb_data` | `ex_result` when `wb_src` is 0, and `load_result` when `wb_src` is 1. Every bit is kept, with no arithmetic or sign conversion. | [BASE MEM/WB payload](5-stage-baseline-core.md#mem-data-formatting-and-memwb-boundary), [WB-D3](#10-decisions-and-open-items) |
+| `rf_write_fire` | 1 for a retiring writer with a nonzero destination, and 0 otherwise | [Write qualification](#write-qualification), [BASE architectural side effects](5-stage-baseline-core.md#architectural-side-effects) |
 
-`advance_allowed` qualifies an event; it does not hold pipeline storage.
-The core must separately drive MEM/WB's `stall` input to retain its entry and
-deny WB advance while the BASE interlock applies. EX already uses the same
-valid/advance distinction to qualify redirect. MEM instead emits `mem_wait`;
-its OBI controller continues mandatory grant/response progress while pipeline
-registers are held. These stage-specific interfaces do not replace the
-[pipeline-register stall contract](5-stage-baseline-core.md#pipeline-register-local-control).
+- Both values of `wb_src` are defined. ALU, `LUI`, `AUIPC` and jump-link writers select 0, and loads select 1.
+- The jump link (`pc` plus 4) is already selected into `ex_result` in EX, so the block needs no PC input and no third data source.
+- Branches, stores and `FENCE` retire with `reg_write` 0.
+- Unused data is not required to be zero, including during bubbles.
+- `wb_data` does not depend on retirement. The block neither gates nor zeroes it with the retirement or write permission.
+- Forwarding may use `wb_data` for an eligible live producer even when the producer cannot retire. The eligibility is the BASE [forwarding rule](5-stage-baseline-core.md#forwarding-and-load-use-hazards).
+- The register file consumes `wb_data` only with `rf_write_fire` 1.
 
-## 5. Behavioral rules
+### Write qualification
 
-Inherited BASE selection, using the owner's new selector name:
+| Condition | Required for `rf_write_fire` 1 | Reason |
+| --- | --- | --- |
+| `instruction_valid` | 1 | An invalid, flushed or killed entry cannot write the register file. |
+| `advance_allowed` | 1 | A held entry does not retire, so it cannot write. |
+| `reg_write` | 1 | A non-writer retires without a register-file write. |
+| `rd` | Not 0 | `x0` has no write target. |
 
-```text
-wb_data = wb_src ? load_result : ex_result
-```
+- Retirement is the first two rows, so it depends on validity and advance permission and not on `reg_write`, `wb_src` or the payload.
+- A non-writer or a writer to `x0` may retire without a register-file write.
+- The register file uses `rf_write_fire` as its write enable and not the raw `reg_write` ([WB-D2](#10-decisions-and-open-items)).
+- The semantic `reg_write` stays in the pipeline metadata and qualifies EX forwarding independently of retirement.
 
-Both binary selector values are defined. ALU/LUI/AUIPC and jump-link writers
-select `0`; loads select `1`. Branches, stores and FENCE retire with
-`reg_write=0`. Unused data is not required to be zero, including during bubbles.
+## 7. Timing and Control
 
-Under the owner-selected WB-D2 interface, internal event qualification is:
+- The outputs follow the current inputs after combinational settling, with no registered latency and no handshake.
+- The core and the register file own setup, hold and rising-edge consumption. Consecutive instructions need no WB-local bubble.
+- The timing is a logical contract and not a physical timing claim.
+- `advance_allowed` qualifies an event and does not hold pipeline storage ([pipeline-register local control](5-stage-baseline-core.md#pipeline-register-local-control)).
 
-```text
-wb_retire_fire = instruction_valid && advance_allowed
-rf_write_fire = wb_retire_fire && reg_write && (rd != 0)
-```
+### Reset, stall, flush
 
-Retirement is distinct from RF write. A non-writer or a writer to x0 may retire
-without an RF write. Retirement depends on validity and advance permission,
-not `reg_write`, `wb_src` or payload values. RF uses `rf_write_fire` as its write
-enable instead of raw `reg_write`. Semantic `reg_write` remains in the pipeline
-metadata and qualifies EX forwarding independently of retirement.
+| Event | Effect on this block |
+| --- | --- |
+| Reset | None: the block has no reset input, and `wb_data` is not reset or forced to zero. `rf_write_fire` is 0 throughout reset, whatever the stale payload, under the reset assumption of section 8. |
+| Stall | None: the block has no stall input. During an unresolved MEM wait `advance_allowed` is 0 (section 8), so `rf_write_fire` is 0, and `wb_data` stays selected and available. |
+| Flush | None: the block has no flush input. The core resolves stall, flush and reset before it supplies the current entry and the advance permission. A younger EX redirect does not kill older WB work. |
 
-Do not use internal retirement as the MEM/WB capture enable: parent controls
-must also permit an incoming instruction to replace an invalid WB entry and
-allow an invalid incoming entry to clear old validity.
+- Trace: None, because the block has no sequence in time, and its outputs depend on the current inputs alone.
 
-During an unresolved MEM wait, parent control retains MEM/WB and supplies
-`advance_allowed=0`, so `wb_retire_fire=0`. `wb_data` remains selected and
-available; do not gate or zero it with retirement or RF write permission.
-EX forwarding eligibility remains
-the separate BASE rule `valid && reg_write && rd != 0`.
+## 8. Assumptions and Corner Cases
 
-On a valid memory-response release edge, old WB may retire and write RF while
-the completed MEM instruction replaces it in MEM/WB. RF consumes the old WB
-value at that edge; combinational WB outputs then reflect the newly captured
-entry. Parent control adds no release bubble and preserves old WB on a younger
-EX redirect. [BASE arbitration](5-stage-baseline-core.md#pipeline-control-priority)
-owns these concurrent events.
+| Assumption | Guaranteed by | If violated |
+| --- | --- | --- |
+| Every input bit is 0 or 1 | The environment ([RF-D5](register-file.md#10-decisions-and-open-items)) | X and Z behavior is unspecified and untested. |
+| `instruction_valid` is 0 and `advance_allowed` is 0 throughout reset after reset propagation | The core and the hazard control unit ([BASE reset contract](5-stage-baseline-core.md#reset-architecture), [HCU-D3](hazard-control-unit.md#10-decisions-and-open-items)); the interface is [WB-D1](#10-decisions-and-open-items) and [WB-D2](#10-decisions-and-open-items) | A stale payload can give `rf_write_fire` 1, because the block has no reset input. |
+| `advance_allowed` is 0 while a MEM wait is unresolved, and the core drives the MEM/WB `stall` to retain the entry | The core and the hazard control unit ([BASE architectural side effects](5-stage-baseline-core.md#architectural-side-effects)) | A held entry could retire and write repeatedly. |
+| Every input belongs to the same pre-edge MEM/WB instruction, and incoming MEM data does not replace its write data before its retirement edge | The core ([MEM-D2](memory-stage.md#10-decisions-and-open-items)) | A write takes the data or destination of another instruction. |
+| The MEM/WB capture enable is not the retirement condition of this block | The core | An incoming instruction cannot replace an invalid entry, and an invalid incoming entry cannot clear the old validity. |
+| The decoded fields and the advance permission are legal and consistent with the core state | The environment | The block repairs nothing, and it has no trap, error or checker port. |
 
-## 6. Reset, cancellation and exceptional conditions
+| Case | Inputs | Result |
+| --- | --- | --- |
+| A response releases the MEM wait | `advance_allowed` 1 on the edge of the data response, and a live writer in WB | `rf_write_fire` is 1 for the old WB entry, and the register file consumes the old `wb_data` at that edge. After the edge, the outputs show the newly captured entry. The core adds no release bubble. |
+| A younger EX redirect | A live writer in WB, a redirect in EX and `advance_allowed` 1 | The old WB entry is kept and its write is not cancelled. |
 
-The leaf has no private reset or cancellation mechanism. Parent reset clears
-MEM/WB valid asynchronously and forbids retirement under the
-[BASE reset contract](5-stage-baseline-core.md#reset-architecture). Under WB-D2,
-the core must therefore clear `instruction_valid` and hold `advance_allowed=0`
-throughout reset after reset propagation. The leaf's qualification then
-suppresses retirement and RF writes regardless of stale payload. `wb_data`
-is not reset or forced to zero.
+## 9. Verification
 
-Parent control resolves stall/flush/reset before supplying the current entry
-and advance permission. A younger EX redirect does not kill older WB work.
-RF retains the inherited x0 and selective-reset behavior; those storage rules
-are not implemented by this leaf.
+- A directed leaf test exists: runner `tb/runners/test_writeback_stage.py` and cocotb module `tb/testcases/writeback_stage_cocotb.py`.
+- The module has 2 tests. `test_result_selection` drives 10 selection vectors, and `test_write_qualification` drives the 16 qualification combinations and 3 more vectors.
+- Planned checks 1 to 5 are checked by these two tests. Check 6 is outside the leaf, and no test exists for it.
+- Expected values are manual literals and never come from the DUT. Stimulus timing follows `tb/README.md`.
+- A leaf pass shows only the checked vectors. It does not establish MEM/WB retention and capture, core arbitration, register-file storage and read forwarding, full-pipeline retirement or physical timing.
 
-The guaranteed input domain contains only 0/1. X/Z behavior is outside scope.
-Illegal decode and inconsistent parent advance permission are environment
-violations, not errors this leaf repairs. No trap, error or checker port is added.
+### Planned checks
 
-## 7. Representative examples
+| Requirement | Stimulus | Expected observation |
+| --- | --- | --- |
+| Result selection keeps all bits | Distinct EX and load values, zero, high-bit and all-one patterns, and a change of the unselected input | The selected literal appears unchanged, and the unselected input cannot affect the output |
+| Valid and advance qualification | A writer to a nonzero `rd` with valid and advance asserted, then each disabled alone | `rf_write_fire` is 0 when either qualifier is 0 |
+| Register-file qualification | An eligible write, retirement disabled, a non-writer and an `x0` destination | `rf_write_fire` is 1 only when valid, advance, write intent and a nonzero destination all hold |
+| Data independent of retirement | Data and selector held stable while validity and advance permission toggle | `wb_data` stays unchanged while `rf_write_fire` changes |
+| Combinational behavior | Selector, values, destination and qualifiers changed in sequence | Every output follows the current inputs, with no state retained from a prior entry |
+| Parent integration, outside the leaf | A MEM wait then the response release with distinct old-WB and new-MEM results; reset or a younger redirect | No write during the hold or reset, the old WB entry writes once on the release, and replacement and forwarding keep the correct instruction association |
 
-The data examples apply the inherited mux. Write-enable examples assume the
-owner-selected WB-D2 interface. The first three rows use `instruction_valid=1` and
-`advance_allowed=1`; expected values are explicit literals.
+### Vectors
 
 | Case | Relevant inputs | Expected outputs |
 | --- | --- | --- |
 | Ordinary writer | `ex_result=0x80000001`, `load_result=0x12345678`, `wb_src=0`, `reg_write=1`, `rd=5` | `wb_data=0x80000001`, `rf_write_fire=1` |
 | Signed byte load already formatted in MEM | `ex_result=0x00010003`, `load_result=0xFFFFFF80`, `wb_src=1`, `reg_write=1`, `rd=6` | `wb_data=0xFFFFFF80`, `rf_write_fire=1` |
 | Jump link already selected in EX | `ex_result=0x00000024`, `load_result=0xDEADBEEF`, `wb_src=0`, `reg_write=1`, `rd=1` | `wb_data=0x00000024`, `rf_write_fire=1` |
-| Held older WB producer | First row with `advance_allowed=0` | `wb_data=0x80000001`, `rf_write_fire=0`; eligible EX forwarding may still use the data |
-| Invalid entry | First row with `instruction_valid=0` | Data follows selector, `rf_write_fire=0` |
-| Write to x0 | First row with `rd=0` | Data unchanged, `rf_write_fire=0` |
-| Live non-writer | First row with `reg_write=0` | Data follows selector, `rf_write_fire=0` |
+| Held older WB producer | Row 1 with `advance_allowed=0` | `wb_data=0x80000001`, `rf_write_fire=0` |
+| Invalid entry | Row 1 with `instruction_valid=0` | `wb_data=0x80000001`, `rf_write_fire=0` |
+| Write to `x0` | Row 1 with `rd=0` | `wb_data=0x80000001`, `rf_write_fire=0` |
+| Live non-writer | Row 1 with `reg_write=0` | `wb_data=0x80000001`, `rf_write_fire=0` |
 
-## 8. Verification obligations
+- Rows 1 to 3 have `instruction_valid` 1 and `advance_allowed` 1, and each later row changes one input of row 1.
 
-These obligations derive from BASE and the accepted interface. They do not
-constitute an approved executable test plan or observed results. Use the owner-readable
-[testbench conventions](../../tb/README.md#testbench-conventions) when a plan is
-approved; directed expected data must be supplied as manual literals.
+## 10. Decisions and Open Items
 
-| Obligation | Scenario | Expected observation |
+| ID | Decision | Reason |
 | --- | --- | --- |
-| Result selection preserves all bits | Distinct EX/load values, zero, high-bit and all-one patterns; change unselected input | Selected literal appears unchanged; unselected input cannot affect output |
-| Valid/advance qualification | A writer to nonzero rd with valid and advance asserted, then each disabled independently | RF write is suppressed when either qualifier is zero; inspect no private signal to establish this |
-| RF qualification | Eligible write, retirement disabled, non-writer, x0 destination | Write permitted only when retirement, write intent and nonzero destination all hold |
-| Data independent of retirement | Keep data/selector stable while toggling validity and advance permission | `wb_data` stays unchanged while RF write permission changes |
-| Combinational behavior | Consecutively change selector, values, destination and qualifiers | Every output follows the current inputs without retained prior-entry state |
-| Parent integration, outside leaf evidence | MEM wait then response release with distinct old-WB/new-MEM results; reset or younger redirect | No write during hold/reset; old WB writes once on release; replacement and forwarding retain correct instruction association |
+| WB-D1 | WB receives `instruction_valid` and `advance_allowed`, derives retirement and qualifies the register-file write locally. The core owns the advance arbitration. | It keeps the per-instruction qualification in WB without making WB resolve global reset and stall conditions. The alternative was a core-generated retirement input: it keeps the BASE behavior but moves the local qualification outside WB. |
+| WB-D2 | Retirement stays internal, and the block exposes only `wb_data` and `rf_write_fire`. The semantic `reg_write` stays for forwarding, and the register file uses `rf_write_fire` as its write enable. | No BASE consumer needs a separate retirement port. |
+| WB-D3 | The selector is named `wb_src`, and its encoding stays 0 for EX and 1 for load. The producer-stage form is `mem_wb_src`. | None recorded. |
 
-Leaf checks cannot establish actual MEM/WB retention/capture, core arbitration,
-RF storage/read forwarding, full-pipeline retirement or physical timing.
+- History: 2026-10-24 the Owner accepted the spec after reviewing the block design and confirming that no open decision remained. BASE behavior is inherited, and the `wb_src` naming and the WB-generated retirement were selected locally. The same day the Owner selected the internal retirement qualification with only data and write permission exposed, under the revision label WB D2.
+- 2026-11-07 rewritten in the block spec format, with WB-N1 renumbered WB-D3 and the Vectors moved to section 9. The paragraphs on the old `mem_wb_from_mem` name, the RTL mapping paragraph and the closing acceptance remarks went.
 
-## 9. Rationale and open decisions
-
-The inherited two-source selection and RF-write rule fit one combinational
-leaf; separate mux/control leaves would add hierarchy without separating an
-independent storage or protocol responsibility. The owner-selected decisions
-are recorded below.
-
-| ID | Decision / authority | Selected choice and rationale |
+| Old ID | New ID | Status |
 | --- | --- | --- |
-| WB-N1 | Naming, selected by Việt on 2026-10-24 | Use `wb_src` with unchanged `0=EX`, `1=load` encoding. The producer-stage form is `mem_wb_src`. |
-| WB-D1 | Retirement qualification, selected by Việt on 2026-10-24 | WB receives `instruction_valid` and `advance_allowed`, derives retirement and qualifies RF write locally. Core owns advance arbitration. This keeps per-instruction qualification in WB without making it resolve global reset/stall conditions. The considered alternative was a core-generated retirement input; it preserves BASE behavior but moves that local qualification outside WB. |
-| WB-D2 | Retirement visibility, selected by Việt on 2026-10-24 | Keep `wb_retire_fire` internal; expose only `wb_data` and `rf_write_fire`. No BASE consumer needs a separate retirement port. Keep semantic `reg_write` for forwarding; use the fully qualified `rf_write_fire` at the RF write-enable port. |
+| WB-N1 | WB-D3 | Renumbered |
+| WB-D1 | WB-D1 | Kept |
+| WB-D2 | WB-D2 | Kept |
+| WB D2 (revision label, 2026-10-24; `tb/README.md` cites it) | WB-D1, WB-D2 | Retired as a label: its decisions are WB-D1 and WB-D2, and History carries the date |
 
-Existing EX RTL/tests still use `mem_wb_from_mem`; current contracts use
-`mem_wb_src` under the owner's naming amendment. RTL/test/diagram migration is
-outside this WB update. No material open decisions remain within the
-accepted leaf boundary. Acceptance defines intended behavior; it is not
-implementation or verification evidence. No WB RTL, package type or test code
-is authorized by document acceptance alone. Functional implementation remains
-human-authored unless explicitly delegated under AGENT_POLICY.
+- Length: 5 pages, above the 2-4 limit, because the spec has nine ports, two condition tables, six check rows, seven vectors and six assumptions.
+- Open items: none.
