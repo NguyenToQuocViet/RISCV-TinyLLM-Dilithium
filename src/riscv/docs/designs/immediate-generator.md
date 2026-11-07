@@ -1,82 +1,60 @@
-# Immediate Generator — Block Design
+# Immediate Generator
 
-**Status:** Accepted by Việt on 2026-10-29. The IMM D2 amendment `INSTR_WIDTH` (O7-R) was accepted by Việt on 2026-10-29.
-**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** IMM D2 / 2026-10-29 (D2 amends the `instruction` type only).
-**Parent contract:** [Decode stage](decode-stage.md) (sections 2, 3, 5; D5, D6, D7, O5, O7-R),
-[BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract),
-[instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table) and
-[ID/EX boundary](5-stage-baseline-core.md#idex-boundary).
-**RTL mapping:** Module `immediate_generator` exists in `rtl/immediate_generator.sv`;
-`decode_stage` instantiates it as `id_immediate_generator` (`rtl/decode_stage.sv`).
-This document is neither implementation nor verification evidence.
+| Field | Value |
+| --- | --- |
+| Description | Reconstruct the canonical immediate from the instruction word. |
+| Last modified | 2026-11-07 |
+| Status | Accepted by Việt on 2026-11-07 |
+| Owner | Nguyễn Tô Quốc Việt |
+| RTL | `rtl/immediate_generator.sv`, module `immediate_generator`, instance `id_immediate_generator` in `decode_stage` |
+| Parent | [Decode stage](decode-stage.md#leaf-connections) (leaf connections, ID-D5, ID-D6, ID-D7, ID-D11); [BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract), [instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table) and [ID/EX boundary](5-stage-baseline-core.md#idex-boundary) |
 
-## 1. Purpose and boundary
+## 1. Overview
 
-`immediate_generator` turns the IF/ID `instruction` into the one canonical
-`imm` that ID drives to EX. Observable success criterion: for each supported
-instruction class, `imm` equals the RV32I immediate of that class's format,
-reconstructed by the equations in section 5.
+- `immediate_generator` turns the IF/ID `instruction` into the one canonical `imm` that ID drives to EX.
+- For each supported class that uses an immediate, `imm` equals the RV32I immediate of the format of that class.
+- It is purely combinational, with no clock, reset or state.
+- It does no legality check, because `control_unit` decides whether a word is supported ([ID-D7](decode-stage.md#10-decisions-and-open-items)).
+- It has no selector from `control_unit` and no `immediate_kind` output, because it chooses the format from the instruction word alone.
+- It defines no value for a word that has no immediate ([IMM-D1](#10-decisions-and-open-items)).
 
-Non-goals:
+## 2. Block Design
 
-- No clock, reset or state; the block is purely combinational.
-- No legality check. Whether a word is a supported instruction is the job of
-  `control_unit` (decode-stage.md D7).
-- No selector from `control_unit` and no `immediate_kind` output. The format is
-  chosen inside this block from the instruction word alone.
-- No value is defined for words with no immediate (section 5, I1).
+```text
+                      +-----------------------+
+instruction           |                       |
+ <- decode_stage      |  immediate_generator  | -> imm (decode_stage)
+                      |                       |
+                      +-----------------------+
+```
 
-Inherited by reference, not restated: one canonical 32-bit immediate; I/S/B/J
-sign-extended, U in `[31:12]` with twelve low zeros, B and J low bit zero; for an
-immediate shift EX uses only the low five bits of `imm` (BASE ID decode contract).
-`instruction` is `logic [INSTR_WIDTH-1:0]` (decode-stage.md O7-R); `imm` is `DATA_WIDTH`
-(decode-stage.md section 2). Local refinements are I1–I4 (section 9).
+## 3. Interface
 
-## 2. Interface contract
-
-### Clock, reset and configuration
-
-Clock and reset do not apply. No parameters: `riscv_pkg::DATA_WIDTH` sets the
-`imm` width, with the supported configuration `DATA_WIDTH = 32`.
-
-### Ports and payloads
-
-Port names equal the `decode_stage` names, so `decode_stage` only wires them
-(decode-stage.md section 3). There is 1 input and 1 output.
-
-| Port | Direction | Type / width | Meaning | Valid when |
+| Signal | Dir | Width | Peer | Description |
 | --- | --- | --- | --- | --- |
-| `instruction` | Input | `logic [INSTR_WIDTH-1:0]` | IF/ID instruction word; `INSTR_WIDTH` is 32, the width of the base encoding (`IALIGN=32`, decode-stage.md O7-R) | Any value, any cycle |
-| `imm` | Output | `logic [DATA_WIDTH-1:0]` | Canonical immediate per section 5 | Instruction belongs to a supported class that uses an immediate (section 4) |
+| `instruction` | Input | `INSTR_WIDTH` | `decode_stage` | The IF/ID instruction word. |
+| `imm` | Output | `DATA_WIDTH` | `decode_stage` | The canonical immediate of the format of the instruction. |
 
-`imm` is an unsigned bit pattern; I/S/B/J values are already sign-extended to
-`DATA_WIDTH`, and no further width conversion exists. The one width-domain
-crossing, from the 32-bit instruction fields to `imm`, is the reconstruction in
-section 5 and follows BASE. The guaranteed input domain contains only 0 and 1;
-X/Z behavior is unspecified and untested, as in the accepted
-[EX](execute-stage.md#6-verification-and-delivery-boundaries) and
-[WB](writeback-stage.md#6-reset-cancellation-and-exceptional-conditions) contracts
-and [register-file.md](register-file.md) (O1).
+- The block accepts any `instruction` value in any cycle.
+- The port names equal the `decode_stage` names, so the stage only wires them ([decode-stage leaf connections](decode-stage.md#leaf-connections)).
+- The block has no module parameter. The supported configuration is `INSTR_WIDTH` 32 and `DATA_WIDTH` 32 ([ID-D11](decode-stage.md#10-decisions-and-open-items)).
 
-### Transfer and timing rules
+## 4. Internal Structure
 
-`imm` is a combinational function of `instruction` only. There is no latency,
-handshake or dependence on any other signal. The block does not know whether
-IF/ID is valid; invalid-entry handling stays at ID/EX (decode-stage.md section 9, O2).
+- None, because the block has no sub-blocks.
+- It is one selection on `instruction[6:2]` followed by one field copy per format, with no arithmetic. Equivalent coding styles are free.
 
-## 3. Internal organization
+## 5. State
 
-One format selection on `instruction[6:2]`, followed by one bit-slice
-concatenation per format (section 5). No arithmetic exists: sign extension is
-replication of `instruction[31]`, and every other bit is a copy of an instruction
-bit or a constant zero. Equivalent coding styles are free.
+- None, because the block is purely combinational (section 1).
 
-## 4. Format selection
+## 6. Behavior
 
-Selection examines the full `instruction[6:2]` of each supported class (I2).
-`instruction[1:0]`, `funct3` and `funct7` are not examined. Instruction names and
-classes follow the BASE semantic tables.
+- `imm` is an unsigned bit pattern, and the Field layout table is its one width crossing from the instruction fields ([decode-stage width domains](decode-stage.md#width-domains)).
+- The layouts follow the [BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract).
+- Selection examines the full `instruction[6:2]` of each supported class ([IMM-D2](#10-decisions-and-open-items)), and the class names follow the [BASE instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table).
+
+### Format selection
 
 | Class | `instruction[6:2]` | Format |
 | --- | --- | --- |
@@ -85,56 +63,72 @@ classes follow the BASE semantic tables.
 | `JAL` | `11011` | J |
 | `JALR` | `11001` | I |
 | LOAD | `00000` | I |
-| OP-IMM (including `SLLI`, `SRLI`, `SRAI`) | `00100` | I |
+| OP-IMM, including `SLLI`, `SRLI` and `SRAI` | `00100` | I |
 | STORE | `01000` | S |
 | BRANCH | `11000` | B |
-| OP (`01100`), MISC-MEM / `FENCE` (`00011`), every other `instruction[6:2]` | — | No format; `imm` is don't care (I1) |
+| OP (`01100`), MISC-MEM and `FENCE` (`00011`), every other value | none | No format, and `imm` is any ([IMM-D1](#10-decisions-and-open-items)) |
 
-An unsupported word that shares a supported `instruction[6:2]` gets that
-format's value, for example `LD` (LOAD, `funct3=011`) gets the I value. That value
-is still don't care (I1): legality is not checked here.
+### Field layout
 
-## 5. Behavioral rules
+| Format | Layout of `imm`, from the most significant side |
+| --- | --- |
+| I | `[31:11]` from `instruction[31]`, `[10:5]` from `instruction[30:25]`, `[4:1]` from `instruction[24:21]`, `[0]` from `instruction[20]` |
+| S | `[31:11]` from `instruction[31]`, `[10:5]` from `instruction[30:25]`, `[4:1]` from `instruction[11:8]`, `[0]` from `instruction[7]` |
+| B | `[31:12]` from `instruction[31]`, `[11]` from `instruction[7]`, `[10:5]` from `instruction[30:25]`, `[4:1]` from `instruction[11:8]`, `[0]` is 0 |
+| U | `[31:12]` from `instruction[31:12]`, `[11:0]` is 0 |
+| J | `[31:20]` from `instruction[31]`, `[19:12]` from `instruction[19:12]`, `[11]` from `instruction[20]`, `[10:1]` from `instruction[30:21]`, `[0]` is 0 |
 
-Write `i` for `instruction`. The fields below are RV32I bit positions. Each
-equation lists every bit 31..0 of `imm` exactly once, from the most significant
-side; `{N{x}}` replicates `x` N times.
+- A range of `imm` bits that comes from one instruction bit repeats that bit, which is the sign extension.
+- `SLLI`, `SRLI` and `SRAI` use the I layout unchanged. So `imm[11:5]` stays as in the word, `0x00` for `SLLI` and `SRLI` and `0x20` for `SRAI`, and `imm[4:0]` is the shift amount.
+- The block does not mask the shift amount, because EX uses only `imm[4:0]` ([BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract)).
 
-| Format | Equation | Bits of `imm` |
+## 7. Timing and Control
+
+- `imm` is a combinational function of `instruction` alone, so the block has no latency, no handshake and no dependence on any other signal.
+- The block does not know whether IF/ID is valid, because ID/EX handles an invalid entry ([ID-D8](decode-stage.md#10-decisions-and-open-items)).
+
+### Reset, stall, flush
+
+| Event | Effect on this block |
+| --- | --- |
+| Reset | None: the block has no state or control input. |
+| Stall | None: the block has no state or control input. |
+| Flush | None: the block has no state or control input. |
+
+- Trace: None, because the block has no sequence in time, and `imm` depends on the current `instruction` alone.
+
+## 8. Assumptions and Corner Cases
+
+| Assumption | Guaranteed by | If violated |
 | --- | --- | --- |
-| I | `{ {21{i[31]}}, i[30:25], i[24:21], i[20] }` | `[31:11]` = sign, `[10:5]` = `i[30:25]`, `[4:1]` = `i[24:21]`, `[0]` = `i[20]` |
-| S | `{ {21{i[31]}}, i[30:25], i[11:8], i[7] }` | `[31:11]` = sign, `[10:5]` = `i[30:25]`, `[4:1]` = `i[11:8]`, `[0]` = `i[7]` |
-| B | `{ {20{i[31]}}, i[7], i[30:25], i[11:8], 1'b0 }` | `[31:12]` = sign, `[11]` = `i[7]`, `[10:5]` = `i[30:25]`, `[4:1]` = `i[11:8]`, `[0]` = 0 |
-| U | `{ i[31:12], 12'b0 }` | `[31:12]` = `i[31:12]`, `[11:0]` = 0 |
-| J | `{ {12{i[31]}}, i[19:12], i[20], i[30:21], 1'b0 }` | `[31:20]` = sign, `[19:12]` = `i[19:12]`, `[11]` = `i[20]`, `[10:1]` = `i[30:21]`, `[0]` = 0 |
+| Every `instruction` bit is 0 or 1 | The environment ([RF-D5](register-file.md#10-decisions-and-open-items)) | X and Z behavior is unspecified and untested. |
+| An unsupported or no-immediate word causes no side effect through `imm` | `control_unit` blocks the side effects of an unsupported word ([ID-D5](decode-stage.md#10-decisions-and-open-items)) | The block cannot prevent it, because it has no error output, default vector or legality flag ([ID-D6](decode-stage.md#10-decisions-and-open-items)). |
 
-Widths add to 32: I and S 21+6+4+1; B 20+1+6+4+1; U 20+12; J 12+8+1+10+1.
+| Case | Inputs | Result |
+| --- | --- | --- |
+| Unsupported word that shares a supported `instruction[6:2]` | `LD`, which is LOAD with `funct3` `011` | `imm` has the I value, which is still any and never an oracle ([IMM-D1](#10-decisions-and-open-items)). |
 
-**Immediate shifts.** `SLLI`, `SRLI` and `SRAI` use the I equation unchanged, so
-`imm[11:5]` is kept as in the instruction word (`0x00` for `SLLI`/`SRLI`, `0x20`
-for `SRAI`) and `imm[4:0]` is the shift amount. This block does not mask or
-isolate the shift amount; EX uses only `imm[4:0]` (BASE).
+## 9. Verification
 
-**Don't care (I1).** For OP, MISC-MEM (`FENCE`) and every `instruction[6:2]` not
-listed in section 4, `imm` stays don't care. The document fixes no value and no
-oracle may use it. The RTL author chooses the value.
+- A directed leaf test exists: runner `tb/runners/test_immediate_generator.py` and cocotb module `tb/testcases/immediate_generator_cocotb.py`.
+- The module has 7 tests: `test_i_format`, `test_s_format`, `test_b_format`, `test_u_format`, `test_j_format`, `test_shift_immediates` and `test_selection_other_classes`.
+- Each planned check below has one test in the module.
+- Expected values are the literals of the Vectors table, or follow from the Field layout table, and never come from the DUT. Stimulus timing follows `tb/README.md`.
+- A leaf pass shows only the checked vectors, not decode integration, control selection or whole-core behavior. The immediate checks through the stage are in [decode-stage.md](decode-stage.md#planned-checks).
 
-## 6. Reset, cancellation and exceptional conditions
+### Planned checks
 
-- **Reset, flush, stall.** None apply; the block has no state or control input.
-- **Unsupported and no-immediate words.** Out of the contract: no error output,
-  default vector or legality flag exists (D6). `control_unit` blocks side effects
-  for unsupported encodings (decode-stage.md section 5); this block is not part of
-  that guard.
-- **Out of scope.** X/Z input values (section 2).
+| Requirement | Stimulus | Expected observation |
+| --- | --- | --- |
+| I format | The two I words of the Vectors table | `imm` equals the listed value, at sign bit 0 and 1 |
+| S format | The two S words | The fields `[31:25]` and `[11:7]` are rejoined correctly |
+| B format | The two B words | `instruction[7]` is at `imm[11]`, and the low bit is 0 |
+| U format | The two U words | `imm[31:12]` equals `instruction[31:12]`, with twelve low zeros |
+| J format | The two J words | `instruction[20]` is at `imm[11]`, and the low bit is 0 |
+| Shifts | `SLLI x1, x2, 31` and `SRAI x1, x2, 3` | `imm[11:5]` stays as in the word, and `imm[4:0]` is the shift amount |
+| Selection, other classes | One word each of `JALR`, LOAD and `AUIPC` | The I value for `JALR` and LOAD, and the U value for `AUIPC` |
 
-## 7. Representative examples
-
-Every row is a test vector. The word is the 32-bit encoding in hex; `imm` is the
-expected output. For each format, the sign-0 and sign-1 immediates are bit-for-bit
-complements over the immediate bits, so a swapped or mis-sliced field changes the
-result. The I and S rows share `0x0000_0555` / `0xFFFF_FAAA`, the B and J rows use
-the same alternating pattern at their own widths.
+### Vectors
 
 | Format | Assembly | `instruction` | Expected `imm` |
 | --- | --- | --- | --- |
@@ -151,51 +145,25 @@ the same alternating pattern at their own widths.
 | Shift | `SLLI x1, x2, 31` | `0x01F1_1093` | `0x0000_001F` |
 | Shift | `SRAI x1, x2, 3` | `0x4031_5093` | `0x0000_0403` |
 
-The two shift rows show that `imm[11:5]` is kept as is: `SRAI` gives `imm[11:5]=0x20`
-(`0x403` = `0x400` + 3).
+## 10. Decisions and Open Items
 
-## 8. Verification obligations
-
-Planned leaf-level checks; a directed happy-path subset exists, run by
-`tb/runners/test_immediate_generator.py` (cocotb module
-`tb/testcases/immediate_generator_cocotb.py`). Full coverage of this section is not
-claimed. Expected values are the literals in section 7, taken from the RV32I layouts and BASE, never from the DUT. Stimulus
-timing follows `tb/README.md`. A leaf pass proves only these vectors; it does not
-show decode integration, control selection or whole-core behavior. Composition-level
-immediate checks stay in [decode-stage.md section 8](decode-stage.md#8-verification-obligations).
-
-| Requirement | Scenario | Expected observation |
+| ID | Decision | Reason |
 | --- | --- | --- |
-| I format | The two I rows of section 7 | `imm` equals the listed value, sign bit 0 and 1 |
-| S format | The two S rows | Field split `[31:25]` / `[11:7]` rejoined correctly |
-| B format | The two B rows | `i[7]` at `imm[11]`, low bit 0 |
-| U format | The two U rows | `imm[31:12]=i[31:12]`, twelve low zeros |
-| J format | The two J rows | `i[20]` at `imm[11]`, low bit 0 |
-| Shifts | `SLLI x1, x2, 31` and `SRAI x1, x2, 3` | `imm[11:5]` kept as is; `imm[4:0]` is the shift amount |
-| Unsupported and no-immediate words | OP, `FENCE` and any `instruction[6:2]` outside section 4 | No oracle: `imm` is not checked (I1) |
+| IMM-D1 | `imm` for OP, MISC-MEM (`FENCE`) and every opcode outside the supported set stays any. No value is fixed, no oracle may use it, and the RTL author chooses it. | The stage adds no logic beyond safety, and nothing needs guaranteeing ([ID-D5](decode-stage.md#10-decisions-and-open-items), [ID-D6](decode-stage.md#10-decisions-and-open-items)). |
+| IMM-D2 | Format selection matches the full `instruction[6:2]` of each supported class. `instruction[1:0]`, `funct3` and `funct7` are not examined. | It maps 1:1 to the BASE opcode table for review, and legality belongs to `control_unit` ([ID-D7](decode-stage.md#10-decisions-and-open-items)). |
+| IMM-D3 | The Vectors table gives two words per format, with sign bit 0 and 1 and complementary immediate bit patterns, and two shift words. | A bit-swizzle error becomes visible, and `imm[11:5]` stays as in the word. |
 
-Each format is covered at both sign values. Vectors pair with the assembler words
-only for supported instructions; a word sharing a supported `instruction[6:2]` but
-not a supported instruction is not an oracle.
+- History: 2026-10-29 the Owner stated I1 to I4 and accepted the spec. The same day the Owner accepted the amendment that gives `instruction` the type `INSTR_WIDTH` (O7-R), under the revision label IMM D2.
+- 2026-11-07 rewritten in the block spec format, with IDs renumbered and the vectors moved to section 9. The RTL mapping paragraph and the closing remarks went.
 
-## 9. Rationale and open decisions
-
-### Decisions recorded for acceptance
-
-Stated by the Owner on 2026-10-29. This document becomes their record on
-acceptance.
-
-| Id | Decision | Reason |
+| Old ID | New ID | Status |
 | --- | --- | --- |
-| I1 | `imm` for OP, MISC-MEM (`FENCE`) and every opcode outside the supported set stays don't care; no value is fixed, no oracle may use it, the RTL author chooses | D5, D6: no added logic, nothing to guarantee |
-| I2 | Format selection matches the full `instruction[6:2]` of each supported class (section 4); `instruction[1:0]`, `funct3` and `funct7` are not examined | Maps 1:1 to the BASE opcode table for review; legality belongs to control_unit (D7) |
-| I3 | Section 7 gives two hex vectors per format, with sign bit 0 and 1 and complementary immediate bit patterns, and two shift words | A bit-swizzle error becomes visible; `imm[11:5]` kept as is |
-| I4 | The RTL is written by Việt | Owner decision |
+| I1 | IMM-D1 | Kept |
+| I2 | IMM-D2 | Kept |
+| I3 | IMM-D3 | Kept |
+| I4 | none | Retired: it records who writes the RTL, not a design choice |
+| D6 (carried from the decode stage) | ID-D6 | Not an ID of this file: linked from IMM-D1 and section 8 |
+| IMM D2 (revision label, 2026-10-29; `tb/README.md` cites it) | none | Retired as a label: History carries the date. It is not decision I2. |
 
-D6 (safe, no logic beyond what safety requires) is carried from decode-stage.md.
-
-No material open question remains within this document's boundary.
-
-`immediate_generator` RTL exists in `rtl/immediate_generator.sv` and is instantiated
-in `decode_stage`. A directed happy-path leaf test exists. A pass of the planned
-checks would not establish integration with `decode_stage`, the core or timing.
+- Length: 4 pages, above the 2-3 limit, because the spec holds five field layouts, seven planned checks, twelve vectors and a six-row map.
+- Open items: none.
