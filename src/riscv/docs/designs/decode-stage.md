@@ -1,333 +1,248 @@
-# Decode Stage — Block Design
+# Decode Stage
 
-**Status:** Accepted by Việt on 2026-10-29 — composition-level; owner decisions D1–D7 stated on
-2026-10-29 and resolutions O1–O7 are recorded here for acceptance (section 9).
-The ID D2 amendment `INSTR_WIDTH` (O7-R, section 9) is `accepted by Việt on 2026-10-29.`.
-**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Design revision:** ID D2 / 2026-10-29 (D2 amends O7 only).
-**Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md), in
-particular [ID decode contract](5-stage-baseline-core.md#id-decode-contract),
-[instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table),
-[ID/EX boundary](5-stage-baseline-core.md#idex-boundary),
-[register-file timing and WB-to-ID bypass](5-stage-baseline-core.md#register-file-timing-and-wb-to-id-bypass)
-and [reset architecture](5-stage-baseline-core.md#reset-architecture).
-**RTL mapping:** `rtl/decode_stage.sv` exists and instantiates `rtl/register_file.sv`,
-`rtl/immediate_generator.sv` and `rtl/control_unit.sv` as `id_register_file`,
-`id_immediate_generator` and `id_control_unit`. This document is neither
-implementation nor verification evidence.
-
-## 1. Purpose and boundary
-
-`decode_stage` is the BASE ID stage as one wrapper. From the IF/ID
-`instruction` it produces the canonical immediate, the two register-source
-values (after the WB-to-ID bypass), the register identifiers, the semantic
-control for EX/MEM/WB, and the source-use qualifiers. It is the sole owner of
-instruction decode; no other stage re-decodes (BASE ID decode contract).
-
-Observable success criterion: for each of the 38 supported BASE operations the
-outputs equal the BASE semantic tables; for any other encoding the three
-side-effect enables are inactive (section 5).
-
-Non-goals:
-
-- No hazard detection. Load-use affects IF and ID, so it belongs to a later
-  core-level Hazard Control Unit (D2). `decode_stage` only exports the inputs
-  that unit needs.
-- No pipeline storage. IF/ID and ID/EX registers, their valid, stall, flush and
-  reset belong to the core ([pipeline-register control](5-stage-baseline-core.md#pipeline-register-local-control)).
-- No trap, illegal-instruction flag, error port or recovery for unsupported
-  encodings (D4).
-- No CSR, CI, IRQ or other extension decode; BASE profile only.
-
-Producers and consumers: IF/ID supplies `instruction`; WB and the core supply
-the register-file write; the core routes the outputs into ID/EX and to the
-future Hazard Control Unit. EX, MEM and WB consume the carried fields through
-their own contracts.
-
-## 2. Interface contract
-
-### Clock, reset and configuration
-
-`clk` is the only clock; rising edge. It is used by `register_file` alone.
-There is **no reset port**: `register_file` is not reset (BASE reset
-architecture: `x1`–`x31` not reset, `x0` reads zero) and the other two leaves
-are combinational (D3). No parameters. The supported configuration is
-`DATA_WIDTH = ADDR_WIDTH = 32` from `riscv_pkg`.
-
-### Ports and payloads
-
-All ports are individual signals; no packed payload struct. Types refer to
-`riscv_pkg`. There are 5 inputs and 19 outputs.
-
-| Signal | Direction | Type / width | Meaning | Valid when |
-| --- | --- | --- | --- | --- |
-| `clk` | Input | 1-bit `logic` | Clock for the register-file write | Always |
-| `instruction` | Input | `logic [INSTR_WIDTH-1:0]` | IF/ID instruction word (`IALIGN=32`) | Meaningful only for a live IF/ID entry; core owns validity |
-| `rf_write_fire` | Input | 1-bit `logic` | WB permission to write `wb_rd` with `wb_data` at the rising edge | From the WB stage; already excludes `rd=x0` |
-| `wb_rd` | Input | `logic [4:0]` | MEM/WB destination register | When `rf_write_fire=1` |
-| `wb_data` | Input | `logic [DATA_WIDTH-1:0]` | Selected architectural WB value | When `rf_write_fire=1` |
-| `rs1_id`, `rs2_id` | Output | `logic [4:0]` each | Raw `instruction[19:15]`, `instruction[24:20]` | Always; raw field extraction, any encoding |
-| `rd` | Output | `logic [4:0]` | Raw `instruction[11:7]` | Always; destination only if `reg_write=1` |
-| `rs1_value`, `rs2_value` | Output | `logic [DATA_WIDTH-1:0]` each | Register values after the WB-to-ID bypass | Combinational from `rs*_id` and the write inputs |
-| `rs1_used`, `rs2_used` | Output | 1-bit `logic` each | Semantic source-use qualifiers toward the core hazard logic; not ID/EX state | Supported encodings; don't care otherwise |
-| `imm` | Output | `logic [DATA_WIDTH-1:0]` | Canonical 32-bit immediate | Supported classes that use an immediate |
-| `reg_write` | Output | 1-bit `logic` | Semantic register-write intent | Always defined; `0` for unsupported (D5) |
-| `mem_en` | Output | 1-bit `logic` | Data-memory access intent | Always defined; `0` for unsupported (D5) |
-| `control_flow` | Output | `control_flow_t` | NONE / BRANCH / JAL / JALR | Always defined; `CF_NONE` for unsupported (D5) |
-| `mem_write` | Output | 1-bit `logic` | `0` load, `1` store | Supported memory instructions |
-| `mem_type` | Output | `mem_type_t` | Access width and load signedness | Supported memory instructions |
-| `wb_src` | Output | 1-bit `logic` | `0` = EX result, `1` = load result; BASE assigns `1` to loads and `0` to every other register-writing instruction and to stores | Every supported instruction except branches and FENCE (BASE leaves those unspecified); don't care for unsupported encodings |
-| `alu_op` | Output | `alu_op_t` | ALU operation | Supported classes that use the ALU |
-| `alu_src_a` | Output | `alu_src_a_t` | First ALU operand source | Supported classes that use the ALU |
-| `alu_src_b` | Output | `alu_src_b_t` | Second ALU operand source | Supported classes that use the ALU |
-| `branch_kind` | Output | `branch_kind_t` | Branch comparison | Conditional branches |
-| `result_src` | Output | `result_src_t` | ALU result or link selection | Instructions with an EX result |
-
-Names `rs1_id`, `rs2_id`, `rs1_value`, `rs2_value`, `imm`, `alu_*`,
-`branch_kind`, `result_src`, `control_flow`, `rd`, `reg_write`, `mem_*` and
-`wb_src` match the EX flat wrapper ([Flat wrapper interface](execute-stage.md#flat-wrapper-interface)),
-[memory-stage.md](memory-stage.md) and [writeback-stage.md](writeback-stage.md).
-`wb_rd`, `wb_data` and `rf_write_fire` match the EX producer ports and the WB
-outputs. `wb_src` stays a one-bit `logic`; no shared enum exists. `pc` and IF/ID `valid`
-are not ports; the reason is recorded in section 9 (O2).
-
-Width domains: `instruction` is the 32-bit instruction word, typed with
-`riscv_pkg::INSTR_WIDTH` (O7-R), the width of the 32-bit base encoding
-(`IALIGN=32`); it is not ILEN and not a configuration point. `imm`, `rs*_value` and `wb_data` belong to `DATA_WIDTH`. The
-instruction-to-`imm` reconstruction follows BASE: I/S/B/J sign-extended, U in
-bits `[31:12]` with zero low bits, B/J low bit zero. No other width crossing
-exists.
-
-### Transfer and timing rules
-
-All outputs except the register-file write are combinational functions of
-`instruction` and, for `rs*_value`, of `rf_write_fire`, `wb_rd`, `wb_data`.
-The only clocked behavior is the register-file write at the rising edge. There
-is no handshake, valid output or stall input; the core decides whether the
-outputs are captured. `wb_data` comes from the registered MEM/WB entry through
-the combinational WB leaf, so it creates no loop with the outputs.
-
-## 3. Internal organization
-
-### Hierarchy and naming (D1)
-
-`decode_stage` contains exactly three leaves. Extracting `rs1`, `rs2` and `rd`
-from `instruction` is wrapper wiring, not a leaf. Module and file names follow
-the EX convention (function names, no `riscv_` prefix); instance names with the
-`id_` prefix follow the EX `ex_` convention.
-
-| Module | File basename | Instance name | Instantiated by |
-| --- | --- | --- | --- |
-| `decode_stage` | `decode_stage.sv` | `id_stage` | Core |
-| `register_file` | `register_file.sv` | `id_register_file` | `decode_stage` |
-| `immediate_generator` | `immediate_generator.sv` | `id_immediate_generator` | `decode_stage` |
-| `control_unit` | `control_unit.sv` | `id_control_unit` | `decode_stage` |
-
-```text
-id_stage : decode_stage
-  id_register_file       : register_file
-  id_immediate_generator : immediate_generator
-  id_control_unit        : control_unit
-```
-
-### Wiring
-
-```text
-instruction ──┬─ [19:15] ─► rs1_id ──► register_file ──► rs1_value
-              ├─ [24:20] ─► rs2_id ──►   (+ write port) ─► rs2_value
-              ├─ [11:7]  ─► rd
-              ├────────────► immediate_generator ──────► imm
-              └────────────► control_unit ─────────────► reg_write, mem_*, wb_src,
-                                                          alu_*, branch_kind, result_src,
-                                                          control_flow, rs1_used, rs2_used
-rf_write_fire, wb_rd, wb_data ─────────► register_file write port
-```
-
-### Leaf responsibilities
-
-Each leaf has its own block design, linked below. This document does not
-restate their detail.
-
-- **`register_file`** ([register-file.md](register-file.md)). 32 × 32
-  storage, two combinational read ports, one rising-edge write port gated by
-  `rf_write_fire`; `x0` reads zero and ignores writes; per-port WB-to-ID
-  bypass with the BASE priority; `x1`–`x31` not reset. It owns read-address
-  matching and bypass selection (BASE register-file timing).
-- **`immediate_generator`** ([immediate-generator.md](immediate-generator.md)).
-  Produces the single canonical `imm` from `instruction`. The format-selection
-  rule for each supported class and the value for classes without an immediate
-  belong to that document; no `immediate_kind` leaves ID.
-- **`control_unit`** ([control-unit.md](control-unit.md)). Recognizes
-  the 38 supported operations from their complete RV32I encodings (D7) and
-  produces all semantic control and the `rs*_used` qualifiers per the BASE
-  tables. The exact field-check table and the per-class control values live in
-  that document. It applies the side-effect guard of section 5.
-
-## 4. State and ownership
-
-The only storage is the register file, owned by `register_file`.
-
-| State | Meaning and owner | Update event | Hold rule | Reset |
-| --- | --- | --- | --- | --- |
-| `x1`–`x31` | Architectural registers; `register_file` | Rising edge with `rf_write_fire=1`, written index `wb_rd` | Retained otherwise | None; software initializes before use |
-| `x0` | Constant zero | Never written | — | Reads zero |
-
-`decode_stage` holds no pipeline entry, valid bit or control state. The core
-owns IF/ID and ID/EX and decides whether the combinational outputs are
-captured. Invalid IF/ID payload must not authorize a side effect through the
-core's valid gating; the guard in section 5 is independent of that.
-
-## 5. Behavioral rules
-
-**Field extraction.** `rs1_id = instruction[19:15]`, `rs2_id = instruction[24:20]`,
-`rd = instruction[11:7]`, for every encoding, supported or not.
-
-**Supported operations.** Outputs follow the BASE tables for each of the 38
-operations: [`rs1_used`/`rs2_used`](5-stage-baseline-core.md#id-decode-contract),
-[memory intent](5-stage-baseline-core.md#id-decode-contract),
-[semantic decode, `reg_write` and `wb_src`](5-stage-baseline-core.md#instruction-semantic-table),
-and the operand/ALU mapping of [execute-stage.md §4.2](execute-stage.md#42-operand-mux).
-FENCE decodes as a live non-writing instruction with `reg_write=0`, `mem_en=0`,
-`control_flow=CF_NONE`. `reg_write=1` stays the semantic value even when
-`rd=x0`; the physical write is suppressed by `rf_write_fire` (BASE).
-
-**Recognition (D7).** An operation is recognized only by its complete RV32I
-encoding. Every other encoding is unsupported. The field-check table belongs to
-the control-unit design.
-
-**Unsupported encodings — side-effect blocking, not error handling (D4, D5).**
-Unsupported encodings stay unsupported: there is no trap, no error flag and no
-new port. For safety, when the encoding is not one of the 38 supported
-operations, exactly these three outputs are forced inactive:
-
-| Output | Forced value |
+| Field | Value |
 | --- | --- |
-| `reg_write` | `0` |
-| `mem_en` | `0` |
-| `control_flow` | `CF_NONE` |
+| Description | Structural ID stage: register file, immediate generator and control unit driven from one instruction word. |
+| Last modified | 2026-11-07 |
+| Status | Accepted by Việt on 2026-11-07 |
+| Owner | Nguyễn Tô Quốc Việt |
+| RTL | `rtl/decode_stage.sv`, module `decode_stage`, instance name `id_stage` |
+| Parent | [Five-stage BASE core](5-stage-baseline-core.md) (ID decode contract, instruction semantic table, ID/EX boundary, register-file timing and WB-to-ID bypass, reset architecture); [Hazard control unit](hazard-control-unit.md); [Writeback stage](writeback-stage.md); the three leaves ([register file](register-file.md), [immediate generator](immediate-generator.md), [control unit](control-unit.md)) |
 
-These three enables are the only ID outputs that can start a register write, a
-memory access or a redirect. This is side-effect blocking only; the
-instruction is not reported, replaced or retired differently.
+## 1. Overview
 
-**Don't-care outputs (D5, O5).** Every value the BASE instruction tables
-assign to a supported instruction binds, for example `wb_src=0` for stores and
-the `rs1_used`/`rs2_used` values of every supported class. The don't-care rule
-applies only to (a) the non-enable outputs of an unsupported encoding and
-(b) fields BASE leaves unspecified or unused for that class, such as
-`mem_write`/`mem_type` for a non-memory instruction, `wb_src` for branches and
-FENCE, and `imm` for a class without an immediate. For these the contract
-assigns no value, and verification must not use them as an oracle. The affected
-outputs are `imm`, `rs1_used`, `rs2_used`, `wb_src`, `mem_write`, `mem_type`,
-`alu_op`, `alu_src_a`, `alu_src_b`, `branch_kind` and `result_src`.
-`rs1_id`, `rs2_id` and `rd` are not in this list: they are raw extraction.
+- `decode_stage` is the BASE ID stage.
+- From the IF/ID `instruction`, it produces the register identifiers and values, the canonical immediate, the semantic control and the source-use qualifiers.
+- It is the sole owner of instruction decode, and no other stage re-decodes ([BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract)).
+- For each of the 38 supported operations, the outputs equal the BASE semantic tables. For any other encoding, the register write, the memory access and the control flow are inactive (section 6).
+- It composes the three leaves of section 4 and has one function of its own, the extraction of `rs1_id`, `rs2_id` and `rd` from `instruction`.
+- It has no reset port, because the register file is not reset ([BASE reset architecture](5-stage-baseline-core.md#reset-architecture)) and the other two leaves are combinational ([ID-D3](#10-decisions-and-open-items)).
+- It does no hazard detection, because load-use affects IF and ID and belongs to the [hazard control unit](hazard-control-unit.md). The stage exports `rs1_id`, `rs2_id`, `rs1_used` and `rs2_used` for it ([ID-D2](#10-decisions-and-open-items)).
+- It holds no pipeline storage, because IF/ID and ID/EX, with their valid, stall, flush and reset, belong to the core ([pipeline-register.md](pipeline-register.md)).
+- It has no trap, illegal-instruction flag, error port or recovery for an unsupported encoding ([ID-D4](#10-decisions-and-open-items)).
+- CSR, CI, IRQ and other extension decode are outside it, and it decodes the BASE profile only.
 
-**Design principle (D6).** ID is safe with no added logic, or the minimum needed
-for safety. The guard above is that minimum; no default vector, legality flag
-or output cleanup is added.
+## 2. Block Design
 
-## 6. Reset, cancellation and exceptional conditions
+```text
+                                                clk <- core clock
+                                                       |
+                                           +-----------------------+
+instruction <- IF/ID register              |                       | -> rs1_id, rs2_id (ID/EX register, hazard_control_unit)
+rf_write_fire <- writeback_stage           |                       | -> rd, rs1_value, rs2_value, imm (ID/EX register)
+wb_rd <- MEM/WB register                   |     decode_stage      | -> reg_write, mem_en, control_flow, mem_write, mem_type, wb_src (ID/EX register)
+wb_data <- writeback_stage                 |                       | -> alu_op, alu_src_a, alu_src_b, branch_kind, result_src (ID/EX register)
+                                           |                       | -> rs1_used, rs2_used (hazard_control_unit)
+                                           +-----------------------+
+```
 
-- **Reset.** None in `decode_stage`. Register contents are unspecified until
-  written; `x0` reads zero. BASE reset keeps invalid stages from writing the
-  register file (valid gating in the core, `rf_write_fire` from WB).
-- **Flush, stall, load-use.** Outside this wrapper. The core flushes, holds or
-  bubbles IF/ID and ID/EX; a held IF/ID presents the same `instruction`, so the
-  combinational outputs are stable.
-- **Unsupported encodings.** Outside BASE; no handling beyond section 5. The
-  core may reach EX/MEM/WB with such an instruction carrying inactive enables.
-- **Consequence for the Hazard Control Unit.** Because `rs*_used` is don't care
-  for unsupported encodings, the future unit may insert a load-use bubble for
-  one. This only delays the pipeline; it does not create an architectural side
-  effect. The unit must not rely on `rs*_used` for unsupported encodings.
-- **Consequence for EX/MEM/WB.** Don't-care outputs may carry any enum value.
-  Reserved `alu_op` or operand-select codes may therefore appear for unsupported
-  encodings; no logic is added to avoid them (O6). Fallback behavior for those
-  codes stays in the EX leaf contracts, and EX checkers apply to supported
-  instructions only.
+## 3. Interface
 
-## 7. Representative examples
+| Signal | Dir | Width | Peer | Description |
+| --- | --- | --- | --- | --- |
+| `clk` | Input | 1 | Core clock | Clock of the register-file write. |
+| `instruction` | Input | `INSTR_WIDTH` | IF/ID register | The IF/ID instruction word. |
+| `rf_write_fire` | Input | 1 | `writeback_stage` | Permission to write `wb_rd` with `wb_data` at the rising edge. |
+| `wb_rd` | Input | 5 | MEM/WB register | Destination register of the WB instruction. |
+| `wb_data` | Input | `DATA_WIDTH` | `writeback_stage` | Selected writeback value. |
+| `rs1_id` | Output | 5 | ID/EX register, `hazard_control_unit` | Source register identifier `rs1`, the raw field. |
+| `rs2_id` | Output | 5 | ID/EX register, `hazard_control_unit` | Source register identifier `rs2`, the raw field. |
+| `rd` | Output | 5 | ID/EX register | Destination register identifier, the raw field. It names a destination only when `reg_write` is 1. |
+| `rs1_value` | Output | `DATA_WIDTH` | ID/EX register | Register value after the WB-to-ID bypass. |
+| `rs2_value` | Output | `DATA_WIDTH` | ID/EX register | Register value after the WB-to-ID bypass. |
+| `rs1_used` | Output | 1 | `hazard_control_unit` | The instruction semantically consumes `rs1`. |
+| `rs2_used` | Output | 1 | `hazard_control_unit` | The instruction semantically consumes `rs2`. |
+| `imm` | Output | `DATA_WIDTH` | ID/EX register | Canonical immediate. |
+| `reg_write` | Output | 1 | ID/EX register | Semantic register-write intent. |
+| `mem_en` | Output | 1 | ID/EX register | Data-memory access intent. |
+| `control_flow` | Output | `control_flow_t` (2) | ID/EX register | `CF_NONE`, `CF_BRANCH`, `CF_JAL` or `CF_JALR`. |
+| `mem_write` | Output | 1 | ID/EX register | `0` for a load, `1` for a store. |
+| `mem_type` | Output | `mem_type_t` (3) | ID/EX register | Access width and load signedness. |
+| `wb_src` | Output | 1 | ID/EX register | `0` selects the EX result, `1` the load result. |
+| `alu_op` | Output | `alu_op_t` (4) | ID/EX register | ALU operation. |
+| `alu_src_a` | Output | `alu_src_a_t` (2) | ID/EX register | Source of the first ALU operand. |
+| `alu_src_b` | Output | `alu_src_b_t` (1) | ID/EX register | Source of the second ALU operand. |
+| `branch_kind` | Output | `branch_kind_t` (3) | ID/EX register | Branch comparison. |
+| `result_src` | Output | `result_src_t` (1) | ID/EX register | ALU result or link selection. |
 
-Combinational; values follow the BASE tables, not any RTL.
+- The ports are individual signals, and the stage defines no packed payload type.
+- The enum types come from `riscv_pkg`.
+- [memory-stage.md](memory-stage.md) owns `mem_type_t`, and [alu.md](alu.md) owns the ALU operation table.
+- [control-unit.md](control-unit.md#class-table) owns the value of every control output per class.
+- Each port name equals the name of the port it connects to in [execute-stage.md](execute-stage.md#3-interface), [memory-stage.md](memory-stage.md) and [writeback-stage.md](writeback-stage.md).
+- `wb_src` stays a one-bit signal, because no shared enum exists.
+- `rs1_used` and `rs2_used` qualify the sources for hazard detection and are not ID/EX state ([BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract)).
+- Neither `pc` nor the IF/ID valid is a port ([ID-D8](#10-decisions-and-open-items)).
+- The stage has no parameter, and the supported configuration is `DATA_WIDTH` 32.
 
-| Instruction word | Class | Key outputs |
+### Width domains
+
+| Domain | Package constant | Signals |
 | --- | --- | --- |
-| `LW x5, 8(x2)` | Load | `rs1_id=2`, `rd=5`, `rs1_used=1`, `rs2_used=0`, `imm=8`, `reg_write=1`, `mem_en=1`, `mem_write=0`, `mem_type=MEM_WORD`, `wb_src=1`, `alu_op=ALU_ADD`, `alu_src_a=ALU_A_RS1`, `alu_src_b=ALU_B_IMM`, `control_flow=CF_NONE` |
-| `SW x6, 12(x2)` | Store | `rs1_used=1`, `rs2_used=1`, `imm=12`, `reg_write=0`, `mem_en=1`, `mem_write=1`, `mem_type=MEM_WORD`, `wb_src=0`, `control_flow=CF_NONE` |
-| `JAL x1, +16` | Jump | `rs1_used=0`, `rs2_used=0`, `imm=16`, `reg_write=1`, `mem_en=0`, `control_flow=CF_JAL`, `result_src=RESULT_PC_PLUS_4`, `wb_src=0` |
-| `ECALL` (`0x00000073`) | Unsupported | `reg_write=0`, `mem_en=0`, `control_flow=CF_NONE`; all other control outputs don't care; `rs1_id=0`, `rs2_id=0`, `rd=0` |
-| `MUL x3, x4, x5` (funct7 `0000001`) | Unsupported | the same three forced values; `rs1_id=4`, `rs2_id=5`, `rd=3` (raw) |
+| Instruction word | `INSTR_WIDTH` | `instruction` |
+| Register and arithmetic datapath | `DATA_WIDTH` | `imm`, `rs1_value`, `rs2_value`, `wb_data` |
 
-Register-file case through the wrapper: write `x7` at edge E with
-`rf_write_fire=1`, `wb_rd=7`, `wb_data=D`; before E, `rs1_id=7` already reads
-`D` (bypass); after E it reads `D` from storage. With `rf_write_fire=0` and
-`wb_rd=7` the bypass is inactive.
+- `INSTR_WIDTH` is a separate domain from `DATA_WIDTH`, and its value is fixed in [ID-D11](#10-decisions-and-open-items).
+- The rebuild of `imm` from `instruction` is the only width crossing, and BASE and [immediate-generator.md](immediate-generator.md) own its rules.
 
-## 8. Verification obligations
+## 4. Internal Structure
 
-Planned composition-level checks; none exists yet. Expected values come from
-the BASE tables and the D1–D7 decisions, never from the DUT. Leaf-level
-evidence belongs to the later leaf documents. The exact field-check table is
-the oracle for recognition; it is in the accepted `control-unit.md`.
+| Module | Instance | File | Spec |
+| --- | --- | --- | --- |
+| `decode_stage` | `id_stage` | `rtl/decode_stage.sv` | This spec |
+| `register_file` | `id_register_file` | `rtl/register_file.sv` | [register-file.md](register-file.md) |
+| `immediate_generator` | `id_immediate_generator` | `rtl/immediate_generator.sv` | [immediate-generator.md](immediate-generator.md) |
+| `control_unit` | `id_control_unit` | `rtl/control_unit.sv` | [control-unit.md](control-unit.md) |
 
-| Requirement | Scenario | Expected observation |
+### Leaf connections
+
+| Instance | Takes | Drives |
 | --- | --- | --- |
-| D1 hierarchy | Verilator elaboration of `decode_stage` | Exactly three leaves; no other instance |
-| Raw extraction | Any encoding, supported or not | `rs1_id`, `rs2_id`, `rd` equal the instruction bit fields |
-| BASE decode | Each of the 38 operations, all register-field combinations that matter (`rd=x0`) | Outputs equal the BASE tables for defined fields; don't-care fields not compared |
-| D4/D5 guard | Unsupported words: all-zero, `0xFFFFFFFF`, `ECALL`, a CSR word, `FENCE.I`, `MUL`, `LD` (LOAD funct3 `011`), BRANCH funct3 `010`, SLLI with `imm[11:5]≠0` | `reg_write=0`, `mem_en=0`, `control_flow=CF_NONE`; no assertion on any other control output |
-| D5 scope | Same words | No test uses `imm`, `rs*_used`, `wb_src`, `mem_*`, `alu_*`, `branch_kind` or `result_src` as an oracle |
-| Immediate | One word per format | Canonical `imm` per BASE |
-| RF through wrapper | Write then read; same-cycle bypass on each port independently; `rf_write_fire=0` with matching `wb_rd`; `x0` | BASE priority; `x0` reads zero; no bypass without `rf_write_fire` |
-| No reset | Read before any write | Not an oracle; value unspecified |
-| Port contract | Elaborate with EX wrapper, MEM and WB ports | Names and types connect without conversion |
+| `id_register_file` | `clk`, `rs1_id`, `rs2_id`, `rf_write_fire`, `wb_rd`, `wb_data` | `rs1_value`, `rs2_value` |
+| `id_immediate_generator` | `instruction` | `imm` |
+| `id_control_unit` | `instruction` | `rs1_used`, `rs2_used`, `alu_src_a`, `alu_src_b`, `alu_op`, `branch_kind`, `result_src`, `control_flow`, `mem_type`, `mem_write`, `mem_en`, `reg_write`, `wb_src` |
 
-Evidence boundary: a pass at this level shows only the stated vectors. It does
-not show load-use, ID/EX storage, redirect, flush, timing or whole-core
-behavior.
+- The stage has no internal net, because every leaf port connects to the stage port of the same name. The outputs `rs1_id` and `rs2_id` also feed `id_register_file`.
+- The stage instantiates the three leaves, one each. Its only other logic is the extraction of `rs1_id`, `rs2_id` and `rd`, which is wiring and not a leaf ([ID-D1](#10-decisions-and-open-items)).
 
-## 9. Rationale and open decisions
+## 5. State
 
-### Decisions recorded for acceptance
+- None, because the stage owns no register, pipeline entry, valid bit or control state.
+- The only storage in the hierarchy is the register file, and [register-file.md](register-file.md) and the [BASE reset architecture](5-stage-baseline-core.md#reset-architecture) own its state, update and reset.
+- The core owns IF/ID and ID/EX and decides whether the combinational outputs are captured.
 
-All stated by the Owner on 2026-10-29. This document becomes their record on
-acceptance.
+## 6. Behavior
 
-| Id | Decision | Reason |
+### Output table
+
+| Output | Supported operation | Unsupported word | Rule owner |
+| --- | --- | --- | --- |
+| `rs1_id` | `instruction` bits 19 to 15 | Same | This spec |
+| `rs2_id` | `instruction` bits 24 to 20 | Same | This spec |
+| `rd` | `instruction` bits 11 to 7 | Same | This spec |
+| `rs1_value`, `rs2_value` | The register file read with the WB-to-ID bypass | Same | [register-file.md](register-file.md), [BASE register-file timing](5-stage-baseline-core.md#register-file-timing-and-wb-to-id-bypass) |
+| `imm` | The canonical immediate of the class, and any for a class without one | Any | [immediate-generator.md](immediate-generator.md) |
+| `reg_write`, `mem_en`, `control_flow` | The BASE semantic values | 0, 0 and `CF_NONE` | [control-unit.md](control-unit.md#class-table), [BASE instruction semantic table](5-stage-baseline-core.md#instruction-semantic-table) |
+| `rs1_used`, `rs2_used`, `mem_write`, `mem_type`, `wb_src`, `alu_op`, `alu_src_a`, `alu_src_b`, `branch_kind`, `result_src` | The BASE values, and any for a cell that the class table marks any | Any | [control-unit.md](control-unit.md#class-table), [BASE ID decode contract](5-stage-baseline-core.md#id-decode-contract), [execute-stage.md](execute-stage.md#class-to-operand-table) |
+
+- A word is supported when the control unit recognizes it from its complete RV32I encoding, and the [legality table](control-unit.md#legality-table) decides it ([ID-D7](#10-decisions-and-open-items)).
+- Only the three forced outputs can start a register write, a memory access or a redirect, so forcing them blocks every side effect ([ID-D5](#10-decisions-and-open-items)).
+- A forced word is not reported, replaced or retired differently, so it travels through EX, MEM and WB with inactive enables.
+- FENCE is a live non-writing instruction: `reg_write` 0, `mem_en` 0, `control_flow` `CF_NONE` and `alu_op` ADD ([CU-D4](control-unit.md#10-decisions-and-open-items)).
+- Every value that BASE assigns to a supported instruction binds, for example `wb_src` 0 for a store and `rs1_used`, `rs2_used` of every class ([ID-D5](#10-decisions-and-open-items)).
+- Any means no required value, and verification must not use it as an oracle.
+  - It applies to the non-enable outputs of an unsupported word.
+  - It applies to fields that BASE leaves unspecified for a class, such as `mem_write` and `mem_type` of a non-memory instruction.
+  - It also covers `wb_src` of a branch and FENCE, and `imm` of a class without an immediate.
+- `rs1_id`, `rs2_id` and `rd` are never any, because they are raw extraction.
+- An any output may carry a reserved `alu_op` or operand-select code, and the stage adds no logic to avoid it ([ID-D10](#10-decisions-and-open-items)). The EX leaf specs own the fallback of those codes.
+
+## 7. Timing and Control
+
+- Every output except the register-file write is a combinational function of `instruction` and, for `rs1_value` and `rs2_value`, of `rf_write_fire`, `wb_rd` and `wb_data`.
+- The only clocked behavior is the register-file write at the rising edge of `clk`.
+- The stage has no handshake, valid output or stall input, and the core decides whether the outputs are captured.
+
+### Reset, stall, flush
+
+| Event | Effect on this block |
+| --- | --- |
+| Reset | None: the stage has no reset port and no state of its own. The [BASE reset architecture](5-stage-baseline-core.md#reset-architecture) keeps an invalid stage from writing the register file. |
+| Stall | None: the stage has no stall input. A held IF/ID presents the same `instruction`, so every output stays stable. The hazard control unit holds IF/ID for load-use ([ID-D2](#10-decisions-and-open-items)). |
+| Flush | None: the stage has no flush input. The core flushes and bubbles IF/ID and ID/EX outside the stage. |
+
+### Trace
+
+- Pre-state: `x7` holds V, written before C1. `instruction` reads `x7` as `rs1`, so `rs1_id` is 7 in every cycle. V and D are different values.
+
+| Cycle | Inputs | `rs1_value` | `x7` after the edge that ends the cycle |
+| --- | --- | --- | --- |
+| C1 | `rf_write_fire` 0, `wb_rd` 7, `wb_data` D | V | V |
+| C2 | `rf_write_fire` 1, `wb_rd` 7, `wb_data` D | D | D |
+| C3 | `rf_write_fire` 0, `wb_rd` 7, `wb_data` any | D | D |
+
+## 8. Assumptions and Corner Cases
+
+| Assumption | Guaranteed by | If violated |
 | --- | --- | --- |
-| D1 | Three leaves; field extraction is wiring | Visible hierarchy, as in EX |
-| D2 | No load-use detector in ID; export `rs1_id`, `rs2_id`, `rs1_used`, `rs2_used` | Load-use affects IF and ID; core-level unit later |
-| D3 | `register_file` inside `decode_stage`; ports `clk` and RF write inputs; no `rst_n` | Logical hierarchy; RF has no reset |
-| D4 | Unsupported stays unsupported; no trap, flag or port | BASE has no illegal-instruction handling |
-| D5 | Force `reg_write`, `mem_en`, `control_flow` inactive for unsupported encodings; other outputs don't care where BASE assigns nothing (O5) | Block side effects with minimum logic |
-| D6 | Safe, with no added logic or the minimum for safety | ID design principle |
-| D7 | Recognition only by complete RV32I encoding | Exact table in control-unit design |
+| Every input bit is 0 or 1 | The environment, as in each leaf spec | X and Z behavior is unspecified and untested. |
+| The core keeps an invalid IF/ID payload from taking effect: it discards the decode through the ID/EX valid, which it takes from the IF/ID valid | The core ([ID-D8](#10-decisions-and-open-items)) | An invalid payload could take effect. The guard of section 6 acts on the encoding alone and does not replace this gating. |
+| The hazard control unit qualifies `rs1_used` and `rs2_used` with the IF/ID valid | [hazard-control-unit.md](hazard-control-unit.md#3-interface) | A bubble could follow an invalid entry, and the pipeline would only be delayed. |
+| `wb_data` and `rf_write_fire` do not depend combinationally on any output of this stage | `writeback_stage`, which drives them from the registered MEM/WB entry through its combinational selection | The core would contain a combinational loop. |
+| EX handles a reserved `alu_op` or operand-select code under its leaf contracts, and its checkers apply to supported instructions only | EX ([alu.md](alu.md), [operand-mux.md](operand-mux.md), [EX-D10](execute-stage.md#10-decisions-and-open-items)) | A reserved code of an unsupported word could raise a false checker error. |
 
-### Resolutions of O1–O7
-
-Stated by the Owner on 2026-10-29, after the open items of the first draft.
-
-| Id | Resolution | Reason |
+| Case | Inputs | Result |
 | --- | --- | --- |
-| O1 | Instance names `id_stage`, `id_register_file`, `id_immediate_generator`, `id_control_unit` | Follows the EX `ex_` convention |
-| O2 | Neither `pc` nor IF/ID `valid` is a `decode_stage` port | See below |
-| O3 | RF write destination input is `wb_rd` | Matches the EX producer port; same net |
-| O4 | `rd`, `reg_write`, `mem_en`, `mem_write`, `mem_type`, `wb_src` are `decode_stage` outputs | They originate in ID |
-| O5 | BASE wins: every value the BASE tables assign to a supported instruction binds, including `wb_src=0` for stores; D5 don't-care applies only to fields BASE leaves unspecified or unused for the class and to non-enable outputs of unsupported encodings. No BASE edit | BASE stays the single source for instruction semantics |
-| O6 | Reserved `alu_op` / operand-select codes may appear for unsupported encodings; no extra logic; EX checkers apply to supported instructions only | D6; unsupported encodings are outside BASE |
-| O7 | `instruction` is `logic [31:0]` per `IALIGN=32`; no new `riscv_pkg` constant | BASE fixes 32-bit instructions. Revised by O7-R |
-| O7-R | `riscv_pkg` gains `localparam int INSTR_WIDTH = 32`, in the style of `DATA_WIDTH` and `ADDR_WIDTH`; `instruction` is `logic [INSTR_WIDTH-1:0]`. `INSTR_WIDTH` names the width of the 32-bit base encoding (`IALIGN=32`), not ILEN, and is not a configuration point: the bit positions in [immediate-generator.md](immediate-generator.md) section 5 fix the value at 32. **was accepted by Việt on 2026-10-29.** (ID D2) | Naming consistency with `DATA_WIDTH`/`ADDR_WIDTH`; the instruction and data widths stay separate domains |
+| Unsupported word behind a load | An unsupported word in ID, with `rs1_used` and `rs2_used` any, and a load in EX | The hazard control unit may insert a load-use bubble. This only delays the pipeline and creates no architectural side effect, so the unit must not rely on `rs1_used` or `rs2_used` for an unsupported encoding. |
+| Destination x0 | A register-writing instruction with `rd` 0 | `reg_write` stays 1, and `rf_write_fire` suppresses the physical write ([BASE](5-stage-baseline-core.md#register-file-timing-and-wb-to-id-bypass)). |
 
-**O2 reason.** No block inside ID consumes `pc` or IF/ID `valid`. ID creates no
-side effect of its own: the register-file write is authorized by WB's
-`rf_write_fire`. Invalid decode output is discarded through ID/EX `valid`, which
-the core takes from IF/ID valid. The core-level Hazard Control Unit qualifies
-`rs1_used` and `rs2_used` with IF/ID valid. Gating outputs with valid would add
-logic without a safety gain (D6).
+## 9. Verification
 
-No material question remains within this document's boundary. The three leaf
-block designs are accepted and their RTL exists in `rtl/`; `rtl/decode_stage.sv`
-instantiates the three leaves. Each leaf has a directed happy-path test subset;
-no composition check exists, so this document makes no readiness claim for
-composition. The control-unit field-check table (D7)
-and the immediate rules remain dependencies of the leaf documents.
+- No test of `decode_stage` exists in `tb/`.
+- The leaves have directed tests with their own runners: `tb/runners/test_register_file.py`, `tb/runners/test_immediate_generator.py` and `tb/runners/test_control_unit.py`. A leaf pass shows only the vectors of that leaf, so it makes no claim about the composition.
+- Expected values come from the BASE tables and the decisions of section 10, never from the DUT. The [legality table](control-unit.md#legality-table) is the oracle for recognition.
+- A pass of the planned checks shows only the stated vectors, not load-use, ID/EX storage, redirect, flush, timing or whole-core behavior.
+
+### Planned checks
+
+| Requirement | Stimulus | Expected observation |
+| --- | --- | --- |
+| Hierarchy ([ID-D1](#10-decisions-and-open-items)) | Verilator elaboration of `decode_stage` | Exactly three leaves with the instance names of section 4, and no other instance |
+| Raw extraction | Any encoding, supported or not | `rs1_id`, `rs2_id` and `rd` equal the instruction bits of the Output table |
+| BASE decode | Each of the 38 operations, with every register-field combination that matters, including `rd` x0 | Every output that is not any equals the BASE tables and the [class table](control-unit.md#class-table) |
+| Guard ([ID-D4](#10-decisions-and-open-items), [ID-D5](#10-decisions-and-open-items)) | Unsupported words: all-zero, `0xFFFFFFFF`, `ECALL`, a CSR word, `FENCE.I`, `MUL`, `LD` (LOAD `funct3` 011), BRANCH `funct3` 010, `SLLI` with a nonzero `funct7` | `reg_write` 0, `mem_en` 0 and `control_flow` `CF_NONE`. No test uses `imm`, `rs1_used`, `rs2_used`, `wb_src`, `mem_write`, `mem_type`, `alu_op`, `alu_src_a`, `alu_src_b`, `branch_kind` or `result_src` as an oracle. |
+| Immediate | One word per format | Canonical `imm` per BASE ([immediate-generator.md](immediate-generator.md)) |
+| Register file through the stage | Write then read; same-cycle bypass on each port independently; `rf_write_fire` 0 with a matching `wb_rd`; `x0` | BASE priority; `x0` reads zero; no bypass without `rf_write_fire` |
+| Read before any write | A read of a register never written | Value unspecified ([register-file.md](register-file.md)), not an oracle |
+| Port contract | Elaborate with the EX, MEM and WB stage ports | Names and types connect without conversion |
+
+### Decode vectors
+
+| Instruction | Assembly | Class | Expected outputs |
+| --- | --- | --- | --- |
+| `0x0081_2283` | `lw x5, 8(x2)` | Load | `rs1_id=2`, `rd=5`, `rs1_used=1`, `rs2_used=0`, `imm=8`, `reg_write=1`, `mem_en=1`, `mem_write=0`, `mem_type=MEM_WORD`, `wb_src=1`, `alu_op=ALU_ADD`, `alu_src_a=ALU_A_RS1`, `alu_src_b=ALU_B_IMM`, `control_flow=CF_NONE` |
+| `0x0061_2623` | `sw x6, 12(x2)` | Store | `rs1_used=1`, `rs2_used=1`, `imm=12`, `reg_write=0`, `mem_en=1`, `mem_write=1`, `mem_type=MEM_WORD`, `wb_src=0`, `control_flow=CF_NONE` |
+| `0x0100_00EF` | `jal x1, .+16` | Jump | `rs1_used=0`, `rs2_used=0`, `imm=16`, `reg_write=1`, `mem_en=0`, `control_flow=CF_JAL`, `result_src=RESULT_PC_PLUS_4`, `wb_src=0` |
+| `0x0000_0073` | `ecall` | Unsupported | `reg_write=0`, `mem_en=0`, `control_flow=CF_NONE`, `rs1_id=0`, `rs2_id=0`, `rd=0` |
+| `0x0252_01B3` | `mul x3, x4, x5` | Unsupported | `reg_write=0`, `mem_en=0`, `control_flow=CF_NONE`, `rs1_id=4`, `rs2_id=5`, `rd=3` |
+
+## 10. Decisions and Open Items
+
+| ID | Decision | Reason |
+| --- | --- | --- |
+| ID-D1 | `decode_stage` contains exactly three leaves, and the field extraction is stage wiring and not a leaf. Module and file names are functional, with no `riscv_` prefix, and instance names take the stage prefix `id_`. | The hierarchy stays visible as in EX, and the `id_` prefix follows the `ex_` convention ([EX-D1](execute-stage.md#10-decisions-and-open-items)). |
+| ID-D2 | ID has no load-use detector. It exports `rs1_id`, `rs2_id`, `rs1_used` and `rs2_used`. | Load-use affects IF and ID, so the [hazard control unit](hazard-control-unit.md) owns it. |
+| ID-D3 | `register_file` sits inside `decode_stage`. The stage ports are `clk` and the register-file write inputs, with no `rst_n`. The write destination input is `wb_rd`, the name of the EX producer port. | The hierarchy is logical, the register file has no reset, and `wb_rd` is the same net as the EX producer port. |
+| ID-D4 | An unsupported encoding stays unsupported: no trap, flag or port. | BASE has no illegal-instruction handling. |
+| ID-D5 | The stage forces `reg_write`, `mem_en` and `control_flow` inactive for an unsupported encoding. Every value that BASE assigns to a supported instruction binds, and the other outputs are any where BASE assigns nothing. | The forcing blocks side effects with the minimum logic, and BASE stays the single source for instruction semantics, with no BASE edit. |
+| ID-D6 | ID is safe with no added logic, or the minimum needed for safety. The guard of section 6 is that minimum, and ID adds no default vector, legality flag or output cleanup. | None recorded. |
+| ID-D7 | The control unit recognizes an operation only by its complete RV32I encoding, and the exact table is the [legality table](control-unit.md#legality-table). | None recorded. |
+| ID-D8 | Neither `pc` nor the IF/ID valid is a port of `decode_stage`. | No block inside ID consumes them. The register-file write is authorized by `rf_write_fire`. An invalid decode is discarded through the ID/EX valid, so gating the outputs with valid adds logic without a safety gain (ID-D6). |
+| ID-D9 | `rd`, `reg_write`, `mem_en`, `mem_write`, `mem_type` and `wb_src` are outputs of `decode_stage`. | They originate in ID. |
+| ID-D10 | A reserved `alu_op` or operand-select code may appear for an unsupported encoding, and the stage adds no logic to avoid it. EX checkers apply to supported instructions only. | ID-D6 applies, and an unsupported encoding is outside BASE. |
+| ID-D11 | `riscv_pkg` holds `INSTR_WIDTH`, 32, in the style of `DATA_WIDTH` and `ADDR_WIDTH`, and `instruction` has that width. `INSTR_WIDTH` names the width of the 32-bit base encoding (`IALIGN=32`), not ILEN. It is not a configuration point, because the bit positions in [immediate-generator.md](immediate-generator.md) fix the value at 32. | The names stay consistent, and the instruction and data widths stay separate domains. |
+
+- History: 2026-10-29 the Owner stated D1 to D7 and the resolutions O1 to O7 and accepted the spec at composition level. The same day the Owner amended O7 to O7-R (`INSTR_WIDTH`), under the revision label ID D2.
+- 2026-11-07 rewritten in the block spec format, with IDs renumbered. The "future Hazard Control Unit" wording became a link, and the readiness remarks went.
+
+| Old ID | New ID | Status |
+| --- | --- | --- |
+| D1 | ID-D1 | Kept; takes O1 |
+| D2 | ID-D2 | Kept |
+| D3 | ID-D3 | Kept; takes O3 |
+| D4 | ID-D4 | Kept |
+| D5 | ID-D5 | Kept; takes O5 |
+| D6 | ID-D6 | Kept |
+| D7 | ID-D7 | Kept |
+| O1 | ID-D1 | Merged: the instance names are part of the hierarchy decision |
+| O2 | ID-D8 | Kept; its fact that the hazard control unit qualifies `rs1_used` and `rs2_used` with the IF/ID valid is an assumption in section 8 |
+| O3 | ID-D3 | Merged: the `wb_rd` name belongs with the register file placement |
+| O4 | ID-D9 | Kept |
+| O5 | ID-D5 | Merged: it refines the don't-care rule of D5 |
+| O6 | ID-D10 | Kept |
+| O7 | none | Retired: O7-R supersedes it |
+| O7-R | ID-D11 | Kept |
+| ID D2 (revision label, 2026-10-29) | none | Retired as a label: History carries the date. It is not the decision D2. No spec cites it. |
+
+- Length: 7 pages, above the 2-4 limit, because the spec has 24 ports, 8 check rows, 11 decisions and a 16-row map.
+- Open items: none.
