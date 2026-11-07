@@ -1,474 +1,248 @@
-# Fetch Stage — Block Design
+# Fetch Stage
 
-**Status:** Accepted by Việt on 2026-11-01
-**Owner:** Nguyễn Tô Quốc Việt — RISC-V subsystem owner.
-**Parent contract:** [Five-stage BASE core](5-stage-baseline-core.md), in particular
-[instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization),
-[IF/ID boundary](5-stage-baseline-core.md#ifid-boundary),
-[pipeline-control priority](5-stage-baseline-core.md#pipeline-control-priority) (including the
-frontend amendment IF-A1),
-[instruction fetch capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states),
-[stale instruction responses after redirect](5-stage-baseline-core.md#stale-instruction-responses-after-redirect),
-[OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration),
-[OBI response validity and reset](5-stage-baseline-core.md#obi-response-validity-and-reset) and
-[reset architecture](5-stage-baseline-core.md#reset-architecture);
-[memory-stage.md](memory-stage.md) and [decode-stage.md](decode-stage.md) for port and layout precedent.
-**RTL mapping:** The three leaves exist in `rtl/`: `fetch_obi_interface` (`04f4535`), `fetch_buffer`
-(`2a8d0bf`, its latest commit) and `fetch_controller_unit` (`d985318`). `prefetch_unit` and `fetch_stage` exist
-too (`4f2135c`; checked 2026-11-05). Names are fixed in section 3 (N1, N4). The RTL for the IF-A3 move is delegated
-(F-d); the leaf commits above predate it.
-This document is neither implementation nor verification evidence.
+| Field | Value |
+| --- | --- |
+| Description | IF stage boundary; connects its ports to prefetch_unit by name. |
+| Last modified | 2026-11-07 |
+| Status | Accepted by Việt on 2026-11-07 |
+| Owner | Nguyễn Tô Quốc Việt |
+| RTL | `rtl/fetch_stage.sv`, module `fetch_stage`, instance `if_stage` in the core; `rtl/prefetch_unit.sv`, module `prefetch_unit`, instance `if_prefetch_unit` in `fetch_stage` |
+| Parent | [Five-stage BASE core](5-stage-baseline-core.md); [Hazard Control Unit](hazard-control-unit.md); [Fetch Controller Unit](fetch-controller-unit.md); [Fetch Buffer](fetch-buffer.md); [Fetch OBI Interface](fetch-obi-interface.md) |
 
-**Amendment IF-A3 (accepted by Việt on 2026-11-06).** All fetch control state moves to the
-[Fetch Controller Unit](fetch-controller-unit.md) (FCU-O13); the [Fetch Buffer](fetch-buffer.md) stores `pc` and
-`instruction` payload only (FB-O8, FB-O9). Behavior is unchanged. The 2026-11-04 buffer decisions are
-mapped to their new IDs in those two documents. The RTL for this move is delegated (F-d).
+## 1. Overview
 
-**Amendment IF-A2 (accepted by Việt on 2026-11-05).** The redirect edge does not allocate the EX
-redirect target. `next_fetch_pc` takes `redirect_target` on that edge, and the target is allocated as a fresh
-`QUEUED` entry on the following edge. The rows below that describe the redirect edge are worded for it.
-See [fetch-controller-unit.md](fetch-controller-unit.md) and BASE IF-A2.
+- `fetch_stage` is the BASE IF stage ([instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization)).
+- It turns the sequential and redirected address stream into the instruction stream offered to the IF/ID register: the `pc` and `instruction` of the oldest READY entry.
+- It owns the instruction-side OBI port.
+- It takes `redirect_fire` and `redirect_target` raw from EX, because inside IF a redirect only changes the fetch address and the entries (IF-D4).
+- It has no hazard, MEM, load-use or pipeline-occupancy signal, because the HCU resolves global events, which reach it only as `fetch_accept` low (IF-D2, BASE IF-A1).
+- It has no branch prediction, because the BASE baseline has none.
+- It has no IF/ID register, because the core owns it (IF-D1).
+- It does not throttle fetch for data traffic, because the ports are independent and a later shared path arbitrates through `gnt` (IF-D5).
+- It does not decode instructions or check their legality, because ID owns decode.
+- It has no bus-error, illegal-instruction or exception output, because BASE has none at this boundary.
+- It checks no address range, because the code-region precondition belongs to the harness and the test program.
+- It holds no logic of its own. The leaves own it: [Fetch Controller Unit](fetch-controller-unit.md), [Fetch Buffer](fetch-buffer.md) and [Fetch OBI Interface](fetch-obi-interface.md).
 
-## 1. Purpose and boundary
+## 2. Block Design
 
-`fetch_stage` is the BASE IF stage. It turns the sequential, redirected instruction-address
-stream into the instruction stream offered to the core IF/ID register: the `pc` and
-`instruction` of the oldest live `READY` fetch entry, payload held in the Fetch Buffer (BASE
-[instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization);
-[IF/ID boundary](5-stage-baseline-core.md#ifid-boundary)). It also owns the instruction-side
-OBI port.
+```text
+                                             clk             rst_n
+                                              |                |
+                                       +------------------------------+
+redirect_fire <- redirect_unit         |                              | -> req (instruction OBI subordinate)
+redirect_target <- redirect_unit       |                              | -> addr (instruction OBI subordinate)
+gnt <- instruction OBI subordinate     |                              | -> we (instruction OBI subordinate)
+rvalid <- instruction OBI subordinate  |                              | -> be (instruction OBI subordinate)
+rdata <- instruction OBI subordinate   |         fetch_stage          | -> wdata (instruction OBI subordinate)
+                                       |                              | -> rready (instruction OBI subordinate)
+                                       |                              | -> fetch_valid (IF/ID register)
+                                       |                              | -> fetch_pc (IF/ID register)
+                                       |                              | -> fetch_instruction (IF/ID register)
+                                       +------------------------------+
+                                              ^
+                             fetch_accept <- hazard_control_unit
+```
 
-Observable success criterion: every instruction delivered on `fetch_fire` has the `pc` and word
-that the instruction port returned for that address; deliveries follow allocation order, not
-numerical PC order; and no entry that was wrong-path at a redirect edge can be delivered
-afterwards (BASE
-[capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states),
-[stale instruction responses](5-stage-baseline-core.md#stale-instruction-responses-after-redirect)).
+## 3. Interface
 
-The stage sees exactly two control sources (F-e):
+| Signal | Dir | Width | Peer | Description |
+| --- | --- | --- | --- | --- |
+| `clk` | Input | 1 | Core clock | Rising-edge clock of the fetch state. |
+| `rst_n` | Input | 1 | Core reset | Active-low reset. It asserts asynchronously and releases synchronously. |
+| `fetch_accept` | Input | 1 | `hazard_control_unit` | High lets IF/ID take an entry this edge, if one is valid. Low blocks it. |
+| `redirect_fire` | Input | 1 | `redirect_unit` | A taken redirect from EX transfers on this edge. |
+| `redirect_target` | Input | `ADDR_WIDTH` | `redirect_unit` | Target address of the redirect. It is valid when `redirect_fire` is high. |
+| `gnt` | Input | 1 | Instruction OBI subordinate | Grant of the request that `req` raises. |
+| `rvalid` | Input | 1 | Instruction OBI subordinate | A response is valid. |
+| `rdata` | Input | `INSTR_WIDTH` | Instruction OBI subordinate | Instruction word of the response. |
+| `req` | Output | 1 | Instruction OBI subordinate | Instruction request for the presented entry. |
+| `addr` | Output | `ADDR_WIDTH` | Instruction OBI subordinate | Request address, the `pc` of the presented entry. |
+| `we` | Output | 1 | Instruction OBI subordinate | Write enable of the read-only port. |
+| `be` | Output | 4 | Instruction OBI subordinate | Byte enable. |
+| `wdata` | Output | `DATA_WIDTH` | Instruction OBI subordinate | Write data. |
+| `rready` | Output | 1 | Instruction OBI subordinate | Response ready. |
+| `fetch_valid` | Output | 1 | IF/ID register | The oldest entry is READY and offered to IF/ID. |
+| `fetch_pc` | Output | `ADDR_WIDTH` | IF/ID register | The `pc` of that entry. |
+| `fetch_instruction` | Output | `INSTR_WIDTH` | IF/ID register | The instruction word of that entry. |
 
-- **EX redirect, raw.** `redirect_fire` and `redirect_target` come straight from the EX
-  `redirect_unit`. Inside IF, a redirect only changes the fetch PC and the fetch entries. The
-  flush of IF/ID and ID/EX that the same redirect causes is the Hazard Control Unit's job, not IF's.
-- **Global events, through the Hazard Control Unit (HCU).** Load-use and the unresolved MEM wait
-  reach IF only as `fetch_accept = 0`, meaning IF/ID does not take an instruction this edge. IF
-  receives no MEM, load-use or pipeline-occupancy signal (BASE IF-A1).
+- `ADDR_WIDTH`, `DATA_WIDTH` and `INSTR_WIDTH` are all 32, from `riscv_pkg`.
+- The instruction word is the 32-bit base encoding, not ILEN.
+- `FETCH_DEPTH` is 3, and `PC_RESET_VEC` is 0, both from `riscv_pkg` ([BASE purpose and boundary](5-stage-baseline-core.md#purpose-and-boundary)).
+- `OBI_OUTSTANDING_MAX` is 1 on the instruction port. It is a link contract, not an OBI property and not a port ([BASE OBI baseline](5-stage-baseline-core.md#obi-baseline-configuration)).
 
-Non-goals:
+## 4. Internal Structure
 
-- No branch prediction. The BASE baseline has no predictor (BASE instruction-fetch organization).
-- No IF/ID register. It is core-owned (F-a).
-- No hazard knowledge and no MEM signal. The HCU resolves global events (F-b, F-e).
-- No fetch throttling for data traffic. The ports are independent; a later shared memory path
-  arbitrates through `gnt` (BASE IF-A1; BASE integration obligations).
-- No instruction decode and no legality check. ID owns decode (BASE IF/ID boundary).
-- No bus-error, illegal-instruction or exception output. BASE has none (BASE
-  [OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration)).
-- No address-range checking. The code-region precondition belongs to the harness and test
-  program (BASE [stale instruction responses](5-stage-baseline-core.md#stale-instruction-responses-after-redirect)).
-- No leaf internals. The leaf designs own them: [fetch-buffer.md](fetch-buffer.md),
-  [fetch-controller-unit.md](fetch-controller-unit.md) and [fetch-obi-interface.md](fetch-obi-interface.md).
+- The BASE hierarchy is core, IF, Prefetch Unit and three leaves ([instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization)).
+- `fetch_stage` has one child, `prefetch_unit`, which has the three leaves.
+- Module names have no `riscv_` prefix, and a file is the module name with `.sv`.
+- Instance names take the stage prefix, the pattern of [decode-stage.md](decode-stage.md#hierarchy-and-naming-d1) (IF-D6).
+- `fetch_stage` connects its 17 ports to `prefetch_unit` by name, with no logic and no internal nets.
+- `prefetch_unit` has the same 17 ports with the same names and widths and no logic of its own, so it has no separate spec (IF-D9).
 
-Producers and consumers at the stage boundary:
-
-- `fetch_accept`: the core-level HCU (F-b).
-- `redirect_fire`, `redirect_target`: the EX `redirect_unit`, already qualified by EX advance
-  (BASE [redirect event](5-stage-baseline-core.md#redirect-event-and-pipeline-recovery)). The HCU
-  also consumes `redirect_fire` for its own flush decisions.
-- Delivery outputs: the core IF/ID register.
-- Instruction-memory subordinate: the instruction OBI port.
-
-Inherited by reference, not restated: the BASE fetch organization, capacity and lifecycle, stale
-response rules, pipeline-control priority, OBI rules and reset architecture. Local refinements are
-the names, the interface table and the decisions in section 9.
-
-## 2. Interface contract
-
-### Clock, reset and configuration
-
-`clk` is the rising-edge clock for the Fetch Controller and Fetch Buffer state. `rst_n` is the
-core's active-low reset: asserted asynchronously, released synchronized (BASE
-[reset architecture](5-stage-baseline-core.md#reset-architecture)). On assertion, the Fetch
-Controller's `next_fetch_pc` takes `PC_RESET_VEC`, and the control state is cleared (section 6).
-
-Constants and parameters:
-
-- `PC_RESET_VEC = 32'h0000_0000` is a BASE constant defined in the RISC-V package (BASE
-  [purpose and boundary](5-stage-baseline-core.md#purpose-and-boundary)). It is defined in
-  `rtl/riscv_pkg.sv` (dependency D-1, resolved 2026-11-01).
-- `FETCH_DEPTH = 3` (BASE instruction-fetch organization), defined in `rtl/riscv_pkg.sv` (N2).
-- `OBI_OUTSTANDING_MAX = 1` is a link contract on the instruction port, not an OBI property and not
-  a port (BASE [OBI baseline configuration](5-stage-baseline-core.md#obi-baseline-configuration)).
-
-The supported configuration is `DATA_WIDTH = ADDR_WIDTH = INSTR_WIDTH = 32`.
-
-### Ports and payloads
-
-All ports are individual signals; no packed payload struct. Types refer to `riscv_pkg`. There are
-8 inputs and 9 outputs. Instruction-port names are the plain names of `rtl/memory_stage.sv`
-(F-c); the core adds the `instr_` prefix.
-
-| Signal | Direction | Type / width | Meaning | Valid when | Source |
-| --- | --- | --- | --- | --- | --- |
-| `clk` | Input | 1-bit `logic` | Rising-edge clock | Always | Reset architecture |
-| `rst_n` | Input | 1-bit `logic` | Active-low reset, async assert, synchronized release | Always | Reset architecture; N3 |
-| `fetch_accept` | Input | 1-bit `logic` | HCU: IF/ID may take an instruction on this edge. A delivery happens only on `fetch_fire = fetch_valid && fetch_accept` | Each cycle; `0` under load-use and unresolved MEM wait; may be `1` while `fetch_valid = 0` | [Pipeline-control priority](5-stage-baseline-core.md#pipeline-control-priority); F-b, O5 |
-| `redirect_fire` | Input | 1-bit `logic` | EX taken control-flow redirect on this edge, raw from `redirect_unit` | Each cycle; already `0` while EX cannot advance | [Redirect event](5-stage-baseline-core.md#redirect-event-and-pipeline-recovery); F-e |
-| `redirect_target` | Input | `logic [ADDR_WIDTH-1:0]` | Redirect target address | When `redirect_fire = 1` | Redirect event; F-e |
-| `gnt` | Input | 1-bit `logic` | Instruction OBI grant | Sampled at the rising edge with `req` | [OBI baseline](5-stage-baseline-core.md#obi-baseline-configuration); F-c |
-| `rvalid` | Input | 1-bit `logic` | Instruction OBI response valid | Raw response transfer with `rready` | [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset); F-c |
-| `rdata` | Input | `logic [INSTR_WIDTH-1:0]` | Instruction word returned by the port | When `rvalid && rready`; captured only for an expected response | OBI response validity; F-c |
-| `req` | Output | 1-bit `logic` | Instruction request for the presented entry | From first presentation until that entry's `gnt`; stable while asserted | [Capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states); F-c |
-| `addr` | Output | `logic [ADDR_WIDTH-1:0]` | The `pc` of the presented entry | When `req = 1` | Capacity and transaction states; F-c |
-| `we` | Output | 1-bit `logic` | Constant `0` (read-only port) | Always | [OBI baseline](5-stage-baseline-core.md#obi-baseline-configuration); F-c |
-| `be` | Output | `logic [3:0]` | Constant `4'b1111` (full word) | Always | OBI baseline; F-c |
-| `wdata` | Output | `logic [DATA_WIDTH-1:0]` | Constant `0` | Always | OBI baseline; F-c |
-| `rready` | Output | 1-bit `logic` | Constant `1`: every expected response is accepted; a killed one is drained | Always | [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset); F-c |
-| `fetch_valid` | Output | 1-bit `logic` | An oldest live `READY` entry exists | From registered fetch-entry state | Capacity and transaction states; F-b |
-| `fetch_pc` | Output | `logic [ADDR_WIDTH-1:0]` | `pc` of that entry | When `fetch_valid = 1` | [IF/ID boundary](5-stage-baseline-core.md#ifid-boundary) |
-| `fetch_instruction` | Output | `logic [INSTR_WIDTH-1:0]` | `instruction` payload of that entry | When `fetch_valid = 1` | IF/ID boundary; capacity and transaction states |
-
-The core connects `fetch_valid`, `fetch_pc` and `fetch_instruction` to the IF/ID register inputs
-(`valid_i` and payload, BASE
-[pipeline-register local control](5-stage-baseline-core.md#pipeline-register-local-control)). The
-HCU drives that register's `stall` and `flush` and drives `fetch_accept` so that IF frees an entry
-exactly when IF/ID captures it. The HCU rule is not part of this document (D-3).
-
-Width domains: `pc` and addresses are `ADDR_WIDTH`; the instruction word is `INSTR_WIDTH` (the
-32-bit base encoding, not ILEN). `be` is the OBI byte-enable field, not a datapath vector.
-
-### Transfer and timing rules
-
-- `fetch_valid`, `fetch_pc`, `fetch_instruction`, `req` and `addr` are functions of registered
-  fetch-entry (controller and payload) state only. They are not combinational from `gnt`, `rvalid`,
-  `rdata`, `fetch_accept` or `redirect_*` (BASE
-  [capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states),
-  `RESPONSE_BYPASS=0`). The stage takes no data-port signal, so no path from the data port to `req`
-  exists (BASE IF-A1).
-- `fetch_accept`, `redirect_fire` and `redirect_target` are sampled at the rising edge with the
-  other inputs. An edge with `rst_n = 0` has no transfer, delivery or allocation effect (BASE
-  [reset architecture](5-stage-baseline-core.md#reset-architecture)).
-- A delivery waits: `fetch_valid`, `fetch_pc` and `fetch_instruction` keep showing the same entry
-  until `fetch_fire` or a redirect frees it.
-- Instruction responses are never backpressured. `rready` is constant `1`, and every
-  `OUTSTANDING` entry reserved its storage before it was granted (BASE
-  [OBI response validity](5-stage-baseline-core.md#obi-response-validity-and-reset)).
-
-## 3. Internal organization
-
-### Hierarchy and naming (N1)
-
-The BASE hierarchy is `core -> IF -> Prefetch Unit -> {Fetch Controller Unit, Fetch Buffer, OBI Interface}`
-(BASE instruction-fetch organization). `fetch_stage` is the IF stage. It contains one child,
-`prefetch_unit`, which contains three leaves. Module and file names have no `riscv_` prefix.
-Instance names follow the `id_<module>` pattern of
-[decode-stage.md](decode-stage.md#hierarchy-and-naming-d1).
-
-| Module | File basename | Instance name | Instantiated by |
+| Module | Instance name | Instantiated by | Role |
 | --- | --- | --- | --- |
-| `fetch_stage` | `fetch_stage.sv` | `if_stage` | Core |
-| `prefetch_unit` | `prefetch_unit.sv` | `if_prefetch_unit` | `fetch_stage` |
-| `fetch_controller_unit` | `fetch_controller_unit.sv` | `if_fetch_controller_unit` | `prefetch_unit` |
-| `fetch_buffer` | `fetch_buffer.sv` | `if_fetch_buffer` | `prefetch_unit` |
-| `fetch_obi_interface` | `fetch_obi_interface.sv` | `if_fetch_obi_interface` | `prefetch_unit` |
+| `fetch_stage` | `if_stage` | Core | IF stage boundary |
+| `prefetch_unit` | `if_prefetch_unit` | `fetch_stage` | Connects the three leaves |
+| `fetch_controller_unit` | `if_fetch_controller_unit` | `prefetch_unit` | Fetch control state and logic ([spec](fetch-controller-unit.md)) |
+| `fetch_buffer` | `if_fetch_buffer` | `prefetch_unit` | `pc` and `instruction` payload ([spec](fetch-buffer.md)) |
+| `fetch_obi_interface` | `if_fetch_obi_interface` | `prefetch_unit` | Instruction OBI port, stateless ([spec](fetch-obi-interface.md)) |
 
-```text
-if_stage : fetch_stage
-  if_prefetch_unit : prefetch_unit
-    if_fetch_controller_unit : fetch_controller_unit
-    if_fetch_buffer          : fetch_buffer
-    if_fetch_obi_interface   : fetch_obi_interface
-```
-
-### Wiring
-
-```text
-redirect_fire, redirect_target, fetch_accept, rst_n, clk
-    -> fetch_controller_unit  (all fetch control state; FCU-O13)
-         -> pc_write, pc_write_slot, pc_write_data           -> fetch_buffer (pc array)
-         -> instruction_write, instruction_write_slot        -> fetch_buffer (instruction array)
-         -> present_slot, fetch_slot                         -> fetch_buffer (read addresses)
-         -> present_valid                                    -> fetch_obi_interface
-         -> fetch_valid                                      -> fetch stage output (O5: fetch_fire)
-fetch_buffer -> present_pc (pc[present_slot])                -> fetch_obi_interface
-fetch_buffer -> fetch_pc, fetch_instruction (slot fetch_slot) -> fetch stage output
-request_fire, raw_response_transfer -> fetch_controller_unit (from fetch_obi_interface)
-fetch_obi_interface -> response_data -> fetch_buffer.instruction_write_data
-fetch_obi_interface -> req, addr, we, be, wdata, rready        (instruction port out)
-gnt, rvalid, rdata -> fetch_obi_interface                      (grant and response in)
-```
-
-### Prefetch Unit wrapper and internal nets (N4)
-
-Owner decision, 2026-11-05. `prefetch_unit` has the same 17 ports as `fetch_stage` (8 inputs, 9 outputs;
-section 2), with the same names and widths. `fetch_stage` has one child, so it connects them by name with no
-logic and no internal nets. `prefetch_unit` has no logic of its own and gets no separate `prefetch-unit.md`:
-this section specifies it.
-
-`clk` goes to `fetch_controller_unit` and `fetch_buffer` only; `fetch_obi_interface` has no `clk`
-([fetch-obi-interface.md](fetch-obi-interface.md) FOI-O1). `rst_n` goes to `fetch_controller_unit` and `fetch_obi_interface`; the payload array has no reset.
-
-The twelve nets inside `prefetch_unit` are the leaf port names below (IF-A3, FCU-O13). Widths are checked against the
-leaf port lists in `rtl/`. `kill`, `alloc_fire` and `next_fetch_pc` are internal to `fetch_controller_unit` and are not nets.
+| Leaf | Takes from the stage ports | Drives to the stage ports |
+| --- | --- | --- |
+| `fetch_controller_unit` | `clk`, `rst_n`, `redirect_fire`, `redirect_target`, `fetch_accept` | `fetch_valid` |
+| `fetch_buffer` | `clk` | `fetch_pc`, `fetch_instruction` |
+| `fetch_obi_interface` | `rst_n`, `gnt`, `rvalid`, `rdata` | `req`, `addr`, `we`, `be`, `wdata`, `rready` |
 
 | Net | Width | Driver | Load |
 | --- | --- | --- | --- |
-| `pc_write` | 1-bit `logic` | `fetch_controller_unit` (= `alloc_fire`, FCU-O4) | `fetch_buffer` |
-| `pc_write_slot` | `logic [1:0]` | `fetch_controller_unit` (= `head_ptr`) | `fetch_buffer` |
-| `pc_write_data` | `logic [ADDR_WIDTH-1:0]` | `fetch_controller_unit` (= `next_fetch_pc`, FCU-O4) | `fetch_buffer` |
-| `instruction_write` | 1-bit `logic` | `fetch_controller_unit` (= `response_fire`) | `fetch_buffer` |
-| `instruction_write_slot` | `logic [1:0]` | `fetch_controller_unit` (= `prv`) | `fetch_buffer` |
-| `present_slot` | `logic [1:0]` | `fetch_controller_unit` (= `issue_ptr`) | `fetch_buffer` |
-| `fetch_slot` | `logic [1:0]` | `fetch_controller_unit` (= `tail_ptr`) | `fetch_buffer` |
-| `present_valid` | 1-bit `logic` | `fetch_controller_unit` (entry at `issue` is `QUEUED`) | `fetch_obi_interface` |
-| `present_pc` | `logic [ADDR_WIDTH-1:0]` | `fetch_buffer` (`pc[present_slot]`) | `fetch_obi_interface` |
-| `request_fire` | 1-bit `logic` | `fetch_obi_interface` | `fetch_controller_unit` |
-| `raw_response_transfer` | 1-bit `logic` | `fetch_obi_interface` | `fetch_controller_unit` |
-| `response_data` | `logic [INSTR_WIDTH-1:0]` | `fetch_obi_interface` (`rdata` pass-through, FOI-O6) | `fetch_buffer` |
+| `pc_write` | 1 | `fetch_controller_unit` | `fetch_buffer` |
+| `pc_write_slot` | 2 | `fetch_controller_unit` | `fetch_buffer` |
+| `pc_write_data` | `ADDR_WIDTH` | `fetch_controller_unit` | `fetch_buffer` |
+| `instruction_write` | 1 | `fetch_controller_unit` | `fetch_buffer` |
+| `instruction_write_slot` | 2 | `fetch_controller_unit` | `fetch_buffer` |
+| `present_slot` | 2 | `fetch_controller_unit` | `fetch_buffer` |
+| `fetch_slot` | 2 | `fetch_controller_unit` | `fetch_buffer` |
+| `present_valid` | 1 | `fetch_controller_unit` | `fetch_obi_interface` |
+| `present_pc` | `ADDR_WIDTH` | `fetch_buffer` | `fetch_obi_interface` |
+| `request_fire` | 1 | `fetch_obi_interface` | `fetch_controller_unit` |
+| `raw_response_transfer` | 1 | `fetch_obi_interface` | `fetch_controller_unit` |
+| `response_data` | `INSTR_WIDTH` | `fetch_obi_interface` | `fetch_buffer` |
 
-### Leaf responsibilities
+## 5. State
 
-- **`fetch_controller_unit`** — the instruction-fetch control plane (FCU-O13; BASE
-  [instruction-fetch organization](5-stage-baseline-core.md#instruction-fetch-organization)). It owns every
-  control state element with a reset: `next_fetch_pc`, the entry lifecycle `FREE`/`QUEUED`/`OUTSTANDING`/`READY`,
-  the killed marks and the three slot pointers, with all logic on them: allocation, presentation of the entry at
-  `issue`, response qualification, delivery and kill recovery. It drives the write enables, write addresses and read
-  addresses of `fetch_buffer`. It has no `gnt` input. Its encoding is in
-  [fetch-controller-unit.md](fetch-controller-unit.md).
-- **`fetch_buffer`** — payload only (FB-O8, FB-O9): the `pc` and `instruction` of the `FETCH_DEPTH = 3` slots,
-  as indexed arrays with no reset, and the read muxes that present `pc[present_slot]`, `pc[fetch_slot]` and
-  `instruction[fetch_slot]`. It has no lifecycle, no pointers and no kill logic. Its encoding is in
-  [fetch-buffer.md](fetch-buffer.md).
-- **`fetch_obi_interface`** — presents the chosen entry as protocol signals and drives the constant
-  port fields (F-c). It is stateless ([fetch-obi-interface.md](fetch-obi-interface.md) FOI-O1): the
-  OBI hold, stability and no-withdrawal rules of BASE instruction-fetch organization are met at the
-  port because the controller keeps the entry at `issue` `QUEUED` until its `request_fire`, and the buffer
-  keeps its `pc` (FCU-O9, FB-O8).
+- None, because the stage is a wrapper with no logic.
+- The controller owns the control state ([fetch-controller-unit.md](fetch-controller-unit.md) section 5).
+- The buffer owns the payload ([fetch-buffer.md](fetch-buffer.md) section 5).
+- The OBI leaf is stateless ([fetch-obi-interface.md](fetch-obi-interface.md) section 5).
 
-Pipeline-register ownership: the IF/ID register is core-owned, outside this stage (F-a).
+## 6. Behavior
 
-## 4. State and ownership
+- The stage offers the oldest READY entry to IF/ID, and a redirect cancels wrong-path work without retracting a presented request.
 
-| State/storage | Meaning and owner | Update event | Hold rule | Reset value or no-reset rationale |
-| --- | --- | --- | --- | --- |
-| `next_fetch_pc` (`ADDR_WIDTH`) | Next address to allocate; `fetch_controller_unit` | Each allocation: `+4`; redirect edge: `redirect_target`, with no allocation on that edge (IF-A2) | Holds when nothing is allocated, including while the ring is full | `PC_RESET_VEC` (BASE reset architecture) |
-| Entry lifecycle (`FREE`, `QUEUED`, `OUTSTANDING`, `READY`) | Entry validity and lifecycle; `fetch_controller_unit` (FCU-O13) | Allocation, grant, response, `fetch_fire`, redirect | Per the BASE lifecycle | `FREE` (BASE reset architecture: entry-valid and lifecycle state) |
-| Entry `protocol_committed` (derived) | Request ownership; `fetch_controller_unit`, derived as `life[issue] == QUEUED` (FCU-O9) | The entry at `issue` is presented from the first cycle in which it is `QUEUED` at `issue`; a redirect on that edge keeps it (BASE capacity and transaction states) | Holds until the entry's own `gnt`, which moves `issue` (FCU-O7) | None stored; derived from `life`, which resets to `FREE` |
-| Entry `killed` | Wrong-path marker; `fetch_controller_unit` (FCU-O10) | Redirect edge, for each kept entry | Set until the entry is drained or freed (BASE stale-response section) | `0` (control-plane state) |
-| Entry `pc` (`ADDR_WIDTH`) | Fetch address and delivered `fetch_pc`; payload in `fetch_buffer`, written by the controller | Allocation (`pc_write`) | Holds for the entry's life; stable while `req` is asserted | Not reset; meaningful only while the entry is valid (BASE reset architecture) |
-| Entry `instruction` (`INSTR_WIDTH`) | Payload of a `READY` entry; payload in `fetch_buffer`, written by the controller | Expected response for a live `OUTSTANDING` entry (`instruction_write`) | Holds while `READY` | Not reset (BASE reset architecture) |
-| Outstanding count (`0` or `1`) | Derived, not stored: `life[issue - 1] == OUTSTANDING` (FCU-O8) | `request_fire`, `response_fire` | Derived | No state; `life` resets to `FREE` (BASE OBI response validity and reset) |
-| Allocation order | Three-slot ring: `head_ptr`, `issue_ptr`, `tail_ptr` (FCU-O7) | Allocation, `request_fire`, delivery, redirect | Holds | `head = issue = tail = 0` |
+| Output | Value |
+| --- | --- |
+| `fetch_valid` | High when the oldest entry is READY, which the lifecycle decides, not the payload |
+| `fetch_pc`, `fetch_instruction` | The `pc` and instruction of the oldest READY entry in allocation order, not the lowest PC |
+| `req` | High when an entry is presented and not yet granted |
+| `addr` | The `pc` of that entry |
+| `we`, `be`, `wdata`, `rready` | Constant: `we` 0, `be` all four bytes, `wdata` 0, `rready` 1, so every response is accepted and a killed one is drained |
 
-Ownership rules: the presented request's payload is the entry's `pc`; `addr` and `req` do not
-change before the matching `gnt` (BASE capacity and transaction states). A `FREE` entry's payload
-has no meaning and cannot authorize a delivery or a request. `fetch_valid` comes from lifecycle
-state, not from payload.
+| Condition | Effect at the stage ports | Effect on the entries |
+| --- | --- | --- |
+| Reset (`rst_n` low) | `req` and `fetch_valid` fall after reset propagation, without a clock edge. No request, response, delivery or allocation counts. | Every entry is FREE. The first address allocated after release is `PC_RESET_VEC`. |
+| Redirect (`redirect_fire` high, `rst_n` high) | No delivery, whatever `fetch_accept` is, and `fetch_valid` is low after the edge. A presented entry keeps `req` and `addr` stable until its grant. | The four BASE cases apply ([stale responses](5-stage-baseline-core.md#stale-instruction-responses-after-redirect); [slot-role table](fetch-controller-unit.md)). The target is allocated on the next edge as a fresh QUEUED entry (IF-A2). |
+| Delivery (`rst_n` high, `redirect_fire` low, `fetch_valid` and `fetch_accept` high) | IF/ID captures `fetch_pc` and `fetch_instruction`. | The delivered entry is freed, and its slot may be allocated on the same edge (BASE). |
+| No delivery (`rst_n` high, `redirect_fire` low, `fetch_valid` or `fetch_accept` low) | While `fetch_valid` is high, `fetch_valid`, `fetch_pc` and `fetch_instruction` keep showing the same entry until a delivery or a redirect frees it. | No READY entry is freed. Allocation and presentation continue until every entry is occupied (BASE IF-A1). |
 
-## 5. Behavioral and next-state rules
+- An older OUTSTANDING entry does not block presentation, because the subordinate holds `gnt` low until it can accept (BASE).
+- The request and response transfers follow the [BASE event definitions](5-stage-baseline-core.md#obi-response-validity-and-reset).
 
-### 5.1 Definitions (pre-edge state)
+## 7. Timing and Control
 
-- **Live `READY`**: an entry in `READY` that is not killed. A redirect frees every `READY` entry on
-  its edge (BASE stale-response section), so a killed `READY` entry never persists.
-- **Delivery event**: `fetch_fire = fetch_valid && fetch_accept` (O5). It frees the oldest live
-  `READY` entry; the core IF/ID captures that entry on the same edge.
-- **Presentable**: the entry at `issue`, when it is `QUEUED` (FCU-O9). It is always committed, so no
-  uncommitted entry is presented. An older `OUTSTANDING` entry does not block presentation; the subordinate
-  holds `gnt = 0` until it can accept (BASE capacity and transaction states).
-- **Allocation**: a `FREE` entry, counting entries freed on this edge, receives `next_fetch_pc` as a
-  new `QUEUED` entry. There is no other allocation condition (BASE IF-A1), and a redirect edge allocates nothing (IF-A2). A full buffer stops
-  allocation by capacity alone.
+- `fetch_valid`, `fetch_pc`, `fetch_instruction`, `req` and `addr` depend on registered state only.
+- No path from `gnt`, `rvalid`, `rdata`, `fetch_accept`, `redirect_fire` or `redirect_target` reaches them within a cycle, because BASE forbids a response bypass ([capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states)).
+- The stage takes no data-port signal, so no path from the data port to `req` exists (BASE IF-A1).
+- The edge samples `fetch_accept`, `redirect_fire` and `redirect_target` with the other inputs.
+- Responses are never back-pressured, because `rready` is constant 1 and an OUTSTANDING entry reserved its storage before its grant.
 
-### 5.2 Concurrent-event rules
+### When valid
 
-| Condition | Events on this edge | Actions | Next state |
+| Signal group | When valid |
+| --- | --- |
+| `fetch_valid` | Every cycle, from registered state |
+| `fetch_pc`, `fetch_instruction` | When `fetch_valid` is high |
+| `req` | Every cycle. Once high, it stays high until the grant of that entry or reset |
+| `addr` | When `req` is high. It is stable until the grant of that entry or reset |
+| `we`, `be`, `wdata`, `rready` | Always, including reset |
+
+### Reset, stall, flush
+
+| Event | Effect on this block |
+| --- | --- |
+| Reset (`rst_n` low) | As in the Reset row of section 6. |
+| Stall | The stage has no stall input. A low `fetch_accept` holds the delivery, and fetch continues as in the No delivery row of section 6 (IF-D5). |
+| Flush | The stage has no flush input. A redirect is the only cancellation of wrong-path work, and the IF/ID flush is the HCU's. |
+
+- Before edge E, S1 is READY with `pc` 0x08 and I1, and S2 is OUTSTANDING with `pc` 0x0C.
+- S3 is QUEUED and presented with `pc` 0x10, and the next allocation address is 0x14.
+
+| Cycle / edge | Stage inputs | Stage outputs | Effect |
 | --- | --- | --- | --- |
-| `rst_n = 0` | Any | No request, transfer, delivery or allocation (BASE reset architecture) | `next_fetch_pc = PC_RESET_VEC`; control state reset (section 6) |
-| `redirect_fire = 1` | Grant and response events on this edge still apply | Every `READY` entry is freed, whatever `fetch_accept` is; an `OUTSTANDING` entry is killed and kept, or freed if its `response_fire` occurs; a protocol-committed `QUEUED` entry is killed and kept, and becomes killed `OUTSTANDING` if granted on this edge; an uncommitted `QUEUED` entry is freed; the target is not allocated on this edge; it is allocated as a fresh uncommitted `QUEUED` entry on the following edge (IF-A2; BASE stale-response section, four cases) | `next_fetch_pc = redirect_target` |
-| No redirect, `fetch_fire = 1` | Delivery; grant and response events; allocation | The oldest live `READY` entry is freed; that slot may be allocated on the same edge (BASE capacity and transaction states, one-edge example) | As the events dictate |
-| No redirect, `fetch_fire = 0` (HCU stall, or nothing `READY`) | Grant and response events; allocation | No delivery. Allocation and presentation continue until every entry is occupied (BASE IF-A1) | As the events dictate |
+| Cycle before E | `fetch_accept` high, `gnt` high, `rvalid` high with `rdata` I2, the word at 0x0C | `fetch_valid` high with 0x08 and I1; `req` high with `addr` 0x10 | Nothing changes until the edge. |
+| Edge E | The inputs of the cycle before E | IF/ID captures 0x08 and I1 | S1 is delivered and freed, and reallocated with 0x14. S2 receives I2 and becomes READY. S3 is granted and becomes OUTSTANDING. One entry stays outstanding. |
+| Cycle after E | None | `fetch_valid` high with 0x0C and I2; `req` high with `addr` 0x14 | S3 no longer waits for a grant, so 0x14 is presented. |
 
-Rules that hold in every row:
+## 8. Assumptions and Corner Cases
 
-- On a redirect edge the IF/ID register is flushed by the HCU, not by IF. IF frees its `READY`
-  entries on that edge whatever `fetch_accept` is, so no wrong-path entry survives in IF (BASE
-  stale-response section, first bullet).
-- A response and a grant on the same edge keep the outstanding count at one (BASE capacity and
-  transaction states, `A`/`B` example).
-- Allocation may reuse a slot freed on the same edge (BASE capacity and transaction states; BASE
-  stale-response section, "reclaimed from stale `READY`").
-
-### 5.3 Protocol events
-
-Using the BASE event definitions (BASE OBI response validity and reset):
-
-```text
-request_fire  = rst_n && req && gnt
-response_fire = outstanding && rst_n && rvalid && rready        (rready = 1)
-```
-
-- `request_fire` moves the presented `QUEUED` entry to `OUTSTANDING`. The outstanding count follows
-  `next = current + request_fire - response_fire` and never exceeds `OBI_OUTSTANDING_MAX = 1`.
-- `response_fire` on a live `OUTSTANDING` entry captures `rdata` and moves the entry to `READY`; on a
-  killed `OUTSTANDING` entry it discards the response and frees the entry (BASE capacity and
-  transaction states).
-- `rvalid` with no `OUTSTANDING` entry is an unexpected response: drained, no state change, no
-  `READY` entry, reported as a protocol violation by verification (BASE OBI response validity and reset).
-
-### 5.4 Derived outputs
-
-- `fetch_valid = 1` iff a live `READY` entry exists. `fetch_pc` and `fetch_instruction` are the
-  payload of the oldest one in allocation order, not the numerically lowest PC.
-- `req = 1` iff an entry is presented and not yet granted; `addr` is that entry's `pc`.
-
-## 6. Reset, cancellation and exceptional conditions
-
-**Reset.** On `rst_n = 0`, after reset propagation and without a clock edge, the stage drives
-`req = 0`; `next_fetch_pc` takes `PC_RESET_VEC`; every entry becomes `FREE`; `killed`,
-`protocol_committed` and the outstanding count are cleared. Entry `pc` and `instruction` are not
-reset (BASE reset architecture; BASE OBI response validity and reset). No edge sampling `rst_n = 0`
-counts a request, response or delivery. After release, the instruction subordinate must not return
-a response for a pre-reset transaction (BASE OBI response validity and reset).
-
-**Redirect as cancellation.** A redirect is the only cancellation of wrong-path work inside IF. The
-four cases and the target allocation are in section 5.2 and the BASE stale-response section. A
-protocol-committed entry is never retracted (BASE capacity and transaction states).
-
-**Environment preconditions** (harness and test program; BASE stale-response section):
-
-- Every instruction request address is in the code region, including speculative and wrong-path
-  fetches. The frontend can request up to `FETCH_DEPTH` words beyond the instruction in IF/ID, so
-  test images end with safe terminal control flow (for example `j .`) followed by NOP padding
-  that keeps those requests in range. This bound comes from capacity, not from IF-A1; the BASE
-  padding rule is unchanged.
-- Inputs are `0` or `1` only (O4).
-
-**Outside the contract.** Unexpected responses are drained and reported (section 5.3). Instruction
-bus errors do not exist at this boundary (BASE OBI baseline). The stage has no error output, flag or
-default vector.
-
-## 7. Representative examples or cycle traces
-
-### Trace A: steady state with response, grant and delivery on one edge
-
-Pre-edge: `next_fetch_pc = 0x14`. S1 `READY` (`pc=0x08`, `I1`); S2 `OUTSTANDING` (`pc=0x0C`); S3
-`QUEUED`, committed, `req=1` (`pc=0x10`). Inputs: `fetch_accept=1`, `redirect_fire=0`, `gnt=1`,
-`rvalid=1`, `rdata=I2` (word at `0x0C`).
-
-| Edge | Events | State before | Action | State after |
-| --- | --- | --- | --- | --- |
-| E | `fetch_fire=1`; `request_fire` for S3; `response_fire` for S2 | S1 `READY` `0x08`; S2 `OUTSTANDING` `0x0C`; S3 `QUEUED` committed `0x10`; outstanding `1` | IF/ID captures `{0x08, I1}`; S1 freed and reallocated with `0x14`; S2 captures `I2`; S3 granted | S1 `QUEUED` `0x14` committed (at `issue`, FCU-O9); S2 `READY` `0x0C`; S3 `OUTSTANDING` `0x10`; `next_fetch_pc=0x18`; outstanding `1` |
-
-After E: `fetch_valid=1` with `{0x0C, I2}`. `0x14` is presentable in the next cycle because S3 is
-no longer waiting for `gnt`. One instruction per cycle is sustained (BASE capacity and transaction
-states).
-
-### Trace B: redirect with a committed wrong-path entry not yet granted
-
-Pre-edge: `next_fetch_pc = 0x28`. S1 `READY` (`0x1C`); S2 `OUTSTANDING` (`0x20`); S3 `QUEUED`,
-committed, `req=1` (`0x24`). Inputs: `redirect_fire=1`, `redirect_target=0x100`, `fetch_accept=0`,
-`gnt=0`, `rvalid=0`.
-
-| Edge | Events | State before | Action | State after |
-| --- | --- | --- | --- | --- |
-| R | Redirect to `0x100` | As above | S1 freed; S2 killed and kept; S3 killed and kept, `req` stays `1`; no allocation on this edge | S1 `FREE`; S2 `OUTSTANDING` killed; S3 `QUEUED` committed killed, `req=1`; `fetch_valid=0`; `next_fetch_pc=0x100` |
-| R+1 | Target allocation (IF-A2) | As after R; no grant or response | S1 allocated with `0x100` (uncommitted) | S1 `QUEUED` `0x100` uncommitted; S3 still waits for `gnt` with `req=1`; `next_fetch_pc=0x104` |
-
-Afterwards: `0x100` is not presented while S3 waits for `gnt`. When S3 is granted it becomes killed
-`OUTSTANDING`, and its response and S2's are drained to `FREE`, never `READY`. `0x100` is then
-presented and delivered after its own response (BASE stale-response section).
-
-### Trace C: HCU stall, the buffer fills and allocation stops by capacity
-
-The HCU holds IF/ID (for example during a MEM wait), so `fetch_accept=0` on edges 1 and 2.
-`redirect_fire=0`. The instruction memory responds one cycle after grant.
-
-| Edge | Events | State before | Action | State after |
-| --- | --- | --- | --- | --- |
-| 1 | `response_fire` for S2, `request_fire` for S3 | S1 `READY` `0x08`; S2 `OUTSTANDING` `0x0C`; S3 `QUEUED` committed `0x10`; `next_fetch_pc=0x14` | No delivery; S2 `READY`; S3 `OUTSTANDING`; no `FREE` entry, so no allocation | S1 `READY` `0x08`; S2 `READY` `0x0C`; S3 `OUTSTANDING` `0x10`; `next_fetch_pc=0x14` |
-| 2 | `response_fire` for S3 | As after edge 1 | S3 `READY`; nothing to present | Three `READY` entries; `req=0`; `next_fetch_pc=0x14` |
-| 3 | `fetch_accept=1` (stall released) | As after edge 2 | `fetch_fire` delivers `0x08`; S1 reallocated with `0x14` | S1 `QUEUED` `0x14`; S2, S3 `READY`; `next_fetch_pc=0x18` |
-
-`fetch_valid` stays `1` with `{0x08, I1}` through the stall. After release the frontend delivers
-`0x0C` and `0x10` on the next two edges without waiting for memory, which is the benefit of IF-A1.
-
-## 8. Verification obligations
-
-Planned checks. No fetch test exists (`tb/runners/` has no fetch runner, checked 2026-11-05).
-Expected values come from the BASE rules cited and the traces in section 7, not from the DUT.
-Leaf-level checks are in the leaf designs; the rows below are the stage (composition) checks.
-
-| Requirement/invariant | Stimulus or scenario | Expected observation |
+| Assumption | Guaranteed by | If violated |
 | --- | --- | --- |
-| Steady state (BASE capacity and transaction states) | Trace A | One delivery per edge; outstanding count stays `1` |
-| No combinational path to `req` (BASE capacity; IF-A1) | Toggle `gnt`, `rvalid`, `fetch_accept`, `redirect_fire` within a cycle | `req`, `addr` and the delivery outputs change only after an edge |
-| Oldest-first delivery (BASE capacity and transaction states) | Entries allocated in order with decreasing numeric PC after a redirect | Delivery follows allocation order |
-| Redirect, `READY` entry (BASE stale-response section) | Redirect with `fetch_accept=1` and a `READY` entry | Entry freed; never delivered |
-| Redirect, outstanding without response | Trace B | Entry killed, kept until drained, never delivered |
-| Redirect, outstanding with response | Response on the redirect edge | Response discarded; entry `FREE` |
-| Redirect, committed and granted | Grant on the redirect edge | Entry becomes killed `OUTSTANDING`; its response is drained |
-| Redirect, committed not granted | Trace B | `req` and `addr` stay stable; not replaced or bypassed |
-| Redirect, unpresented | Redirect with an uncommitted `QUEUED` entry | Entry freed; never presented |
-| Redirect target | Redirect edge, then the following edge (Trace B) | No allocation on the redirect edge; target allocated as `QUEUED` on the following edge (IF-A2); its `req` starts two cycles after the redirect cycle at the earliest |
-| HCU stall (IF-A1) | Trace C | Delivery held; buffer fills to three entries; allocation stops; no entry lost or reordered after release |
-| `fetch_accept` without `fetch_valid` (O5) | `fetch_accept=1` while no entry is `READY` | No entry freed; state unchanged by the accept |
-| Unexpected response (BASE OBI response validity and reset) | `rvalid` with no outstanding entry | No state change; reported as violation |
-| Reset (BASE reset architecture) | `rst_n` asserted with entries in every state | `req=0` after propagation; `next_fetch_pc=PC_RESET_VEC`; entries `FREE`; payload not checked |
-| Wrap (FCU-O7) | Many allocations through the three slots ([fetch-controller-unit.md](fetch-controller-unit.md) Trace W) | Ordering holds across slot reuse |
-| Hold rule (fetch-obi-interface §3, §5) | Committed entry first presented with `redirect_fire=1` on that edge, then `gnt=0` for several edges, with a younger `QUEUED` entry behind it | `present_valid` and `present_pc` (so `req` and `addr`) stay on the committed entry until its `request_fire`; the redirect keeps it, and the younger entry is not presented |
-| Composition trace (fetch-obi-interface §5, edges 1–6) | Replay that §5 sequence through this stage: `S2` outstanding; `S3` presented from edge 1 and granted with `S2`'s response on edge 3; `S4` queued; reset on edge 5; release on edge 6 | Edge 3: `S2` `READY` with `0x0C`, `S3` `OUTSTANDING`, one outstanding; edge 4: `req=1`, `addr=0x14` with `gnt=0`; edge 5: every entry `FREE`, `next_fetch_pc=PC_RESET_VEC`, `req=0` after propagation; edge 6: nothing presented. The fetch-obi table has no `next_fetch_pc` column, so `next_fetch_pc` is checked at reset only |
+| Every request address is in the code region, including speculative and wrong-path fetches. Test images end with safe control flow and NOP padding, because the frontend may request `FETCH_DEPTH` words beyond the instruction in IF/ID. | The harness and the test program ([BASE stale responses](5-stage-baseline-core.md#stale-instruction-responses-after-redirect)) | Outside the contract. The stage checks no address range. |
+| The HCU drives `fetch_accept` consistently with the IF/ID stall and flush, so the stage frees an entry exactly when IF/ID captures it | `hazard_control_unit` ([HCU-D4](hazard-control-unit.md)) | An entry is lost or delivered twice. |
+| The subordinate holds `gnt` low until it can accept, and returns no response for a pre-reset transaction after release | The instruction OBI subordinate (BASE) | Outside the contract. |
+| `redirect_fire` is already low while EX cannot advance | `redirect_unit` ([BASE redirect event](5-stage-baseline-core.md#redirect-event-and-pipeline-recovery)) | Outside the contract. |
+| Every input is 0 or 1 | The environment (IF-D10) | Outside the contract. |
 
-## 9. Rationale and open decisions
-
-### Decisions recorded for acceptance (Owner, 2026-11-01)
-
-| Id | Decision | Reason |
+| Case | Inputs | Result |
 | --- | --- | --- |
-| F-a | The IF/ID register is core-owned, outside `fetch_stage` | EX/MEM precedent ([memory-stage.md](memory-stage.md)); BASE IF/ID boundary |
-| F-b | The HCU supplies the one global control, `fetch_accept`; outputs are `fetch_valid`, `fetch_pc`, `fetch_instruction` (oldest live `READY`). IF has no hazard or MEM knowledge | BASE PR-D1: parent resolves arbitration; IF stays free of hazard logic |
-| F-c | Instruction OBI ports use the plain names of `rtl/memory_stage.sv`; `fetch_obi_interface` drives `we=0`, `be=4'b1111`, `wdata=0`, `rready=1`; the core adds the `instr_` prefix | Precedent and BASE constant port fields |
-| F-d | Việt writes all IF RTL (leaves and wrapper). For the IF-A3 move (control to the controller, payload only in the buffer), the RTL is delegated and this document does not state that it is written by Việt | Learning-critical block (F-d original); delegation recorded for the IF-A3 move (Owner, 2026-11-06) |
-| F-e | `redirect_fire` and `redirect_target` come raw from EX, because inside IF a redirect only changes the fetch PC and the entries. Global events (load-use, MEM wait, flushes of other stages) go through the HCU and reach IF only as `fetch_accept` | Owner principle: local effect stays direct, global effects go through the HCU |
-| F-f | No MEM-wait freeze and no MEM-occupancy rule for the frontend; the BASE amendment IF-A1 records it. Fetch continues during any stall until the buffer is full | Two independent ports and memory models: withholding fetch protects nothing; a later shared path arbitrates through `gnt` |
-| N1 | Names and instances of section 3 | `id_<module>` pattern; `fetch_obi_interface` avoids the `obi_interface` ambiguity |
-| N2 | `FETCH_DEPTH = 3` and the entry lifecycle type `life_t` are defined in `riscv_pkg` (Owner, 2026-11-04); `OBI_OUTSTANDING_MAX` is not a port | Owner placed them in the package when writing `fetch_buffer` |
-| N3 | `rst_n` is a stage input | BASE reset architecture |
-| N4 | `prefetch_unit` has the same 17 ports as `fetch_stage` (8 inputs, 9 outputs), same names and widths. `fetch_stage` connects them by name with no logic and no internal nets. No separate `prefetch-unit.md` | Owner, 2026-11-05. A wrapper with no logic is specified by section 3 |
-| O1 | Amended by FCU-O13 (IF-A3, accepted 2026-11-06, [fetch-controller-unit.md](fetch-controller-unit.md)): `fetch_controller_unit` presents the entry at `issue` (the oldest `QUEUED`) and drives the payload read addresses; `fetch_buffer` stores payload only; `fetch_obi_interface` presents only that entry and keeps it stable | Owner decision 2026-11-04, moved 2026-11-06; BASE [OBI-side selection](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states) already gives the oldest eligible `QUEUED` entry to the OBI side |
-| O4 | Inputs are `0` or `1` only; X and Z are outside the contract | Accepted EX and WB precedent |
-| O5 | `fetch_fire = fetch_valid && fetch_accept` is the only event that delivers and frees the oldest live `READY` entry | Standard valid/accept; no extra HCU gating |
-| IF-A2 | Accepted 2026-11-05 (BASE amendment): the redirect edge loads `redirect_target` into `next_fetch_pc` without allocating it; the target is allocated on the following edge | The EX branch-resolve path no longer reaches the `pc` slots or a `+4` adder; the controller loses a mux and an adder. Cost: one more cycle per redirect. No synthesis numbers exist |
-| IF-A3 | Accepted by Việt on 2026-11-06 (BASE amendment): all fetch control state moves to `fetch_controller_unit` (FCU-O13); `fetch_buffer` stores `pc` and `instruction` only (FB-O8, FB-O9). Behavior is unchanged; `alloc_valid` is removed (FCU-O3) | Owner decision 2026-11-06: one module owns ordering and lifecycle; the buffer is an indexed payload array because entries are allocated before data arrives and a kill reloads the pointers |
+| Unexpected response | `rvalid` high with no OUTSTANDING entry | The response is drained with no state change and no READY entry, and verification reports a protocol violation |
+| Accept without a valid entry | `fetch_accept` high with `fetch_valid` low | `fetch_accept` has no effect on that edge |
 
-### Dependencies
+## 9. Verification
 
-- **D-1.** Resolved 2026-11-01: Việt added `PC_RESET_VEC` (`ADDR_WIDTH`, value `'0`) to
-  `rtl/riscv_pkg.sv`, as with `INSTR_WIDTH` and `opcode_t` (commit `aedcead`).
-- **D-2.** Resolved 2026-11-01: BASE amendment IF-A1 (`5-stage-baseline-core.md`) was accepted by
-  Việt together with this document. It also drops one clause in `external-interrupt-extension.md` (Proposed) that cited the
-  removed first-presentation rule.
-- **D-3.** The HCU design must drive `fetch_accept` consistently with the IF/ID `stall` and `flush` it
-  drives, so that IF frees an entry exactly when IF/ID captures it. Resolved by
-  [hazard-control-unit.md](hazard-control-unit.md) (HCU-D4), accepted by Việt on 2026-11-05.
+- No test for the stage exists, so every check is planned.
+- Expected values come from the BASE rules cited and the trace in section 7, not from the DUT.
+- Leaf-level checks are in the leaf specs ([controller](fetch-controller-unit.md), [buffer](fetch-buffer.md), [OBI leaf](fetch-obi-interface.md)).
 
-### Open items resolved in the controller design
+| Requirement | Stimulus | Expected observation |
+| --- | --- | --- |
+| Steady state ([BASE](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states)) | The trace of section 7 | One delivery per edge, and one entry stays outstanding |
+| No combinational path to `req` (section 7) | Toggle `gnt`, `rvalid`, `rdata`, `fetch_accept`, `redirect_fire` and `redirect_target` within a cycle | `req`, `addr` and the delivery outputs change only after an edge |
+| Oldest-first delivery (section 6) | Entries allocated in order with decreasing numeric PC after a redirect | Delivery follows allocation order |
+| Redirect, READY entry (section 6) | A redirect with a READY entry and `fetch_accept` high | The entry is freed and never delivered |
+| Redirect, response on the edge (section 6) | A redirect with an OUTSTANDING entry and a response on the edge | The response is discarded and the entry is FREE |
+| Redirect, presented entry granted on the edge (section 6) | A redirect with a presented entry and a grant on the edge | The entry becomes killed OUTSTANDING, and its response is drained |
+| Redirect, unpresented entry (section 6) | A redirect with an unpresented QUEUED entry | The entry is freed and never presented |
+| Redirect target (section 6) | A redirect with no entry kept, then the next edge | No entry is allocated on the redirect edge, and `fetch_valid` is low after it. The target is allocated on the next edge, and `req` shows it two cycles after the redirect cycle at the earliest |
+| Redirect with an OUTSTANDING entry without a response, and with a presented entry not granted (section 6) | Before edge 1: S1 READY (`pc` 0x1C), S2 OUTSTANDING (0x20), S3 QUEUED and presented (0x24). Edge 1: `redirect_fire` high, `redirect_target` 0x100, `fetch_accept` low, `gnt` low, `rvalid` low. Edge 2: no input. Edge 3: `rvalid` high for S2, `gnt` high for S3. Edge 4: `gnt` low, `rvalid` low. Edge 5: `rvalid` high for S3, `gnt` high for the target. Edge 6: `rvalid` high for the target. Edge 7: `fetch_accept` high | Edge 1: S1 is freed, S2 and S3 are kept as killed, `fetch_valid` is low, and `req` stays high with `addr` 0x24. Edge 2: the target 0x100 is allocated as a fresh QUEUED entry, and `req` and `addr` still show S3. Edge 3: S2's response is drained, and S3 is granted and becomes killed OUTSTANDING. From the next cycle `req` is high with `addr` 0x100, so the target is presented while S3 is OUTSTANDING. Edge 4: `gnt` low holds the target back. Edge 5: S3's response is drained, and the target's request transfers on this edge, no earlier. The drained responses leave their entries FREE and never READY, so `fetch_valid` stays low. Edge 6: `fetch_valid` goes high with 0x100 and its word. Edge 7: the target is delivered |
+| HCU stall (section 6) | Before edge 1: S1 READY (0x08, I1), S2 OUTSTANDING (0x0C), S3 QUEUED and presented (0x10), next allocation address 0x14. `fetch_accept` low on edges 1 and 2, `redirect_fire` low, and the memory responds one cycle after a grant. Edge 1: `rvalid` high for S2, `gnt` high for S3. Edge 2: `rvalid` high for S3. Edges 3 to 5: `fetch_accept` high | Edge 1: no delivery, S2 READY, S3 OUTSTANDING, no entry FREE so no allocation, and `fetch_valid` stays high with 0x08 and I1. Edge 2: S3 READY, three READY entries, and `req` low. Edge 3: 0x08 and I1 are delivered, S1 is reallocated with 0x14, and `req` shows 0x14 from the next cycle. Edges 4 and 5: 0x0C and 0x10 are delivered on consecutive edges without waiting for memory (IF-A1). No entry is lost or reordered after the release |
+| Accept without a valid entry (section 8) | `fetch_accept` high while no entry is READY | `fetch_accept` has no effect on that edge |
+| Unexpected response (section 8) | `rvalid` with no OUTSTANDING entry | No state change, and the violation is reported |
+| Reset (section 6) | `rst_n` asserted with entries in every state | `req` and `fetch_valid` are low after propagation, every entry is FREE, and the first address presented after release is `PC_RESET_VEC`. Payload is not checked |
+| Pointer wrap (BASE capacity) | The two Pointer wrap rows of [fetch-controller-unit.md](fetch-controller-unit.md) section 9, observed at the stage ports | Delivery order is allocation order across slot reuse |
+| Hold rule (section 6) | An entry first presented on a redirect edge, then `gnt` low for several edges, with a younger QUEUED entry behind it | `req` and `addr` stay on the presented entry until its grant. The redirect keeps it, and the younger entry is not presented |
+| Composition with reset (section 6) | Before edge 1: S2 OUTSTANDING (0x0C), S3 QUEUED and presented (0x10), S4 QUEUED (0x14) behind it. `fetch_accept` is low throughout. Edges 1 and 2: `gnt` low, `rvalid` low. Edge 3: `gnt` high, `rvalid` high with I2. Edge 4: `gnt` low, `rvalid` low. `rst_n` falls between edges 4 and 5, so it is low at edge 5, and it is high again at edge 6 with `gnt` low and `rvalid` low | Edges 1 and 2: `req` high with `addr` 0x10, unchanged. Edge 3: S2 READY with I2, S3 OUTSTANDING, and one entry outstanding. The cycle after edge 3: `req` high with `addr` 0x14 while `gnt` is low. Edge 5: every entry FREE, and `req` and `fetch_valid` low after propagation. Edge 6: `req` is low, and the edge allocates the first entry, so `req` shows `PC_RESET_VEC` from the next cycle |
 
-They do not change the `fetch_stage` interface.
+## 10. Decisions and Open Items
 
-**O2. Outstanding count: stored or derived.** Resolved in [fetch-controller-unit.md](fetch-controller-unit.md) (FCU-O8):
-derived, `outstanding = life[issue - 1] == OUTSTANDING`.
+| ID | Decision | Reason |
+| --- | --- | --- |
+| IF-D1 | The core owns the IF/ID register, outside `fetch_stage`. | It follows the EX/MEM precedent ([memory-stage.md](memory-stage.md)) and the BASE IF/ID boundary. |
+| IF-D2 | The HCU supplies the one global control, `fetch_accept`. The stage outputs are `fetch_valid`, `fetch_pc` and `fetch_instruction`, and the stage has no hazard or MEM knowledge. | The parent resolves arbitration (BASE PR-D1), so IF stays free of hazard logic. |
+| IF-D3 | The instruction OBI ports use the plain names of `rtl/memory_stage.sv`, and `fetch_obi_interface` drives the constant fields. The core adds the `instr_` prefix. | It follows the precedent and the BASE constant port fields. |
+| IF-D4 | `redirect_fire` and `redirect_target` come raw from EX. Global events reach IF only as `fetch_accept`. | A redirect only changes the fetch address and the entries inside IF, so local effects stay direct and global effects go through the HCU. |
+| IF-D5 | The frontend has no MEM-wait freeze and no MEM-occupancy rule (BASE IF-A1). Fetch continues during any stall until every entry is occupied. | The two ports and memory models are independent, so withholding fetch protects nothing, and a later shared path arbitrates through `gnt`. |
+| IF-D6 | Module, file and instance names are as in section 4. | Instance names take the stage prefix, and `fetch_obi_interface` avoids the `obi_interface` ambiguity. |
+| IF-D7 | `FETCH_DEPTH` 3 and the entry lifecycle type are defined in `riscv_pkg`. `OBI_OUTSTANDING_MAX` is not a port. | The Owner placed them in the package when writing the buffer. |
+| IF-D8 | `rst_n` is a stage input. | BASE [reset architecture](5-stage-baseline-core.md#reset-architecture). |
+| IF-D9 | `prefetch_unit` has the same 17 ports as `fetch_stage`, and `fetch_stage` connects them by name with no logic and no internal nets. There is no separate `prefetch-unit.md`. | A wrapper with no logic needs no spec of its own, so this spec states it. |
+| IF-D10 | Inputs are 0 or 1 only. X and Z are outside the contract. | It follows the accepted EX and WB precedent. |
+| IF-D11 | A delivery, with `fetch_valid` and `fetch_accept` high, is the only event that frees the oldest READY entry. | It is the standard valid and accept handshake, so the HCU needs no extra gating. |
 
-**O3. Age encoding for oldest-first order.** Resolved in [fetch-controller-unit.md](fetch-controller-unit.md) (FCU-O7): a
-three-slot ring with `head` (write end), `issue` (oldest `QUEUED`) and `tail` (oldest entry). The redirect
-rule, and the wrap, empty and full conditions, are in that document.
-
-### What can proceed and what stays blocked
-
-- Done: `fetch_obi_interface` (`04f4535`) is committed. Leaf RTL for the pre-IF-A3 split is committed for
-  `fetch_buffer` (`2a8d0bf`) and `fetch_controller_unit` (`d985318`). The IF-A3 move (designs
-  [fetch-controller-unit.md](fetch-controller-unit.md) and [fetch-buffer.md](fetch-buffer.md)) is accepted, and its RTL is
-  delegated (F-d). D-1 and D-2 are resolved.
-- Done: the two wrappers, `prefetch_unit` (N4) and `fetch_stage`, are committed (`4f2135c`).
-- Done: the HCU design (D-3), [hazard-control-unit.md](hazard-control-unit.md).
-- Verification of this stage is not established by this document; section 8 lists obligations only.
+- History: 2026-11-01 the Owner accepted F-a to F-f, N1, N3, O4 and O5.
+  - 2026-11-01 D-1 and D-2 were resolved: `PC_RESET_VEC` entered the package, and BASE IF-A1 was accepted.
+  - 2026-11-04 the Owner settled N2 and O1.
+  - 2026-11-05 N4 and IF-A2 were accepted, and HCU-D4 resolved D-3.
+  - 2026-11-06 IF-A3 moved the fetch control to the controller, amended O1, and resolved O2 and O3 in the controller design.
+  - 2026-11-07 rewritten in the block spec format, IDs renumbered, F-d retired.
+  - A claim that the target waits for the stale entry to drain was removed, because BASE presents the target earlier.
+- Old ID map:
+  - F-a to F-c map to IF-D1 to IF-D3 in order; all kept.
+  - F-e and F-f map to IF-D4 and IF-D5; both kept.
+  - N1 to N4 map to IF-D6 to IF-D9 in order; all kept.
+  - O4 and O5 map to IF-D10 and IF-D11; both kept.
+  - F-d is retired, because it recorded who writes the RTL, which is process and not behavior.
+  - O1, O2 and O3 moved to FCU-D1, FCU-D6 and FCU-D5, because IF-A3 gave the controller those decisions.
+  - IF-A2 and IF-A3 are BASE IDs and are not renumbered.
+- Length: this spec runs to 7 pages, above the 2-4 page limit, because it has 17 ports, a twelve-net table and 16 checks. The check rows carry the traces.
+- Open items: none.
