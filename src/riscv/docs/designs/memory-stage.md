@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | Description | Compose data OBI transactions and load/store formatting. |
-| Last modified | 2026-11-07 |
+| Last modified | 2026-11-08 |
 | Status | Accepted by Việt on 2026-11-07 |
 | Owner | Nguyễn Tô Quốc Việt |
-| RTL | `rtl/memory_stage.sv`, module `memory_stage` |
+| RTL | `rtl/memory_stage.sv`, module `memory_stage`, instance name `mem_stage` |
 | Parent | [Five-stage BASE core](5-stage-baseline-core.md) (MEM data formatting and MEM/WB boundary, data transaction completion, pipeline-control priority, OBI response validity and reset, reset architecture); [Hazard control unit](hazard-control-unit.md); [Pipeline register](pipeline-register.md); the three leaves ([request formatter](request-formatter.md), [data OBI controller](data-obi-controller.md), [load formatter](load-formatter.md)) |
 
 ## 1. Overview
@@ -83,7 +83,7 @@ gnt, rvalid, rdata                     |                       |
 
 | Module | Instance | File | Spec |
 | --- | --- | --- | --- |
-| `memory_stage` | None recorded | `rtl/memory_stage.sv` | This spec |
+| `memory_stage` | `mem_stage` | `rtl/memory_stage.sv` | This spec |
 | `request_formatter` | `mem_req_formatter` | `rtl/request_formatter.sv` | [request-formatter.md](request-formatter.md) |
 | `data_obi_controller` | `mem_obi_controller` | `rtl/data_obi_controller.sv` | [data-obi-controller.md](data-obi-controller.md) |
 | `load_formatter` | `mem_load_formatter` | `rtl/load_formatter.sv` | [load-formatter.md](load-formatter.md) |
@@ -224,6 +224,7 @@ gnt, rvalid, rdata                     |                       |
 - 2026-10-22 the Owner refined the completion and reset boundary. The Owner confirmed the ID-owned `wb_src` with its external bypass, which superseded the earlier MEM-derived selector. The Owner also authored the wrapper and requested its commit, which confirmed the corrected wrapper interface and composition. That revision is MEM D3, which extends MEM D2 and refines BASE R2 without changing its behavior.
 - 2026-10-24 the WB naming clarification renamed the ID-owned selector to `wb_src`, with encoding and routing unchanged.
 - 2026-11-07 rewritten in the block spec format, with IDs added. The "Pipeline-register implementation remains deferred" note, the RTL mapping paragraph and the readiness remarks went.
+- 2026-11-08 the Owner chose the instance name `mem_stage`, following `ex_stage` and `id_stage`. The RTL has no instantiation of the stage yet.
 
 | Old ID | New ID | Status |
 | --- | --- | --- |
@@ -231,8 +232,4 @@ gnt, rvalid, rdata                     |                       |
 | MEM D3 (revision label, 2026-10-22; `tb/README.md` cites it) | MEM-D2, MEM-D3 | Retired as a label: its decisions are the metadata bypass with the ID-owned `wb_src`, and the flat wrapper interface; History carries the date |
 
 - Length: 7 pages, above the 2-4 limit, because the spec has 19 ports, four nets, an encoding table, 8 check rows and 9 decisions.
-- Open items:
-  - The stage instance name is not recorded, and the RTL has no instantiation.
-    - Consequence: the hierarchy table shows `None recorded`.
-    - Options: (a) record `mem_stage`, following `ex_stage` and `id_stage`; (b) leave it until a core top exists.
-    - Recommendation: (a). Responsible: Việt.
+- Open items: none.
