@@ -8,7 +8,7 @@
 module immediate_generator
     import riscv_pkg::*;
 (
-    input logic [INSTR_WIDTH-1:0] instruction,
+    /* verilator lint_off UNUSEDSIGNAL */ input logic [INSTR_WIDTH-1:0] instruction, /* verilator lint_on UNUSEDSIGNAL */ //bits [1:0] are the fixed 2b11, not read
     output logic [DATA_WIDTH-1:0] imm
 );
     logic [4:0] opc;

@@ -9,7 +9,7 @@ module load_formatter
     import riscv_pkg::*;
 (
     input logic [DATA_WIDTH-1:0] read_data,
-    input logic [ADDR_WIDTH-1:0] effective_address,
+    /* verilator lint_off UNUSEDSIGNAL */ input logic [ADDR_WIDTH-1:0] effective_address, /* verilator lint_on UNUSEDSIGNAL */ //only bits [1:0] select the byte lane
     input mem_type_t mem_type,
 
     output logic [DATA_WIDTH-1:0] load_result

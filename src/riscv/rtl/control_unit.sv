@@ -8,7 +8,7 @@
 module control_unit
     import riscv_pkg::*;
 (
-    input logic [INSTR_WIDTH-1:0] instruction,
+    /* verilator lint_off UNUSEDSIGNAL */ input logic [INSTR_WIDTH-1:0] instruction, /* verilator lint_on UNUSEDSIGNAL */ //reads opcode, funct3, funct7 only
 
     output logic rs1_used,
     output logic rs2_used,
