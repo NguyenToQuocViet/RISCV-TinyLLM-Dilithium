@@ -187,6 +187,16 @@ EX verification suite: its runner, testcase modules, helpers and registered
 harness, not the human-authored EX RTL. Retain their existing headers and
 history; do not create retrospective attribution-only commits for that suite.
 
+Việt decided on 2026-11-11 that agent-scale work written by Claude Code is
+attributed to Claude Code: harnesses and tests that agents write and run at
+scale, and tooling that agents write at scale, such as the synthesis
+scripts. Việt's own hand tests, the core RTL, and boilerplate that only types
+out his decisions stay owner-led. These files use
+`Author: Claude Code (Anthropic)` and `Reviewer: Viet Nguyen To Quoc`. The
+commit body records Việt's part: the targets, the plan he created or approved,
+and his review. Their commits follow the separate-commit rule below with
+`Claude Code <noreply@anthropic.com>` as Git Author and Committer.
+
 For future commits containing separately attributed outsourced work, set both
 Git Author and Committer to `OpenAI Codex <noreply@openai.com>` for that command
 only. Keep owner-led work in separate commits under the owner's Git identity.
@@ -206,11 +216,12 @@ to owner-led work do not transfer authorship of that work to the correcting tool
 Disclose material AI assistance at pull-request level, or in the commit description when no pull request exists. State what the agent contributed and what the human reviewed or decided.
 
 This disclosure records tool assistance; it is distinct from authorship and
-does not authorize an AI name in a header, Git identity or co-author trailer.
+does not authorize an AI name in a header, Git identity or co-author trailer
+beyond the attribution that the Authorship section records.
 
 Assistance is material when AI substantially contributes nontrivial RTL or algorithms, a test oracle or reference model, verification strategy, a specification or ADR adopted by the project, build infrastructure, a substantial refactor, experimental analysis, or wording and reasoning used in a research claim.
 
-Mechanical execution of human-specified edits, file moves, scaffolding, routine commands, autocomplete, formatting, typo fixes, syntax corrections, simple API lookup, and small reviewed boilerplate does not by itself require disclosure. Per-file markers and mandatory AI attribution in every commit are unnecessary. Mark files as generated only when a deterministic generator owns them and humans should not edit them directly.
+Mechanical execution of human-specified edits, file moves, scaffolding, routine commands, autocomplete, formatting, typo fixes, syntax corrections, simple API lookup, and boilerplate whose every decision the owner made, such as a file list, is not disclosed. The agent is a tool there, and a tool does not sign its output: the commit carries the subject line only, with no statement of who typed it, who decided it, or which checks passed. A commit body carries only technical information a later reader needs. Per-file markers and mandatory AI attribution in every commit are unnecessary. Mark files as generated only when a deterministic generator owns them and humans should not edit them directly.
 
 ## Research Integrity
 
