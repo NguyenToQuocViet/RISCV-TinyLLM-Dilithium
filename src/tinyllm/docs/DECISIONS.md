@@ -27,4 +27,7 @@
 
 **Lý do:** Tách hiệu chỉnh model trên host khỏi datapath để tái sử dụng RTL với các bộ tham số và model khác nhau. Sau smoothing, scale A per-tensor thuận lợi cho dot-product số nguyên. A12 đã có bằng chứng chất lượng để bắt đầu bản số nguyên, trong khi A8 SmoothQuant chưa qua gate; giảm bit tiếp tục được xét theo chất lượng và chi phí phần cứng.
 
-**Giới hạn:** Numerical contract v1 cho candidate giảm bit `combined_min_1pct_residual16_m16` đã qua các gate software selection; quy tắc và bằng chứng nằm trong [numerical contract v1](design/numerical_contract_v1.md#144-kết-quả-lựa-chọn-trên-selection). Đây là đầu vào cho công việc hiện thực số nguyên và khảo sát chi phí RTL, chưa phải chốt số học phần cứng vì chưa đánh giá heldout hoặc tài nguyên phần cứng. Ngưỡng và thời điểm dùng heldout vẫn theo [PTQ plan](../quantize/plans/ptq_plan.md).
+**Giới hạn:** Numerical contract v1 cho candidate giảm bit `combined_min_1pct_residual16_m16` đã qua các gate software selection; quy tắc và bằng chứng nằm trong [numerical contract v1](design/numerical_contract_v1.md#144-kết-quả-lựa-chọn-trên-selection). Đây là đầu vào cho công việc hiện thực số nguyên và khảo sát chi phí RTL, chưa phải chốt số học phần cứng vì chưa đánh giá heldout hoặc tài nguyên phần cứng. Ngưỡng và thời điểm dùng heldout vẫn theo [PTQ plan](../quantize/plans/ptq_plan.md).  
+  
+## D03. Các thành phần/hàm phi tuyến tạm thời  
+Quyết định: Các thành phần phi tuyến hiện tại trong numerical contract v1 chỉ để tạm thời cho đánh giá contract hoàn thiện, khi thiết kế tôi sẽ tìm hiểu kĩ hơn rồi còn chốt lại sau nữa.

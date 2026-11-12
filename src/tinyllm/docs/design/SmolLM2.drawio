@@ -1,6 +1,6 @@
 <mxfile host="Electron">
   <diagram name="SmolLM2 Dataflow" id="7csjfeFkeyqgS7v_tlNe">
-    <mxGraphModel dx="6375" dy="3300" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+    <mxGraphModel dx="1848" dy="957" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -1021,6 +1021,12 @@
               <mxPoint x="514" y="3294" />
             </Array>
           </mxGeometry>
+        </mxCell>
+        <mxCell id="pSSpkD98IuO4h17QLap5-1" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="Score attention" vertex="1">
+          <mxGeometry height="30" width="102" x="518" y="1480" as="geometry" />
+        </mxCell>
+        <mxCell id="pSSpkD98IuO4h17QLap5-2" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="Context attention" vertex="1">
+          <mxGeometry height="30" width="102" x="518" y="1750" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
