@@ -1,0 +1,21 @@
+% Hình cho ghi chú os_g_matmul_engine.md. Build: xelatex os_g_overview.tex
+\documentclass[border=3pt]{standalone}
+\input{_preamble.tex}
+\begin{document}
+\begin{tikzpicture}
+\node[box, draw=ink, line width=0.9pt, fill=raqua!6, minimum width=3.8cm, minimum height=2.4cm] (arr) at (0,0)
+  {\textbf{Mảng OS-G}\\[2pt] \footnotesize $M$ hàng × 64 cột PE\\ \footnotesize (mỗi PE là 1 khối DSP)};
+\node[box, draw=wblue, fill=wblue!10, minimum width=3.0cm] (buf) at (0,2.8) {Bộ đệm nạp trước\\ \footnotesize 256 KiB};
+\node[box, draw=wblue, fill=wblue!10, minimum width=3.0cm] (ddr) at (-5.3,2.8) {DDR4 ngoài chip\\ \footnotesize trọng số 134,5 MB};
+\node[box, draw=wblue, fill=wblue!10, minimum width=3.0cm] (kv) at (5.3,2.8) {KV cache trong URAM\\ \footnotesize 5,6 MB khi đủ 512 token};
+\node[box, draw=aorange, fill=aorange!10, minimum width=3.0cm] (act) at (-5.3,0) {Bộ đệm activation\\ \footnotesize vector của các token};
+\node[box, draw=raqua, fill=raqua!10, minimum width=3.0cm] (ppu) at (5.3,0) {Khối hậu xử lý\\ \footnotesize requant, softmax,\\ \footnotesize RMSNorm, SiLU, argmax};
+\draw[arr, wblue] (ddr) -- node[lbl, above=2pt]{$\approx$ 64 byte\\mỗi chu kỳ} (buf);
+\draw[arr, wblue] (buf) -- node[lbl, left=2pt]{tới 256 byte\\mỗi chu kỳ} (arr);
+\draw[arr, wblue] ($(kv.south)+(-1.0,0)$) -- node[lbl, above=3pt, pos=0.4]{K, V} ($(arr.north)+(1.4,0)$);
+\draw[arr, aorange] (act) -- node[lbl, above=2pt]{activation} (arr);
+\draw[arr, raqua] (arr) -- node[lbl, above=2pt]{kết quả} (ppu);
+\draw[arr, raqua] ($(ppu.north)+(0.8,0)$) -- node[lbl, right]{K, V\\mới} ($(kv.south)+(0.8,0)$);
+\draw[arr, raqua] (ppu.south) -- ++(0,-0.8) -| node[lbl, pos=0.25, below]{activation cho phép tính tiếp theo} (act.south);
+\end{tikzpicture}
+\end{document}

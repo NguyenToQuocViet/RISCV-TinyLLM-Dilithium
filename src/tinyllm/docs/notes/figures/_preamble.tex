@@ -1,0 +1,17 @@
+\usepackage{fontspec}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,positioning,decorations.pathreplacing}
+\definecolor{wblue}{HTML}{2A78D6}
+\definecolor{aorange}{HTML}{EB6834}
+\definecolor{raqua}{HTML}{1BAF7A}
+\definecolor{ink}{HTML}{0B0B0B}
+\definecolor{ink2}{HTML}{52514E}
+\definecolor{gridc}{HTML}{E1E0D9}
+\definecolor{basec}{HTML}{C3C2B7}
+\tikzset{
+  box/.style={draw=ink2, rounded corners=3pt, line width=0.6pt, align=center, font=\small, fill=white, inner sep=4pt},
+  arr/.style={-{Stealth[length=2.2mm,width=1.7mm]}, line width=0.9pt},
+  thinarr/.style={-{Stealth[length=1.5mm,width=1.2mm]}, line width=0.6pt},
+  lbl/.style={font=\footnotesize, text=ink2, align=center},
+  peon/.style={draw=raqua, fill=raqua!35, line width=0.5pt},
+}

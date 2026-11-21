@@ -1,0 +1,19 @@
+% Hình cho ghi chú os_g_matmul_engine.md. Build: xelatex os_g_softmax.tex
+\documentclass[border=3pt]{standalone}
+\input{_preamble.tex}
+\begin{document}
+\begin{tikzpicture}[node distance=0.38cm]
+\node[box, draw=raqua, fill=raqua!10] (s) {điểm $s$\\ \footnotesize từ QK};
+\node[box, right=of s] (m) {trừ max\\ \footnotesize của hàng};
+\node[box, right=of m] (lut) {bảng mũ\\ \footnotesize 32 mục};
+\node[box, draw=aorange, fill=aorange!12, right=of lut] (e) {$E$\\ \footnotesize 0–255};
+\node[box, draw=ink, line width=0.9pt, fill=raqua!6, right=of e] (pv) {mảng OS-G\\ \footnotesize tính PV};
+\node[box, right=of pv] (div) {nhân $1/S$\\ \footnotesize 1 lần/hàng};
+\node[box, draw=raqua, fill=raqua!10, right=of div] (ctx) {context\\ \footnotesize vào lớp O};
+\node[box, below=0.6cm of e] (sum) {cộng dồn $S=\sum E$};
+\draw[thinarr] (s) -- (m); \draw[thinarr] (m) -- (lut); \draw[thinarr] (lut) -- (e);
+\draw[arr, aorange] (e) -- (pv); \draw[thinarr, raqua] (pv) -- (div); \draw[thinarr, raqua] (div) -- (ctx);
+\draw[thinarr] (e) -- (sum);
+\draw[thinarr] (sum.east) -| node[lbl, pos=0.25, below]{$S$} (div.south);
+\end{tikzpicture}
+\end{document}

@@ -1,0 +1,27 @@
+% Hình cho ghi chú os_g_matmul_engine.md. Build: xelatex os_g_attention.tex
+\documentclass[border=3pt]{standalone}
+\input{_preamble.tex}
+\begin{document}
+\begin{tikzpicture}[x=1cm,y=1cm]
+\node[lbl, anchor=east, text=wblue] at (-0.15,0.25) {K cache\\của 1 head K/V};
+\foreach \b in {0,...,7}{
+  \pgfmathtruncatemacro{\lo}{\b*64}\pgfmathtruncatemacro{\hi}{\b*64+63}
+  \ifnum\b<4
+    \draw[draw=wblue, fill=wblue!30, line width=0.5pt] (\b*1.6,0) rectangle ++(1.55,0.5);
+  \else
+    \draw[draw=wblue, fill=wblue!10, line width=0.5pt] (\b*1.6,0) rectangle ++(1.55,0.5);
+  \fi
+  \node[font=\scriptsize, text=ink] at (\b*1.6+0.775,0.25) {\lo–\hi};
+}
+\node[lbl, anchor=south] at (6.4,0.55) {512 key, chia thành khối 64 key};
+\foreach \g in {0,...,3}{
+  \pgfmathsetmacro{\gx}{\g*3.2+0.1}
+  \foreach \r in {0,1,2}{\foreach \c in {0,...,5}{\draw[peon] (\gx+\c*0.42,-1.6-\r*0.42) rectangle ++(0.38,-0.38);}}
+  \pgfmathtruncatemacro{\gi}{\g+1}
+  \node[lbl, anchor=north] at (\gx+1.25,-2.95) {nhóm \gi};
+  \draw[thinarr, wblue] (\g*1.6+0.775,-0.05) -- (\gx+1.25,-1.5);
+}
+\node[lbl, anchor=east, text=aorange] at (0.0,-2.0) {3 head\\câu hỏi};
+\node[lbl, anchor=north east] at (12.8,-0.08) {khối 5–8: vòng tiếp theo,\\lại chia cho 4 nhóm};
+\end{tikzpicture}
+\end{document}
