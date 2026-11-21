@@ -6,3 +6,7 @@ __pycache__/
 /calibration/
 /results/numerical/*/weights.safetensors
 /results/numerical/contract_improvement/artifacts/screening/
+/results/numerical/a8_variants/**/weights.safetensors
+/results/numerical/a8_variants/*/intermediate_calibration.json
+/results/numerical/a8_variants/*/intermediate_qparams.safetensors
+/results/numerical/a8_variants/artifacts/

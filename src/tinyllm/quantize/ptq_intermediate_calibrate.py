@@ -275,8 +275,9 @@ def derived_qparams(model, adapter):
 @torch.inference_mode()
 def calibrate(args):
     configure_runtime()
+    torch.set_num_threads(getattr(args, "threads", 1))
     started = time.monotonic()
-    candidate = ROOT / "candidates/w8a12kv8_smoothquant"
+    candidate = Path(args.candidate).resolve()
     model, _ = load_model(source_snapshot(args.cache_dir, args.offline))
     adapter = ptq.PTQAdapter(model, read_json(candidate / "config.json"))
     adapter.load_qparams(candidate / "qparams.safetensors")
@@ -342,8 +343,12 @@ def calibrate(args):
                 raise ValueError(f"Missing Linear calibration coverage: {name}")
     tensors, linear_scales = derived_qparams(model, adapter)
     report = {"status": "PASS", "scope": "Intermediate ranges, minmax scale candidates, and derived frozen-scale coefficients; no new bit widths selected",
-              "backend": "CPU eager FP32 fake-quant with full signed W8/A12/K8/V8 ranges",
-              "environment": environment(), "candidate": str(candidate.relative_to(ROOT)),
+              "backend": ("CPU eager FP32 fake-quant with full signed "
+                          f"W{adapter.config['decoder_weight_bits']}/A{adapter.config['activation_bits']}"
+                          f"/K{adapter.config['key_bits']}/V{adapter.config['value_bits']} ranges"),
+              "environment": environment(),
+              "candidate": (candidate.relative_to(ROOT).as_posix()
+                            if candidate.is_relative_to(ROOT) else candidate.as_posix()),
               "model_config": {key: getattr(model.config,key) for key in (
                   'hidden_size','intermediate_size','num_hidden_layers','num_attention_heads',
                   'num_key_value_heads','vocab_size','rms_norm_eps','rope_theta')},
@@ -385,7 +390,10 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--cache-dir", type=Path, default=ROOT / ".cache/huggingface")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "results/numerical")
+    parser.add_argument("--candidate", type=Path, default=ROOT / "candidates/w8a12kv8_smoothquant",
+                        help="thư mục có config.json và qparams.safetensors của candidate được profile")
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--threads", type=int, default=1)
     calibrate(parser.parse_args())
 
 

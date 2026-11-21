@@ -48,6 +48,54 @@ def dynamic_token_fake_quant(value, bits):
     return torch.fake_quantize_per_channel_affine(rows, scales, zeros, 0, -bound, bound).reshape(value.shape)
 
 
+def smooth_scale(activation_max, weight_max, alpha):
+    """s = xmax^alpha / wmax^(1-alpha). Kênh thiếu tín hiệu ở một phía giữ scale = 1."""
+    valid = (activation_max > 0) & (weight_max > 0)
+    scale = torch.ones_like(activation_max)
+    scale[valid] = activation_max[valid].pow(alpha) / weight_max[valid].pow(1.0 - alpha)
+    return scale
+
+
+class Position0Rows:
+    """Forward pre-hook trên model.model: mask bool [B, T] đánh dấu hàng có vị trí tuyệt đối 0.
+
+    Vị trí lấy từ cache_position; nếu thiếu thì tính từ độ dài past_key_values. Prefill bắt
+    đầu từ 0 có đúng một hàng được đánh dấu; bước decode và prefill tiếp nối không có hàng nào.
+    """
+    def __init__(self, model):
+        self.mask = None
+        self.handle = model.model.register_forward_pre_hook(self._record, with_kwargs=True)
+
+    def _record(self, module, args, kwargs):
+        reference = kwargs.get("input_ids", args[0] if args else None)
+        if reference is None:
+            reference = kwargs.get("inputs_embeds")
+        if reference is None:
+            raise ValueError("Position0Rows cần input_ids hoặc inputs_embeds")
+        batch, length = reference.shape[:2]
+        positions = kwargs.get("cache_position")
+        if positions is None:
+            past = kwargs.get("past_key_values")
+            start = 0 if past is None else past.get_seq_length()
+            positions = torch.arange(start, start + length)
+        positions = torch.as_tensor(positions).reshape(-1)
+        if positions.numel() != length:
+            raise ValueError("Số vị trí phải bằng độ dài chuỗi đầu vào")
+        self.mask = (positions == 0).unsqueeze(0).expand(batch, length)
+
+    def rows_for(self, x):
+        """Mask cho tensor Linear [B, T', C]; lm_head có thể chỉ giữ T' hàng cuối."""
+        if self.mask is None:
+            raise ValueError("Chưa có mask vị trí 0: Linear phải chạy trong model.forward")
+        if self.mask.shape[0] != x.shape[0] or self.mask.shape[1] < x.shape[1]:
+            raise ValueError(f"Mask vị trí {tuple(self.mask.shape)} không khớp đầu vào {tuple(x.shape)}")
+        return self.mask[:, self.mask.shape[1] - x.shape[1]:].to(x.device)
+
+    def remove(self):
+        self.handle.remove()
+        self.mask = None
+
+
 class QuantPoint:
     """Một FakeQuantize, observer và thống kê số lần gọi tại một điểm biểu diễn."""
     def __init__(self, kind, bits, axis=None, channels=1, observer="minmax", bins=2048, *, defer_qparams=False):
@@ -150,10 +198,14 @@ class PTQAdapter:
         self.smooth_scales, self.smooth_stats = {}, {}
         self._collect_smooth_stats = False
         if self.smooth.get("enabled"):
-            if not (0.0 <= float(self.smooth.get("alpha", -1)) <= 1.0):
-                raise ValueError("SmoothQuant alpha phải nằm trong [0,1]")
+            self._check_alpha(self.smooth.get("alpha", -1))
             if self.config["activation_policy"] != "static_per_tensor":
                 raise ValueError("SmoothQuant chỉ kết hợp với A per-tensor tĩnh trong thí nghiệm này")
+        self.token0 = bool(self.config.get("token0", {}).get("enabled"))
+        if self.token0 and not (self.smooth.get("enabled") and self.config["activation_policy"] == "static_per_tensor"
+                                and self.config["activation_observer"] == "minmax"):
+            raise ValueError("token0 chỉ dùng với SmoothQuant, A per-tensor tĩnh và observer MinMax")
+        self.position0 = Position0Rows(model) if self.token0 else None
         if self.config["activation_policy"] == "dynamic_per_token":
             if self.config["activation_observer"] != "minmax" or self.config["activation_bits"] not in (4, 8):
                 raise ValueError("A động hỗ trợ 4/8 bit, không dùng Histogram")
@@ -175,10 +227,17 @@ class PTQAdapter:
                     activation = self._add_point(name + ".input", "A", self.config["activation_bits"], -1, module.in_features)
                 else:
                     activation = self._add_point(name + ".input", "A", self.config["activation_bits"])
+                activation0 = (self._add_point(name + ".input.token0", "A", self.config["activation_bits"])
+                               if self.token0 else None)
                 original = module.forward
-                def linear_forward(layer, x, *, _activation=activation, _weight=weight_name, _module_name=name):
+                def linear_forward(layer, x, *, _activation=activation, _activation0=activation0,
+                                   _weight=weight_name, _module_name=name):
+                    rows0 = self.position0.rows_for(x) if _activation0 is not None else None
                     if self._collect_smooth_stats and _module_name != "lm_head":
-                        maximum = x.detach().abs().amax(dim=tuple(range(x.ndim - 1))).cpu()
+                        magnitude = x.detach().abs()
+                        if rows0 is not None:  # |x| >= 0, nên 0 không ảnh hưởng max theo kênh
+                            magnitude = magnitude.masked_fill(rows0.unsqueeze(-1), 0)
+                        maximum = magnitude.amax(dim=tuple(range(x.ndim - 1))).cpu()
                         if not torch.isfinite(maximum).all():
                             raise ValueError(f"SmoothQuant activation stats nonfinite: {_module_name}")
                         previous = self.smooth_stats.get(_module_name)
@@ -188,7 +247,9 @@ class PTQAdapter:
                         x = x / smooth.to(device=x.device, dtype=x.dtype)
                     dynamic = (self.mode == "quantize" and self.config["activation_policy"] == "dynamic_per_token"
                                and bool(_activation.fq.fake_quant_enabled.item()))
-                    return F.linear(_activation(x, dynamic=dynamic), self.quantized_weight(_weight), layer.bias)
+                    activated = (_activation(x, dynamic=dynamic) if rows0 is None
+                                 else self._token0_activation(x, rows0, _activation, _activation0))
+                    return F.linear(activated, self.quantized_weight(_weight), layer.bias)
                 self._bind(module, original, linear_forward)
         embedding = model.model.embed_tokens
         def embedding_forward(layer, ids):
@@ -230,6 +291,25 @@ class PTQAdapter:
         self.points[name] = point
         return point
 
+    @staticmethod
+    def _check_alpha(alpha):
+        values = alpha.values() if isinstance(alpha, dict) else [alpha]
+        if not all(0.0 <= float(value) <= 1.0 for value in values):
+            raise ValueError("SmoothQuant alpha phải nằm trong [0,1]")
+
+    def _token0_activation(self, x, rows0, activation, activation0):
+        """Hàng vị trí 0 dùng observer/scale riêng; các hàng còn lại dùng scale thường."""
+        if activation.fq.observer_enabled.item():
+            rest, first = x[~rows0], x[rows0]
+            if rest.numel():
+                activation(rest)
+            if first.numel():
+                activation0(first)
+            activation.tokens += rest.shape[0]  # số hàng đã quan sát, ghi vào point_specs()
+            activation0.tokens += first.shape[0]
+            return x
+        return torch.where(rows0.unsqueeze(-1), activation0(x), activation(x))
+
     def _add_weight(self, name, weight, bits):
         self.weights[name] = weight
         self._add_point(name, "W", bits, 0, weight.shape[0])
@@ -254,6 +334,9 @@ class PTQAdapter:
         for module, original, _ in self.bindings:
             module.forward = original
         self.materialized.clear()
+        if self.position0 is not None:
+            self.position0.remove()
+            self.position0 = None
 
     def set_mode(self, mode):
         if mode not in ("disabled", "observe", "quantize"):
@@ -302,30 +385,35 @@ class PTQAdapter:
         self._collect_smooth_stats = True
         self.set_mode("disabled")
 
-    def finalize_smoothquant(self):
+    def finalize_smoothquant(self, alpha=None):
+        """alpha: số dùng chung hoặc dict {tên Linear: alpha}; None giữ giá trị trong config."""
         if not self._collect_smooth_stats:
             raise ValueError("SmoothQuant stats were not collected")
-        alpha = float(self.smooth["alpha"])
+        if alpha is not None:
+            self._check_alpha(alpha)
+            self.smooth["alpha"] = alpha
+        alpha = self.smooth["alpha"]
         expected = {name.removesuffix(".weight") for name in self.weights
                     if name != "shared_embedding_lm_head.weight"}
         if set(self.smooth_stats) != expected:
             raise ValueError("SmoothQuant statistics incomplete for decoder Linear points")
+        if isinstance(alpha, dict) and set(alpha) != expected:
+            raise ValueError("SmoothQuant alpha map phải có đúng các Linear decoder")
         for module_name in sorted(expected):
+            layer_alpha = float(alpha[module_name] if isinstance(alpha, dict) else alpha)
             weight = self.weights[module_name + ".weight"]
             activation_max = self.smooth_stats[module_name].to(weight.device)
             weight_max = weight.detach().abs().amax(dim=0)
             if not torch.isfinite(activation_max).all() or not torch.isfinite(weight_max).all():
                 raise ValueError(f"SmoothQuant max nonfinite: {module_name}")
-            # If either side has no signal, keep that channel unchanged (scale=1).
-            valid = (activation_max > 0) & (weight_max > 0)
-            scale = torch.ones_like(activation_max)
-            scale[valid] = activation_max[valid].pow(alpha) / weight_max[valid].pow(1.0 - alpha)
+            scale = smooth_scale(activation_max, weight_max, layer_alpha)
             if not torch.isfinite(scale).all() or not torch.all(scale > 0):
                 raise ValueError(f"SmoothQuant scale invalid: {module_name}")
             self.smooth_scales[module_name] = scale.detach().cpu().contiguous()
         self._collect_smooth_stats = False
         return {name: {"channels": len(scale), "unit_scale_channels": int((scale == 1).sum()),
-                       "min": float(scale.min()), "max": float(scale.max())}
+                       "min": float(scale.min()), "max": float(scale.max()),
+                       **({"alpha": float(alpha[name])} if isinstance(alpha, dict) else {})}
                 for name, scale in self.smooth_scales.items()}
 
     def effective_weight(self, name):
@@ -378,9 +466,14 @@ class PTQAdapter:
         save_file(tensors, str(path), metadata={"ptq_contract": json.dumps(self.calibration_contract())})
 
     def calibration_contract(self):
+        alpha = self.smooth.get("alpha")
+        alpha = ({name: float(value) for name, value in sorted(alpha.items())} if isinstance(alpha, dict)
+                 else None if alpha is None else float(alpha))
         return {"activation_policy": self.config["activation_policy"],
                 "weight_policy": self.config["weight_policy"], "kv_policy": self.config["kv_policy"],
-                "smoothquant": ({"enabled": True, "alpha": float(self.smooth["alpha"]),
+                **({"token0": {"enabled": True, "scale": "separate_per_tensor_for_absolute_position_0"}}
+                   if self.token0 else {}),
+                "smoothquant": ({"enabled": True, "alpha": alpha,
                     "statistics": self.smooth["statistics"], "fold": self.smooth["fold"],
                     "excluded": self.smooth["exclude"], "points": sorted(
                         name.removesuffix(".weight") for name in self.weights
@@ -423,6 +516,8 @@ class PTQAdapter:
                 raise ValueError(f"Calibration policy mismatch: {policy}")
         if source_contract.get("smoothquant", {"enabled": False}) != expected_contract["smoothquant"]:
             raise ValueError("Calibration SmoothQuant contract mismatch")
+        if source_contract.get("token0", {"enabled": False}) != expected_contract.get("token0", {"enabled": False}):
+            raise ValueError("Calibration token0 contract mismatch")
         if source_contract.get("points", {}).keys() != expected_contract["points"].keys():
             raise ValueError("Calibration point mismatch")
         for name, expected_spec in expected_contract["points"].items():

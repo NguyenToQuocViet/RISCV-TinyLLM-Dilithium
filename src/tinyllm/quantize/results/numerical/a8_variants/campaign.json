@@ -1,0 +1,476 @@
+{
+  "variants": {
+    "c3_alpha_map": {
+      "name": "c3_alpha_map",
+      "artifact": {
+        "config": "artifacts/c3_alpha_map/config.json",
+        "preparation_seconds": 2.1,
+        "linear_input_bits": 8,
+        "token0": false,
+        "weights_bytes": 134502896,
+        "coefficients_bytes": 2485984,
+        "check_mac": {
+          "window": "train 0",
+          "linear_layers": 211,
+          "different_accumulators": 0,
+          "different_post_requant_codes": 0,
+          "samples": 1899
+        },
+        "peak_rss_mb": 4321.4
+      }
+    },
+    "c1_a050": {
+      "name": "c1_a050",
+      "artifact": {
+        "config": "artifacts/c1_a050/config.json",
+        "preparation_seconds": 2.7,
+        "linear_input_bits": 8,
+        "token0": true,
+        "weights_bytes": 134502896,
+        "coefficients_bytes": 4354797,
+        "check_mac": {
+          "window": "train 0",
+          "linear_layers": 211,
+          "different_accumulators": 0,
+          "different_post_requant_codes": 0,
+          "samples": 1899
+        },
+        "peak_rss_mb": 4530.1
+      }
+    },
+    "c1_a065": {
+      "name": "c1_a065",
+      "artifact": {
+        "config": "artifacts/c1_a065/config.json",
+        "preparation_seconds": 2.6,
+        "linear_input_bits": 8,
+        "token0": true,
+        "weights_bytes": 134502896,
+        "coefficients_bytes": 4354797,
+        "check_mac": {
+          "window": "train 0",
+          "linear_layers": 211,
+          "different_accumulators": 0,
+          "different_post_requant_codes": 0,
+          "samples": 1899
+        },
+        "peak_rss_mb": 4500.4
+      }
+    },
+    "c1_a080": {
+      "name": "c1_a080",
+      "artifact": {
+        "config": "artifacts/c1_a080/config.json",
+        "preparation_seconds": 3.3,
+        "linear_input_bits": 8,
+        "token0": true,
+        "weights_bytes": 134502896,
+        "coefficients_bytes": 4354797,
+        "check_mac": {
+          "window": "train 0",
+          "linear_layers": 211,
+          "different_accumulators": 0,
+          "different_post_requant_codes": 0,
+          "samples": 1899
+        },
+        "peak_rss_mb": 4527.2
+      }
+    },
+    "c1_a090": {
+      "name": "c1_a090",
+      "artifact": {
+        "config": "artifacts/c1_a090/config.json",
+        "preparation_seconds": 3.3,
+        "linear_input_bits": 8,
+        "token0": true,
+        "weights_bytes": 134502896,
+        "coefficients_bytes": 4354797,
+        "check_mac": {
+          "window": "train 0",
+          "linear_layers": 211,
+          "different_accumulators": 0,
+          "different_post_requant_codes": 0,
+          "samples": 1899
+        },
+        "peak_rss_mb": 4504.3
+      }
+    },
+    "r_a8sq_a090": {
+      "name": "r_a8sq_a090",
+      "artifact": {
+        "config": "artifacts/r_a8sq_a090/config.json",
+        "preparation_seconds": 3.4,
+        "linear_input_bits": 8,
+        "token0": false,
+        "weights_bytes": 134502896,
+        "coefficients_bytes": 2485984,
+        "check_mac": {
+          "window": "train 0",
+          "linear_layers": 211,
+          "different_accumulators": 0,
+          "different_post_requant_codes": 0,
+          "samples": 1899
+        },
+        "peak_rss_mb": 4335.5
+      }
+    }
+  },
+  "backend": "artifact_only_integer_code_execution; PyTorch CPU FP64 exact-code GEMM",
+  "threads": 8,
+  "heldout_used": false,
+  "teacher_model_loaded_during_measurement": false,
+  "ptq_adapter_loaded_during_measurement": false,
+  "screening": {
+    "candidates": {
+      "c3_alpha_map": {
+        "config_name": "c3_alpha_map",
+        "quick": {
+          "status": "complete",
+          "per_window": [
+            {
+              "id": "wikitext2:validation:480",
+              "nll": 1874.6804689475102,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:314",
+              "nll": 1317.0268669666257,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:416",
+              "nll": 1676.8017181979376,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:202",
+              "nll": 1637.1906077289023,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:40",
+              "nll": 1396.1014363082359,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:208",
+              "nll": 1446.65183377816,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:275",
+              "nll": 1670.266527990112,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:481",
+              "nll": 1741.0526047687745,
+              "tokens": 511
+            }
+          ],
+          "nll": 12759.772064686258,
+          "tokens": 4088,
+          "ppl": 22.675271441749757,
+          "windows": 8,
+          "ranking_only": true,
+          "quality_gate": false,
+          "fp32_quick8_ppl": 20.859254123803474,
+          "relative_ppl_increase_vs_fp32": 0.08706051075306376,
+          "seconds": 122.7,
+          "peak_rss_mb": 991.2
+        }
+      },
+      "c1_a050": {
+        "config_name": "c1_a050",
+        "quick": {
+          "status": "complete",
+          "per_window": [
+            {
+              "id": "wikitext2:validation:480",
+              "nll": 2011.0713910567574,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:314",
+              "nll": 1430.9743801257137,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:416",
+              "nll": 1812.5669617802487,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:202",
+              "nll": 1732.5751111663412,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:40",
+              "nll": 1497.5458159158006,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:208",
+              "nll": 1529.7166586303647,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:275",
+              "nll": 1765.4709723568521,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:481",
+              "nll": 1870.9442972037941,
+              "tokens": 511
+            }
+          ],
+          "nll": 13650.865588235873,
+          "tokens": 4088,
+          "ppl": 28.19805022780256,
+          "windows": 8,
+          "ranking_only": true,
+          "quality_gate": false,
+          "fp32_quick8_ppl": 20.859254123803474,
+          "relative_ppl_increase_vs_fp32": 0.3518244737056271,
+          "seconds": 139.4,
+          "peak_rss_mb": 993.8
+        }
+      },
+      "c1_a065": {
+        "config_name": "c1_a065",
+        "quick": {
+          "status": "complete",
+          "per_window": [
+            {
+              "id": "wikitext2:validation:480",
+              "nll": 1922.4107537834207,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:314",
+              "nll": 1355.6497316016903,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:416",
+              "nll": 1699.8818902851199,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:202",
+              "nll": 1662.7960306801833,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:40",
+              "nll": 1422.8183827236062,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:208",
+              "nll": 1457.3997730254196,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:275",
+              "nll": 1733.5914668670157,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:481",
+              "nll": 1778.3744636423653,
+              "tokens": 511
+            }
+          ],
+          "nll": 13032.92249260882,
+          "tokens": 4088,
+          "ppl": 24.24214351806556,
+          "windows": 8,
+          "ranking_only": true,
+          "quality_gate": false,
+          "fp32_quick8_ppl": 20.859254123803474,
+          "relative_ppl_increase_vs_fp32": 0.16217691074589835,
+          "seconds": 149.3,
+          "peak_rss_mb": 994.5
+        }
+      },
+      "c1_a080": {
+        "config_name": "c1_a080",
+        "quick": {
+          "status": "complete",
+          "per_window": [
+            {
+              "id": "wikitext2:validation:480",
+              "nll": 1888.4993655754952,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:314",
+              "nll": 1315.9012053229744,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:416",
+              "nll": 1675.9276429541642,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:202",
+              "nll": 1644.6391833480448,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:40",
+              "nll": 1401.6725070608081,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:208",
+              "nll": 1431.4558940793795,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:275",
+              "nll": 1691.641127400566,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:481",
+              "nll": 1762.0206611288013,
+              "tokens": 511
+            }
+          ],
+          "nll": 12811.757586870233,
+          "tokens": 4088,
+          "ppl": 22.96546537063656,
+          "windows": 8,
+          "ranking_only": true,
+          "quality_gate": false,
+          "fp32_quick8_ppl": 20.859254123803474,
+          "relative_ppl_increase_vs_fp32": 0.10097251005871732,
+          "seconds": 144.2,
+          "peak_rss_mb": 1027.9
+        }
+      },
+      "c1_a090": {
+        "config_name": "c1_a090",
+        "quick": {
+          "status": "complete",
+          "per_window": [
+            {
+              "id": "wikitext2:validation:480",
+              "nll": 1872.7022314507049,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:314",
+              "nll": 1309.87226805283,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:416",
+              "nll": 1656.5910266846477,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:202",
+              "nll": 1647.2495411556447,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:40",
+              "nll": 1411.2929680959787,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:208",
+              "nll": 1436.5065474755247,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:275",
+              "nll": 1677.448548782093,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:481",
+              "nll": 1753.2948386978242,
+              "tokens": 511
+            }
+          ],
+          "nll": 12764.957970395248,
+          "tokens": 4088,
+          "ppl": 22.70405481694002,
+          "windows": 8,
+          "ranking_only": true,
+          "quality_gate": false,
+          "fp32_quick8_ppl": 20.859254123803474,
+          "relative_ppl_increase_vs_fp32": 0.08844039591192066,
+          "seconds": 163.5,
+          "peak_rss_mb": 1060.8
+        }
+      },
+      "r_a8sq_a090": {
+        "config_name": "r_a8sq_a090",
+        "quick": {
+          "status": "complete",
+          "per_window": [
+            {
+              "id": "wikitext2:validation:480",
+              "nll": 1870.7470556324115,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:314",
+              "nll": 1318.8911062297339,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:416",
+              "nll": 1675.7362978380406,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:202",
+              "nll": 1623.7108417870477,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:40",
+              "nll": 1401.619060711353,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:208",
+              "nll": 1424.9944042546558,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:275",
+              "nll": 1682.2656430812785,
+              "tokens": 511
+            },
+            {
+              "id": "wikitext2:validation:481",
+              "nll": 1743.3738160367357,
+              "tokens": 511
+            }
+          ],
+          "nll": 12741.338225571257,
+          "tokens": 4088,
+          "ppl": 22.57325302115334,
+          "windows": 8,
+          "ranking_only": true,
+          "quality_gate": false,
+          "fp32_quick8_ppl": 20.859254123803474,
+          "relative_ppl_increase_vs_fp32": 0.08216971168657183,
+          "seconds": 193.9,
+          "peak_rss_mb": 990.8
+        }
+      }
+    }
+  },
+  "last_session_seconds": 193.89
+}

@@ -28,7 +28,8 @@ from ptq_contract_runtime import load_prepared_contract
 _SCALE_RESCALE_SUFFIXES = (".smooth", ".output", ".to_v_cache", ".to_residual",
                            ".align_input", ".left_to_guard", ".right_to_guard",
                            ".q_rope_to_qk", ".k_rope_to_cache", ".qk_to_score",
-                           ".pv_to_context", ".product")
+                           ".pv_to_context", ".product",
+                           ".smooth_token0", ".output_token0", ".to_v_cache_token0")
 FACTOR_CANDIDATE_NAMES = (
     "residual_w20", "residual_w18", "residual_w16",
     "boundary_context_w12", "boundary_context_w8",
@@ -241,6 +242,17 @@ def require_completed_factor_quick(report, expected_ids):
                 or any(item.get("tokens") != 511 for item in rows)):
             raise RuntimeError(f"{name}: factor Quick8 target coverage changed")
     return names
+
+
+@torch.inference_mode()
+def override_kv_scales(adapter, qparams_path):
+    """Thay scale K/V của adapter bằng scale trong một bundle qparams khác."""
+    tensors = load_file(str(qparams_path), device="cpu")
+    for name, point in adapter.points.items():
+        if point.kind in ("K", "V"):
+            if tensors[name+".scale"].shape != point.fq.scale.shape:
+                raise ValueError(f"K/V scale shape mismatch: {name}")
+            point.fq.scale.copy_(tensors[name+".scale"])
 
 
 @torch.inference_mode()
@@ -541,13 +553,17 @@ class ArtifactCompiler:
         self.started = time.monotonic()
         self.selection = read_json(ROOT/"data/wikitext_selection.json")
         self.model, _ = load_model(source_snapshot(args.cache_dir, args.offline))
-        candidate = ROOT/"candidates/w8a12kv8_smoothquant"
+        # Mặc định là candidate/thống kê của contract v1; biến thể A8 truyền đường dẫn riêng.
+        candidate = Path(getattr(args, "candidate_dir", None) or ROOT/"candidates/w8a12kv8_smoothquant")
         self.baseline = PTQAdapter(self.model, read_json(candidate/"config.json"))
         self.baseline.load_qparams(candidate/"qparams.safetensors", recompute_weights=False)
+        if getattr(args, "kv_scale_source", None) is not None:
+            override_kv_scales(self.baseline, args.kv_scale_source)
         full_signed_range(self.baseline)
         self.baseline.set_mode("quantize")
         self.shared_weights = prepare_shared_weights(self.baseline, args.output_dir)
-        self.statistics = read_json(ROOT/"results/numerical/intermediate_calibration.json")["points"]
+        self.statistics = read_json(Path(getattr(args, "statistics_path", None)
+                                         or ROOT/"results/numerical/intermediate_calibration.json"))["points"]
         frozen_high = read_json(ROOT/"results/numerical/contract_search/combined_high/config.json")
         self.frozen_nonlinear = deepcopy(frozen_high["nonlinear"])
         self.frozen_silu_table = deepcopy(frozen_high["pwl_reference"])
@@ -665,13 +681,22 @@ class ArtifactCompiler:
                 incoming[name] = source
                 coefficient(name+".smooth", source_scale/(smoothing*activation_scale))
                 weight_name = "shared_embedding_lm_head.weight" if name == "lm_head" else name+".weight"
-                raw_scale = activation_scale*self.baseline.points[weight_name].fq.scale.double()
+                weight_scale = self.baseline.points[weight_name].fq.scale.double()
+                raw_scale = activation_scale*weight_scale
                 if name+".output" in self.adapter.formats:
                     target_scale = torch.as_tensor(self.adapter.formats[name+".output"].scale, dtype=torch.float64)
                     coefficient(name+".output", raw_scale/target_scale)
                 if name.endswith("v_proj"):
                     cache_scale = self.baseline.points[name.removesuffix("v_proj")+"value_post_projection"].fq.scale.double().repeat_interleave(64)
                     coefficient(name+".to_v_cache", raw_scale/cache_scale)
+                if self.baseline.token0:
+                    # Hàng vị trí 0 có scale A riêng nên cần hệ số smoothing và requantize riêng.
+                    scale0 = self.baseline.points[name+".input.token0"].fq.scale.double()
+                    coefficient(name+".smooth_token0", source_scale/(smoothing*scale0))
+                    if name+".output" in self.adapter.formats:
+                        coefficient(name+".output_token0", scale0*weight_scale/target_scale)
+                    if name.endswith("v_proj"):
+                        coefficient(name+".to_v_cache_token0", scale0*weight_scale/cache_scale)
             elif name.endswith(("input_layernorm", "post_attention_layernorm")) or name == "model.norm":
                 if name == "model.norm":
                     source = f"model.layers.{len(self.model.model.layers)-1}.residual_after_ffn"
@@ -755,6 +780,8 @@ class ArtifactCompiler:
                         "head_dim":64,"rope_theta":100000.0,"max_positions":512}:
             raise ValueError(f"model geometry differs from the reviewed contract: {geometry}")
         prepared = {**config, "formats":formats, "model":geometry,
+                    "linear_input_bits":int(self.baseline.config["activation_bits"]),
+                    **({"token0":{"enabled":True}} if self.baseline.token0 else {}),
                     "artifact_format":"tinyllm_integer_contract_v1",
                     "scale_rescale_bits":scale_bits,
                     "scale_rescale_multiplier_keys":sorted(name for name in coefficient_sources if name.endswith(_SCALE_RESCALE_SUFFIXES)),

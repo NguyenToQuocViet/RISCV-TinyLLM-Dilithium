@@ -40,6 +40,7 @@ def stream_cache(model, ids, prefill, cache=None):
 @torch.inference_mode()
 def calibrate(args):
     configure_runtime()
+    torch.set_num_threads(getattr(args, "threads", 1))
     model, _ = load_model(source_snapshot(args.cache_dir, args.offline))
     records = read_json(args.data_dir / "wikitext_calibration.json")
     config = read_json(args.config) if args.config else default_config()
@@ -108,6 +109,7 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--cache-dir", type=Path, default=ROOT / ".cache/huggingface")
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "calibration/w8a8kv8_static")
     calibrate(parser.parse_args())

@@ -71,6 +71,9 @@ class ContractRuntime:
         self.head_dim = int(self.model["head_dim"])
         self.groups = self.query_heads // self.kv_heads
         self.softmax = config["nonlinear"]["softmax"]
+        # Artifact v1 không có hai khóa này: A12 và không tách token 0.
+        self.linear_input_bits = int(config.get("linear_input_bits", 12))
+        self.token0 = bool(config.get("token0", {}).get("enabled"))
         if self.query_heads * self.head_dim != self.hidden_size or self.query_heads % self.kv_heads:
             raise ValueError("inconsistent attention geometry in artifact config")
         if not self.weights or not self.coefficients:
@@ -139,6 +142,9 @@ class ContractRuntime:
             required.update((name+".smooth.M", name+".smooth.shift"))
             suffix = ".to_v_cache" if name.endswith(".v_proj") else ".output"
             required.update((name+suffix+".M", name+suffix+".shift"))
+            if self.token0:
+                required.update((name+".smooth_token0.M", name+".smooth_token0.shift",
+                                 name+suffix+"_token0.M", name+suffix+"_token0.shift"))
         missing_weights = sorted(required_weights - self.weights.keys())
         missing_coefficients = sorted(required - self.coefficients.keys())
         if missing_weights or missing_coefficients:
@@ -184,8 +190,18 @@ class ContractRuntime:
         codes = multiply_shift(raw, multiplier, shift).clamp(*self._format("model.embed_tokens.output").bounds)
         return codes
 
-    def _linear(self, name, value):
-        source = self._apply(value, name+".smooth", axis=-1, clamp=(-2048, 2047))
+    def _token0_rows(self, positions):
+        """Mask [T] các hàng ở vị trí tuyệt đối 0; None khi artifact không tách token 0 hoặc không có hàng nào."""
+        if not self.token0:
+            return None
+        rows = positions.reshape(-1) == 0
+        return rows if bool(rows.any()) else None
+
+    def _linear(self, name, value, token0=None):
+        input_bounds = (-(1 << (self.linear_input_bits-1)), (1 << (self.linear_input_bits-1))-1)
+        source = self._apply(value, name+".smooth", axis=-1, clamp=input_bounds)
+        if token0 is not None:
+            source[:, token0] = self._apply(value[:, token0], name+".smooth_token0", axis=-1, clamp=input_bounds)
         weight_name = "shared_embedding_lm_head.weight" if name == "lm_head" else name+".weight"
         try:
             weight = self.weights[weight_name]
@@ -199,6 +215,8 @@ class ContractRuntime:
         # Bound peak memory for the 49k-row tied output projection.
         chunk = 4096 if weight.shape[0] > 8192 else weight.shape[0]
         pair = self._coefficient(name+".to_v_cache" if direct_cache else name+".output")
+        pair0 = (None if token0 is None else
+                 self._coefficient(name+(".to_v_cache_token0" if direct_cache else ".output_token0")))
         for start in range(0, weight.shape[0], chunk):
             stop = min(start+chunk, weight.shape[0])
             accumulator = F.linear(source.to(torch.float64), weight[start:stop].to(torch.float64)).round().to(torch.int64)
@@ -207,6 +225,11 @@ class ContractRuntime:
                 multiplier, shift = multiplier[start:stop], shift[start:stop]
             bounds = (-(1 << 7), (1 << 7)-1) if direct_cache else target.bounds
             codes = multiply_shift(accumulator, multiplier, shift).clamp(*bounds)
+            if pair0 is not None:  # hàng vị trí 0 có scale accumulator riêng
+                multiplier0, shift0 = pair0
+                if multiplier0.ndim:
+                    multiplier0, shift0 = multiplier0[start:stop], shift0[start:stop]
+                codes[:, token0] = multiply_shift(accumulator[:, token0], multiplier0, shift0).clamp(*bounds)
             output[..., start:stop] = codes
         return output
 
@@ -267,9 +290,10 @@ class ContractRuntime:
     def _attention(self, index, hidden, positions, past, use_cache, attention_mask):
         prefix = f"model.layers.{index}.self_attn"
         batch, seq, _ = hidden.shape
+        token0 = self._token0_rows(positions)
         projected = {}
         for name in ("q_proj", "k_proj", "v_proj"):
-            projected[name] = self._linear(f"model.layers.{index}.self_attn.{name}", hidden)
+            projected[name] = self._linear(f"model.layers.{index}.self_attn.{name}", hidden, token0)
         q = projected["q_proj"].view(batch, seq, self.query_heads, self.head_dim).transpose(1, 2)
         k = projected["k_proj"].view(batch, seq, self.kv_heads, self.head_dim).transpose(1, 2)
         v = projected["v_proj"]
@@ -302,7 +326,7 @@ class ContractRuntime:
         pv = self._apply(pv, prefix+".pv_to_context", axis=1,
                          clamp=self._format(prefix+".context").bounds)
         context = pv.transpose(1, 2).contiguous().reshape(batch, seq, self.hidden_size)
-        output = self._linear(f"model.layers.{index}.self_attn.o_proj", context)
+        output = self._linear(f"model.layers.{index}.self_attn.o_proj", context, token0)
         return output
 
     def _silu(self, index, codes):
@@ -361,6 +385,7 @@ class ContractRuntime:
             raise ValueError("positions must be contiguous after the cached prefix")
         if past_length + seq > 512:
             raise ValueError("the prepared RoPE/cache contract is limited to 512 tokens")
+        token0 = self._token0_rows(positions)
         hidden = self._embedding(ids)
         for index in range(self.layer_count):
             residual = hidden
@@ -373,16 +398,16 @@ class ContractRuntime:
             norm_name = f"model.layers.{index}.post_attention_layernorm"
             normalized = self._rms(norm_name, residual, self._format(f"model.layers.{index}.residual_after_attention"))
             prefix = f"model.layers.{index}.mlp"
-            gate = self._linear(prefix+".gate_proj", normalized)
-            up = self._linear(prefix+".up_proj", normalized)
+            gate = self._linear(prefix+".gate_proj", normalized, token0)
+            up = self._linear(prefix+".up_proj", normalized, token0)
             activated = self._silu(index, gate)
             product = multiply_shift(activated*up, *self._coefficient(prefix+".product"))
             product = product.clamp(*self._format(prefix+".gate_product").bounds)
-            down = self._linear(prefix+".down_proj", product)
+            down = self._linear(prefix+".down_proj", product, token0)
             hidden = self._residual(index, "ffn", residual, down)
         final_source = self._format(f"model.layers.{self.layer_count-1}.residual_after_ffn")
         normalized = self._rms("model.norm", hidden, final_source)
-        logits = self._linear("lm_head", normalized)
+        logits = self._linear("lm_head", normalized, token0)
         logits_format = self._format("lm_head.output")
         scale = torch.as_tensor(logits_format.scale, dtype=torch.float64)
         if scale.ndim:

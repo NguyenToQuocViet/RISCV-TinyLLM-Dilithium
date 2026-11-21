@@ -396,8 +396,18 @@ class ContractAdapter:
                 source_codes = encode(value,source)[0],source
         if source_codes is not None:
             code, source = source_codes
+            # Biên mã đầu vào Linear theo activation_bits của baseline (12 -> [-2048, 2047]).
+            bounds = signed_bounds((getattr(self.baseline, "config", None) or {}).get("activation_bits", 12))
+            position0 = getattr(self.baseline, "position0", None)
+            rows0 = None if position0 is None else position0.rows_for(code)
+            if rows0 is not None:
+                delta0 = self.baseline.points[input_name+".token0"].fq.scale.double()
+                code0 = rescale(code, source.broadcast(value)/(smoothing*delta0),
+                                self.trial.get("coefficient_bits", 24)).clamp(*bounds)
             code = rescale(code, source.broadcast(value)/(smoothing*delta),
-                           self.trial.get("coefficient_bits", 24)).clamp(-2048, 2047)
+                           self.trial.get("coefficient_bits", 24)).clamp(*bounds)
+            if rows0 is not None:
+                code = torch.where(rows0.unsqueeze(-1), code0, code)
         else:
             raise RuntimeError(f"missing integer source metadata at {name}")
         weight_name = "shared_embedding_lm_head.weight" if name == "lm_head" else name+".weight"
@@ -426,7 +436,23 @@ class ContractAdapter:
                 exact_codes = rescale(exact,ratio,self.trial.get("coefficient_bits",24)).clamp(*target.bounds)
                 self.mac_checks[name]["different_post_requant_codes"] = int((fast_codes != exact_codes).sum())
         raw_fmt = Format(32, (delta*torch.tensor(wfmt.scale,dtype=torch.float64)).tolist(), -1)
+        if rows0 is not None:
+            return self.point(name+".output", self.token0_output(name, accumulator, wfmt, delta, delta0, rows0))
         return self.point(name+".output", decoded(accumulator, raw_fmt))
+
+    def token0_output(self, name, accumulator, wfmt, delta, delta0, rows0):
+        """Hàng vị trí 0 có scale accumulator delta0*w; requantize riêng rồi ghép với các hàng còn lại."""
+        coefficient_bits = self.trial.get("coefficient_bits", 24)
+        target = self.formats.get(name+".output")
+        if target is None:  # v_proj ghi thẳng vào V cache
+            if not name.endswith("v_proj"):
+                raise RuntimeError(f"missing output format at {name}")
+            cache_scale = self.baseline.points[name.removesuffix("v_proj")+"value_post_projection"].fq.scale.double()
+            target = Format(8, cache_scale.repeat_interleave(64).tolist(), -1)
+        weight_scale = torch.tensor(wfmt.scale, dtype=torch.float64)
+        normal, first = (encode(decoded(accumulator, Format(32, (scale*weight_scale).tolist(), -1)),
+                                target, coefficient_bits)[0] for scale in (delta, delta0))
+        return decoded(torch.where(rows0.unsqueeze(-1), first, normal), target)
 
     def norm(self, module, value, name, original, input_name):
         options = self.active_nonlinear("rms", name)
