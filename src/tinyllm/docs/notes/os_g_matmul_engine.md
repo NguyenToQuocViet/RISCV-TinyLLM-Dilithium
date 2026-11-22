@@ -131,6 +131,8 @@ Giả định: xung nhịp 250 MHz; một kênh DDR4-2400 64 bit (19,2 GB/s đ�
 
 : Ánh xạ phép tính lên mảng OS-G. $K$ là số phép cộng dồn cho mỗi kết quả; $L$ là số token đã có trong KV cache.
 
+Hình vẽ dữ liệu vào/ra mảng cho từng phép, cả prefill và decode, nằm ở ghi chú đi kèm [os_g_dataflow.pdf](os_g_dataflow.pdf).
+
 ## Số học và scale
 
 **Scale** là hệ số đổi mã số nguyên về giá trị thật: giá trị $\approx$ scale × mã. Số học của engine bám contract v1. Phần mềm tham chiếu là `quantize/ptq_contract_runtime.py`; RTL phải khớp nó từng bit.
