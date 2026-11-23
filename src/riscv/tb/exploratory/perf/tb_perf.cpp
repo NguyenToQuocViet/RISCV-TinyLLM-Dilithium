@@ -4,7 +4,8 @@
 //               (gnt=1, response one cycle later, one outstanding), MMIO timer,
 //               putchar and TEST_STATUS, plus pipeline event counters read from
 //               internal nets. Stats cover the window between the first and the
-//               last timer read.
+//               last timer read. With TB_TRACE=<file.csv> it also writes one
+//               row of control signals per cycle.
 // Author      : Claude Code (Anthropic)
 // Date        : 2026-11-20
 //------------------------------------------------------------------------------
@@ -50,6 +51,49 @@ static void print_stats(const char *tag, const Counters &c) {
            (unsigned long long)c.d_access);
 }
 
+// per-cycle trace: values after eval with clk=0, i.e. during the cycle,
+// just before the rising edge
+#define FC(x) r->core_top__DOT__if_stage__DOT__if_prefetch_unit__DOT__if_fetch_controller_unit__DOT__##x
+#define CT(x) r->core_top__DOT__##x
+
+static void trace_header(FILE *t) {
+    fprintf(t, "# sampled after eval with clk=0: values during the cycle, just before the rising edge\n");
+    fprintf(t, "cycle,instr_req,instr_addr,instr_gnt,instr_rvalid,"
+               "life0,life1,life2,killed0,killed1,killed2,head_ptr,issue_ptr,tail_ptr,prv,nxt,full,outst,"
+               "present_valid,present_slot,request_fire,raw_response_transfer,response_fire,killed_resp,"
+               "fetch_valid,fetch_accept,fetch_fire,fetch_slot,tail_free,alloc_fire,kill,kept_out,kept_q,"
+               "restart_slot,next_fetch_pc,pc_write,pc_write_slot,pc_write_data,instruction_write,"
+               "instruction_write_slot,fetch_pc,if_id_reg_valid,if_id_reg_pc,"
+               "advance_allowed,if_id_stall,if_id_flush,id_ex_stall,id_ex_flush,ex_mem_stall,mem_wb_stall,"
+               "load_use,mem_wait,id_ex_reg_valid,id_ex_reg_pc,id_ex_reg_control_flow,branch_condition,"
+               "redirect_req,redirect_fire,redirect_target,ex_mem_reg_valid,mem_wb_reg_valid,retire,"
+               "data_req,data_rvalid\n");
+}
+
+static void trace_row(FILE *t, uint64_t cyc, Vcore_top *top) {
+    auto *r = top->rootp;
+    fprintf(t, "%llu,%d,0x%08x,%d,%d,", (unsigned long long)cyc, top->instr_req, top->instr_addr,
+            top->instr_gnt, top->instr_rvalid);
+    fprintf(t, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,", FC(life)[0], FC(life)[1], FC(life)[2],
+            FC(killed)[0], FC(killed)[1], FC(killed)[2], FC(head_ptr), FC(issue_ptr), FC(tail_ptr),
+            FC(prv), FC(nxt), FC(full), FC(outst));
+    fprintf(t, "%d,%d,%d,%d,%d,%d,", FC(present_valid), FC(present_slot), FC(request_fire),
+            FC(raw_response_transfer), FC(response_fire), FC(killed_resp));
+    fprintf(t, "%d,%d,%d,%d,%d,%d,%d,%d,%d,", FC(fetch_valid), FC(fetch_accept), FC(fetch_fire),
+            FC(fetch_slot), FC(tail_free), FC(alloc_fire), FC(kill), FC(kept_out), FC(kept_q));
+    fprintf(t, "%d,0x%08x,%d,%d,0x%08x,%d,%d,", FC(restart_slot), FC(next_fetch_pc), FC(pc_write),
+            FC(pc_write_slot), FC(pc_write_data), FC(instruction_write), FC(instruction_write_slot));
+    fprintf(t, "0x%08x,%d,0x%08x,", CT(fetch_pc), CT(if_id_reg_valid), CT(if_id_reg_pc));
+    fprintf(t, "%d,%d,%d,%d,%d,%d,%d,%d,%d,", CT(advance_allowed), CT(if_id_stall), CT(if_id_flush),
+            CT(id_ex_stall), CT(id_ex_flush), CT(ex_mem_stall), CT(mem_wb_stall), CT(hcu__DOT__load_use),
+            CT(mem_wait));
+    fprintf(t, "%d,0x%08x,%d,%d,%d,%d,0x%08x,", CT(id_ex_reg_valid), CT(id_ex_reg_pc),
+            CT(id_ex_reg_control_flow), CT(ex_stage__DOT__branch_condition),
+            CT(ex_stage__DOT__ex_redirect__DOT__redirect_req), CT(redirect_fire), CT(redirect_target));
+    fprintf(t, "%d,%d,%d,%d,%d\n", CT(ex_mem_reg_valid), CT(mem_wb_reg_valid),
+            CT(mem_wb_reg_valid) && CT(advance_allowed), top->data_req, top->data_rvalid);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s <image.bin> [max_cycles] [trap_pc ...]\n", argv[0]);
@@ -80,6 +124,13 @@ int main(int argc, char **argv) {
     top->rst_n = 1;
     top->eval();
 
+    FILE *trace = nullptr;
+    if (const char *tp = getenv("TB_TRACE")) {
+        trace = fopen(tp, "w");
+        if (!trace) { perror(tp); return 3; }
+        trace_header(trace);
+    }
+
     bool i_pend = false, d_pend = false;
     uint32_t i_rdata = 0, d_rdata = 0;
     Counters all, at_first, at_last;
@@ -103,6 +154,7 @@ int main(int argc, char **argv) {
         if (r->core_top__DOT__hcu__DOT__load_use && !mwait) all.load_use++;
         if (r->core_top__DOT__redirect_fire) all.redirects++;
         if (!r->core_top__DOT__if_id_reg_valid) all.id_empty++;
+        if (trace) trace_row(trace, all.cycles, top);
 
         if (r->core_top__DOT__id_ex_reg_valid)
             for (uint32_t t : trap_pcs)
@@ -165,6 +217,7 @@ int main(int argc, char **argv) {
         if (status >= 0) break;
     }
     fflush(stdout);
+    if (trace) fclose(trace);
 
     if (!err && status < 0) {
         fprintf(stderr, "ERROR watchdog: no TEST_STATUS after %llu cycles\n",

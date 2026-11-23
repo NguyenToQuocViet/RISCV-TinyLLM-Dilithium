@@ -37,7 +37,7 @@ DH_FLAGS := -std=gnu99 -O2 -ffast-math -fno-common -fno-builtin-printf \
             -fno-tree-loop-distribute-patterns -Wno-implicit-int \
             -Wno-implicit-function-declaration -Wno-return-type -Iport_dhry
 
-.PHONY: all tb gate sw run fmax clean-perf
+.PHONY: all tb gate sw run trace fmax clean-perf
 
 all: tb gate sw run
 
@@ -98,6 +98,29 @@ gate: $(TB)
 	for b in p1_basic_O2 p2_fib_O2 p3_sha3_O2 p1_basic_O2_force_fail; do \
 	  $(PREFIX)objcopy -O binary $(SW)/build/$$b.elf $(B)/gate/$$b.bin; \
 	  $(TB) $(B)/gate/$$b.bin 20000000 > $(B)/gate/$$b.log 2>&1; echo "GATE $$b rc=$$?"; done
+
+# redirect trace: 3 asm probes, per-cycle control signals (TB_TRACE), run
+# twice (identical CSVs), packed into one xlsx (raw values, no analysis)
+TR       := $(B)/trace
+TR_PROGS := redir_beq redir_jal redir_jalr
+TR_XLSX  ?= $(ROOT)/docs/reports/2026-11-23-redirect-trace.xlsx
+
+$(TR)/%.bin: trace/%.S $(START)
+	mkdir -p $(TR)
+	$(CC) $(BASEFLAGS) $(START) $< -o $(TR)/$*.elf
+	$(call image,$(TR)/$*)
+
+trace: $(TB) $(addprefix $(TR)/,$(addsuffix .bin,$(TR_PROGS)))
+	for p in $(TR_PROGS); do \
+	  for k in 1 2; do TB_TRACE=$(TR)/$$p.run$$k.csv $(TB) $(TR)/$$p.bin 100000 $$(cat $(TR)/$$p.traps) \
+	    > $(TR)/$$p.run$$k.log 2>&1 || { cat $(TR)/$$p.run$$k.log; exit 1; }; done; \
+	  cmp -s $(TR)/$$p.run1.csv $(TR)/$$p.run2.csv && echo "$$p: two traces identical" || { echo "$$p: traces differ"; exit 1; }; \
+	  grep "TB_END\|TB_TOTAL" $(TR)/$$p.run1.log; \
+	done
+	$(PY) trace_to_xlsx.py $(TR_XLSX) $(PREFIX)objdump \
+	  BEQ:$(TR)/redir_beq.run1.csv:$(TR)/redir_beq.elf \
+	  JAL:$(TR)/redir_jal.run1.csv:$(TR)/redir_jal.elf \
+	  JALR:$(TR)/redir_jalr.run1.csv:$(TR)/redir_jalr.elf
 
 fmax:
 	for t in 3.0 3.5; do mkdir -p $(B)/impl_$$t; \
