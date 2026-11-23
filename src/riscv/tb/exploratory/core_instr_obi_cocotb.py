@@ -98,14 +98,15 @@ async def test_instr_steady_state(dut):
 
 
 @xp_test()
-async def test_instr_no_response_bypass(dut):
-    # G4-05: the word answered on edge E is in IF/ID one edge later at the earliest
+async def test_instr_response_bypass(dut):
+    # G4-05: RESPONSE_BYPASS=1 (IF-A4): the word answered on edge E is in IF/ID right after E
     core = Core(dut, [NOP] * 6 + finish(1))
     await run_pass(core)
     r0 = instr_resp(core)[0]["edge"]
-    check("IF/ID empty right after the first response edge", core.at(r0 + 1)["if_id_reg_valid"], 0)
+    check("IF/ID valid right after the first response edge", core.at(r0 + 1)["if_id_reg_valid"], 1)
+    check("IF/ID holds the first word", core.at(r0 + 1)["if_id_reg_pc"], 0)
     entry = core.edges(if_id_reg_valid=1, if_id_reg_pc=0)[0]
-    check("first entry not before response edge + 2", int(entry >= r0 + 2), 1)
+    check("first entry on response edge + 1", entry - r0, 1)
     check_clean(core)
 
 
@@ -152,15 +153,15 @@ async def test_redirect_disposition_unpresented(dut):
 
 @xp_test()
 async def test_redirect_target_timing(dut):
-    # G4-08g: the target is requested two cycles after the redirect cycle at the earliest
+    # G4-08g: the target is presented directly from next_fetch_pc in the cycle after
+    # the redirect cycle (IF-A4); with gnt delay 0 no kept QUEUED entry is ahead of it
     core = Core(dut, REDIRECT)
     await run_pass(core)
     red = core.edges(redirect_fire=1)[0]
-    for e in (red, red + 1):
-        s = core.at(e)
-        check(f"edge {e} no target request", int(s["instr_req"] == 1 and s["instr_addr"] == 0x30), 0)
+    s = core.at(red)
+    check(f"edge {red} no target request", int(s["instr_req"] == 1 and s["instr_addr"] == 0x30), 0)
     first_target = core.edges(instr_req=1, instr_addr=0x30)[0]
-    check("target not before redirect + 2", int(first_target >= red + 2), 1)
+    check("target requested one cycle after the redirect cycle", first_target - red, 1)
     check("redirect target net", core.at(red)["redirect_target"], 0x30)
     check_clean(core)
 

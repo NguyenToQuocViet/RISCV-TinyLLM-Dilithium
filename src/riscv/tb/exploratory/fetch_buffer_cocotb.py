@@ -1,6 +1,6 @@
 #------------------------------------------------------------------------------
 # Module      : fetch_buffer_cocotb
-# Description : Directed tests of fetch_buffer (D-FB-01..05).
+# Description : Directed tests of fetch_buffer (D-FB-01..07).
 # Author      : Claude Code (Anthropic)
 # Date        : 2026-11-19
 #------------------------------------------------------------------------------
@@ -131,3 +131,35 @@ async def test_write_visible_after_edge(dut):
     expect(dut, fetch_instruction=INS_D, fetch_pc=0x20)
     await edge(dut)
     expect(dut, fetch_pc=0x20, fetch_instruction=INS_B)
+
+
+@xp_test()
+async def test_direct_mux(dut):
+    # D-FB-06: present_direct high shows pc_write_data within the cycle, low shows the stored pc (IF-A4)
+    start_clock(dut)
+    await fill(dut)
+    await at_fall(dut, pc_write=0, instruction_write=0, present_slot=1, fetch_slot=1,
+                  present_direct=1, pc_write_data=PC_D)
+    expect(dut, present_pc=PC_D, fetch_pc=PC_B)
+    drive(dut, pc_write_data=PC_E)
+    await settle()
+    expect(dut, present_pc=PC_E, fetch_pc=PC_B)
+    drive(dut, present_direct=0)
+    await settle()
+    expect(dut, present_pc=PC_B, fetch_pc=PC_B)
+
+
+@xp_test()
+async def test_bypass_mux(dut):
+    # D-FB-07: fetch_bypass high shows instruction_write_data within the cycle, fetch_pc stays stored
+    start_clock(dut)
+    await fill(dut)
+    await at_fall(dut, pc_write=0, instruction_write=0, present_slot=2, fetch_slot=2,
+                  fetch_bypass=1, instruction_write_data=INS_D)
+    expect(dut, fetch_instruction=INS_D, fetch_pc=PC_C, present_pc=PC_C)
+    drive(dut, instruction_write_data=INS_E)
+    await settle()
+    expect(dut, fetch_instruction=INS_E, fetch_pc=PC_C)
+    drive(dut, fetch_bypass=0)
+    await settle()
+    expect(dut, fetch_instruction=INS_C, fetch_pc=PC_C)
