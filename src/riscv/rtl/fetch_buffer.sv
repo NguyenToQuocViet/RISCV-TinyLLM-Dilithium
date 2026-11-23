@@ -19,7 +19,9 @@ module fetch_buffer
     input logic [INSTR_WIDTH-1:0] instruction_write_data,
 
     input logic [1:0] present_slot,
+    input logic present_direct,
     input logic [1:0] fetch_slot,
+    input logic fetch_bypass,
 
     output logic [ADDR_WIDTH-1:0] present_pc,
     output logic [ADDR_WIDTH-1:0] fetch_pc,
@@ -28,9 +30,9 @@ module fetch_buffer
     logic [ADDR_WIDTH-1:0]  pc [FETCH_DEPTH];
     logic [INSTR_WIDTH-1:0] instruction [FETCH_DEPTH];
 
-    assign present_pc           = pc[present_slot];
+    assign present_pc           = present_direct ? pc_write_data : pc[present_slot];
     assign fetch_pc             = pc[fetch_slot];
-    assign fetch_instruction    = instruction[fetch_slot];
+    assign fetch_instruction    = fetch_bypass ? instruction_write_data : instruction[fetch_slot];
 
     //pc payload (no reset)
     always_ff @(posedge clk) begin

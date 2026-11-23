@@ -31,7 +31,9 @@ module fetch_controller_unit
     output logic [1:0] instruction_write_slot,
 
     output logic [1:0] present_slot,
-    output logic [1:0] fetch_slot
+    output logic present_direct,
+    output logic [1:0] fetch_slot,
+    output logic fetch_bypass
 );
     logic [ADDR_WIDTH-1:0] next_fetch_pc;
 
@@ -74,12 +76,17 @@ module fetch_controller_unit
 
     logic kill;
     logic alloc_fire;
+    logic started;  //0 until the first edge after reset
 
     assign kill = redirect_fire;
 
-    //to OBI and IF/ID
-    assign fetch_valid      = (life[tail_ptr] == LIFE_READY);
-    assign present_valid    = (life[issue_ptr] == LIFE_QUEUED);
+    //to OBI and IF/ID; a free issue slot presents next_fetch_pc directly
+    assign present_direct   = (life[issue_ptr] == LIFE_FREE);
+    //response bypass: a live OUTSTANDING oldest entry is offered in its response cycle
+    assign fetch_bypass     = (life[tail_ptr] == LIFE_OUTSTANDING);
+    assign fetch_valid      = (life[tail_ptr] == LIFE_READY)
+                           || (fetch_bypass && !killed[tail_ptr] && raw_response_transfer);
+    assign present_valid    = (life[issue_ptr] == LIFE_QUEUED) || (started && present_direct);
 
     //internal ring status
     logic [1:0] prv;
@@ -114,6 +121,15 @@ module fetch_controller_unit
     assign kept_q       = present_valid;
     assign nxt          = next_slot(issue_ptr);
     assign restart_slot = kept_q ? nxt : issue_ptr;
+
+    //start bit: gates direct presentation, so req stays low in reset
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            started <= 1'b0;
+        end else begin
+            started <= 1'b1;
+        end
+    end
 
     //head pointer
     always_ff @(posedge clk or negedge rst_n) begin
@@ -182,12 +198,14 @@ module fetch_controller_unit
                 life[issue_ptr] <= LIFE_OUTSTANDING;
             end
 
+            //after the response: a bypassed delivery frees the slot, not READY
             if (tail_free) begin
                 life[tail_ptr] <= LIFE_FREE;
             end
 
-            //last: may reuse the slot freed on this edge
-            if (alloc_fire) begin
+            //last: may reuse the slot freed on this edge;
+            //a direct presentation granted on this edge stays OUTSTANDING
+            if (alloc_fire && !(present_direct && request_fire)) begin
                 life[head_ptr] <= LIFE_QUEUED;
             end
         end

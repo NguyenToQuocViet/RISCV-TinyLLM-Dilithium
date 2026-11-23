@@ -37,7 +37,9 @@ module prefetch_unit
     logic instruction_write;
     logic [1:0] instruction_write_slot;
     logic [1:0] present_slot;
+    logic present_direct;
     logic [1:0] fetch_slot;
+    logic fetch_bypass;
 
     logic present_valid;
     logic [ADDR_WIDTH-1:0] present_pc;
@@ -68,7 +70,9 @@ module prefetch_unit
         .instruction_write_slot (instruction_write_slot),
 
         .present_slot           (present_slot),
-        .fetch_slot             (fetch_slot)
+        .present_direct         (present_direct),
+        .fetch_slot             (fetch_slot),
+        .fetch_bypass           (fetch_bypass)
     );
 
     fetch_buffer if_fetch_buffer (
@@ -83,7 +87,9 @@ module prefetch_unit
         .instruction_write_data (response_data),
 
         .present_slot           (present_slot),
+        .present_direct         (present_direct),
         .fetch_slot             (fetch_slot),
+        .fetch_bypass           (fetch_bypass),
 
         .present_pc             (present_pc),
         .fetch_pc               (fetch_pc),

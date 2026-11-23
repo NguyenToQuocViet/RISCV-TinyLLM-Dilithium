@@ -66,7 +66,7 @@ async def trace(dut, b):
     await drive(dut, redirect_target=b)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x0)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=0, fetch_valid=0, pc_write_data=b)
+    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=1, present_direct=1, fetch_valid=0, pc_write_data=b)
 
     await drive(dut)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=b)
@@ -253,7 +253,7 @@ async def test_redirect_loads_target(dut):
     await drive(dut, redirect_target=0x40)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x0)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=0, fetch_valid=0, pc_write_data=0x40)
+    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=1, present_direct=1, fetch_valid=0, pc_write_data=0x40)
 
     await drive(dut)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x40)
@@ -312,7 +312,7 @@ async def test_redirect_all_ready(dut):
     await drive(dut, redirect_target=0x100)
     check_outputs(dut, pc_write=0, instruction_write=0)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=0, fetch_valid=0, pc_write_data=0x100)
+    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=1, present_direct=1, fetch_valid=0, pc_write_data=0x100)
 
     await drive(dut)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x100)
@@ -339,7 +339,7 @@ async def test_redirect_ignores_delivery(dut):
     await drive(dut, redirect_target=0x100, fetch_accept=1)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x2C, instruction_write=0)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=0, fetch_valid=0, pc_write_data=0x100)
+    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=1, present_direct=1, fetch_valid=0, pc_write_data=0x100)
 
     await drive(dut)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x100)
@@ -366,7 +366,7 @@ async def test_redirect_trace_kept_entries(dut):
     await drive(dut, redirect_target=0x100, request_fire=1, raw_response_transfer=1)
     check_outputs(dut, pc_write=0, instruction_write=1, instruction_write_slot=1)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=2, present_valid=0, fetch_valid=0, pc_write_data=0x100)
+    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=2, present_valid=1, present_direct=1, fetch_valid=0, pc_write_data=0x100)
 
     await drive(dut)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x100)
@@ -374,12 +374,16 @@ async def test_redirect_trace_kept_entries(dut):
     check_outputs(dut, pc_write_slot=1, present_slot=0, fetch_slot=2, present_valid=1, fetch_valid=0, pc_write_data=0x104)
 
     await drive(dut, request_fire=1, raw_response_transfer=1)
-    check_outputs(dut, pc_write=1, pc_write_slot=1, pc_write_data=0x104, instruction_write=1, instruction_write_slot=2)
+    check_outputs(dut, pc_write=1, pc_write_slot=1, pc_write_data=0x104, instruction_write=1, instruction_write_slot=2, fetch_valid=0)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=2, present_slot=1, fetch_slot=0, present_valid=1, fetch_valid=0, pc_write_data=0x108)
+    # slot 0 is the live OUTSTANDING oldest entry; the response input is still high (FCU-D12)
+    check_outputs(dut, pc_write_slot=2, present_slot=1, fetch_slot=0, present_valid=1, fetch_valid=1, fetch_bypass=1, pc_write_data=0x108)
 
-    await drive(dut)
-    check_outputs(dut, pc_write=1, pc_write_slot=2, pc_write_data=0x108)
+    # sec 7 trace edge 4: the target is delivered from the response word
+    await drive(dut, fetch_accept=1, request_fire=1, raw_response_transfer=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=2, pc_write_data=0x108, instruction_write=1, instruction_write_slot=0, fetch_valid=1, fetch_bypass=1)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=0, present_slot=2, fetch_slot=1, present_valid=1, present_direct=0, fetch_bypass=1, pc_write_data=0x10C)
 
 @cocotb.test()
 async def test_redirect_keeps_outstanding_and_queued(dut):
@@ -411,7 +415,7 @@ async def test_redirect_keeps_outstanding_and_queued(dut):
     await drive(dut, request_fire=1, raw_response_transfer=1)
     check_outputs(dut, pc_write=1, pc_write_slot=1, pc_write_data=0x108, instruction_write=1, instruction_write_slot=1)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=2, present_slot=0, fetch_slot=2, present_valid=1, fetch_valid=0, pc_write_data=0x10C)
+    check_outputs(dut, pc_write_slot=2, present_slot=0, fetch_slot=2, present_valid=1, fetch_valid=1, fetch_bypass=1, pc_write_data=0x10C)
 
     await drive(dut, request_fire=1, raw_response_transfer=1)
     check_outputs(dut, pc_write=0, instruction_write=1, instruction_write_slot=2)
@@ -448,7 +452,7 @@ async def test_redirect_all_queued(dut):
     await drive(dut, request_fire=1, raw_response_transfer=1)
     check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x108, instruction_write=1, instruction_write_slot=0)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=1, present_slot=2, fetch_slot=1, present_valid=1, fetch_valid=0, pc_write_data=0x10C)
+    check_outputs(dut, pc_write_slot=1, present_slot=2, fetch_slot=1, present_valid=1, fetch_valid=1, fetch_bypass=1, pc_write_data=0x10C)
 
     await drive(dut, raw_response_transfer=1)
     check_outputs(dut, pc_write=0, instruction_write=1, instruction_write_slot=1)
@@ -501,42 +505,39 @@ async def test_pointer_wrap(dut):
     await drive(dut, redirect_target=0x20, request_fire=1, raw_response_transfer=1)
     check_outputs(dut, pc_write=1, pc_write_slot=2, pc_write_data=0x8, instruction_write=1, instruction_write_slot=0)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=2, present_slot=2, fetch_slot=1, present_valid=0, fetch_valid=0, pc_write_data=0x20)
+    check_outputs(dut, pc_write_slot=2, present_slot=2, fetch_slot=1, present_valid=1, present_direct=1, fetch_valid=0, pc_write_data=0x20)
 
-    await drive(dut, redirect_target=0x20, raw_response_transfer=1)
+    # fill: drain the killed slot 1 while 0x20 is presented directly and granted
+    await drive(dut, request_fire=1, raw_response_transfer=1)
     check_outputs(dut, pc_write=1, pc_write_slot=2, pc_write_data=0x20, instruction_write=1, instruction_write_slot=1)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=2, present_slot=2, fetch_slot=2, present_valid=0, fetch_valid=0, pc_write_data=0x20)
-
-    await drive(dut)
-    check_outputs(dut, pc_write=1, pc_write_slot=2, pc_write_data=0x20)
-    await next_edge(dut)
-    check_outputs(dut, pc_write_slot=0, present_slot=2, fetch_slot=2, present_valid=1, fetch_valid=0, pc_write_data=0x24)
-
-    await drive(dut, request_fire=1)
-    check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x24)
-    await next_edge(dut)
-    check_outputs(dut, pc_write_slot=1, present_slot=0, fetch_slot=2, present_valid=1, fetch_valid=0, pc_write_data=0x28)
+    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=2, present_valid=1, present_direct=1, pc_write_data=0x24)
 
     await drive(dut, request_fire=1, raw_response_transfer=1)
-    check_outputs(dut, pc_write=1, pc_write_slot=1, pc_write_data=0x28, instruction_write=1, instruction_write_slot=2)
+    check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x24, instruction_write=1, instruction_write_slot=2)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=2, present_slot=1, fetch_slot=2, present_valid=1, fetch_valid=1, pc_write_data=0x2C)
+    check_outputs(dut, pc_write_slot=1, present_slot=1, fetch_slot=2, present_valid=1, present_direct=1, fetch_valid=1, pc_write_data=0x28)
 
-    await drive(dut, fetch_accept=1, request_fire=1, raw_response_transfer=1)
-    check_outputs(dut, pc_write=1, pc_write_slot=2, pc_write_data=0x2C, instruction_write=1, instruction_write_slot=0)
+    await drive(dut, request_fire=1, raw_response_transfer=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=1, pc_write_data=0x28, instruction_write=1, instruction_write_slot=0)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=0, present_slot=2, fetch_slot=0, present_valid=1, fetch_valid=1, pc_write_data=0x30)
+    check_outputs(dut, pc_write_slot=2, present_slot=2, fetch_slot=2, present_valid=0, fetch_valid=1, pc_write_data=0x2C)
 
-    await drive(dut, fetch_accept=1, request_fire=1, raw_response_transfer=1)
-    check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x30, instruction_write=1, instruction_write_slot=1)
+    # steady: deliveries 0x20, 0x24, 0x28
+    await drive(dut, fetch_accept=1, raw_response_transfer=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=2, pc_write_data=0x2C, instruction_write=1, instruction_write_slot=1)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=1, present_slot=0, fetch_slot=1, present_valid=1, fetch_valid=1, pc_write_data=0x34)
+    check_outputs(dut, pc_write_slot=0, present_slot=2, fetch_slot=0, present_valid=1, present_direct=0, fetch_valid=1, pc_write_data=0x30)
+
+    await drive(dut, fetch_accept=1, request_fire=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x30, instruction_write=0)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=1, present_slot=0, fetch_slot=1, present_valid=1, present_direct=0, fetch_valid=1, pc_write_data=0x34)
 
     await drive(dut, fetch_accept=1, request_fire=1, raw_response_transfer=1)
     check_outputs(dut, pc_write=1, pc_write_slot=1, pc_write_data=0x34, instruction_write=1, instruction_write_slot=2)
     await next_edge(dut)
-    check_outputs(dut, pc_write_slot=2, present_slot=1, fetch_slot=2, present_valid=1, fetch_valid=1, pc_write_data=0x38)
+    check_outputs(dut, pc_write_slot=2, present_slot=1, fetch_slot=2, present_valid=1, present_direct=0, fetch_valid=1, pc_write_data=0x38)
 
 @cocotb.test()
 async def test_slot_reuse_same_edge(dut):
@@ -594,3 +595,117 @@ async def test_unexpected_response(dut):
     check_outputs(dut, pc_write=0, instruction_write=0)
     await next_edge(dut)
     check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=0, present_valid=0, fetch_valid=1, pc_write_data=0x2C)
+
+@cocotb.test()
+async def test_start_after_reset(dut):
+    # sec 9 Start after reset: no direct presentation before the first edge
+    start_clock(dut)
+    await reset(dut)
+
+    await drive(dut)
+    check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x0, present_valid=0, present_direct=1)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=1, present_slot=0, present_valid=1, present_direct=0, pc_write_data=0x4)
+
+@cocotb.test()
+async def test_direct_presentation_grant(dut):
+    # sec 9 Direct presentation with a grant
+    start_clock(dut)
+    await reset(dut)
+
+    await drive(dut, redirect_target=0x40)
+    await next_edge(dut)
+    await drive(dut, request_fire=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x40, present_slot=0, present_valid=1, present_direct=1)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=1, present_slot=1, fetch_slot=0, present_valid=1, present_direct=1, pc_write_data=0x44)
+
+    # slot 0 answers as OUTSTANDING: it never passed QUEUED
+    await drive(dut, raw_response_transfer=1)
+    check_outputs(dut, instruction_write=1, instruction_write_slot=0, fetch_valid=1, fetch_bypass=1)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=2, present_slot=1, fetch_slot=0, present_valid=1, present_direct=0, fetch_valid=1, fetch_bypass=0, pc_write_data=0x48)
+
+@cocotb.test()
+async def test_direct_presentation_no_grant(dut):
+    # sec 9 Direct presentation without a grant
+    start_clock(dut)
+    await reset(dut)
+
+    await drive(dut, redirect_target=0x40)
+    await next_edge(dut)
+    await drive(dut)
+    check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x40, present_slot=0, present_valid=1, present_direct=1)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=1, present_slot=0, fetch_slot=0, present_valid=1, present_direct=0, fetch_valid=0, pc_write_data=0x44)
+
+    await drive(dut, request_fire=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=1, pc_write_data=0x44)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=2, present_slot=1, fetch_slot=0, present_valid=1, present_direct=0, fetch_valid=0, pc_write_data=0x48)
+
+@cocotb.test()
+async def test_redirect_direct_presented(dut):
+    # sec 9 Redirect with a slot presented directly
+    start_clock(dut)
+    await reset(dut)
+
+    await drive(dut, redirect_target=0x20)
+    await next_edge(dut)
+    await drive(dut, request_fire=1)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=1, present_slot=1, fetch_slot=0, present_valid=1, present_direct=1, pc_write_data=0x24)
+
+    await drive(dut, redirect_target=0x100, request_fire=1, raw_response_transfer=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=1, pc_write_data=0x24, instruction_write=1, instruction_write_slot=0)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=2, present_slot=2, fetch_slot=1, present_valid=1, present_direct=1, fetch_valid=0, pc_write_data=0x100)
+
+    # killed drain of slot 1 while the target is presented directly and granted
+    await drive(dut, request_fire=1, raw_response_transfer=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=2, pc_write_data=0x100, instruction_write=1, instruction_write_slot=1, fetch_valid=0)
+    await next_edge(dut)
+    check_outputs(dut, pc_write_slot=0, present_slot=0, fetch_slot=2, present_valid=1, present_direct=1, pc_write_data=0x104)
+
+    await drive(dut, fetch_accept=1, request_fire=1, raw_response_transfer=1)
+    check_outputs(dut, pc_write=1, pc_write_slot=0, pc_write_data=0x104, instruction_write=1, instruction_write_slot=2, fetch_valid=1, fetch_bypass=1, fetch_slot=2)
+    await next_edge(dut)
+    # slot 2 freed without READY; slot 0 is the oldest entry, OUTSTANDING 0x104
+    check_outputs(dut, pc_write_slot=1, present_slot=1, fetch_slot=0, present_valid=1, present_direct=1, fetch_bypass=1, pc_write_data=0x108)
+    await drive(dut)
+    check_outputs(dut, fetch_valid=0, fetch_bypass=1, fetch_slot=0)
+
+@cocotb.test()
+async def test_response_bypass(dut):
+    # sec 9 Response bypass, accepted and held; killed drain is never bypassed
+    start_clock(dut)
+    await reset(dut)
+
+    await drive(dut, redirect_target=0x40)
+    await next_edge(dut)
+    await drive(dut, request_fire=1)
+    await next_edge(dut)
+    # slot 0 live OUTSTANDING at tail_ptr, slot 1 presented directly
+    await drive(dut)
+    check_outputs(dut, fetch_slot=0, fetch_bypass=1, fetch_valid=0)
+
+    # held: response with fetch_accept low; slot 0 becomes READY, and slot 1,
+    # presented directly without a grant, becomes QUEUED with 0x44
+    await drive(dut, raw_response_transfer=1)
+    check_outputs(dut, fetch_valid=1, fetch_bypass=1, instruction_write=1, instruction_write_slot=0)
+    await next_edge(dut)
+    await drive(dut)
+    check_outputs(dut, fetch_slot=0, fetch_valid=1, fetch_bypass=0, present_slot=1, present_valid=1, present_direct=0)
+
+    # deliver READY slot 0 while slot 1 (0x44) is granted; 0x48 is allocated as QUEUED
+    await drive(dut, fetch_accept=1, request_fire=1)
+    await next_edge(dut)
+    await drive(dut)
+    check_outputs(dut, fetch_slot=1, fetch_bypass=1, fetch_valid=0, present_slot=2, present_direct=0, pc_write_data=0x4C)
+
+    # accepted: response of slot 1 is delivered on its edge, the slot is freed without READY
+    await drive(dut, fetch_accept=1, raw_response_transfer=1)
+    check_outputs(dut, fetch_valid=1, fetch_bypass=1, fetch_slot=1, instruction_write=1, instruction_write_slot=1)
+    await next_edge(dut)
+    await drive(dut)
+    check_outputs(dut, fetch_slot=2, fetch_valid=0, fetch_bypass=0, present_slot=2, present_valid=1, pc_write_slot=1, pc_write_data=0x50)
