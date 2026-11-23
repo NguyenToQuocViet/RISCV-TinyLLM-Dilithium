@@ -132,6 +132,9 @@ class Core:
                 self.status = "grant limit"
             if s[f"{p}_rvalid"] and self._out[p]:
                 self._out[p] -= 1
+                # response latency is per transaction: the age restarts when the
+                # oldest one is answered, even if the port never idles
+                self._resp_age[p] = 0
             if s[f"{p}_req"] and s[f"{p}_gnt"]:
                 self._out[p] += 1
             self._resp_age[p] = self._resp_age[p] + 1 if self._out[p] else 0
