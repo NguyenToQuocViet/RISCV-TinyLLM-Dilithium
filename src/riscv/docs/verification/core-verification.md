@@ -303,7 +303,7 @@ Contract and record gaps (no change made here):
 - Fill patterns (illegal word for unprogrammed code, fixed pattern for data): test choice, logged.
 - MMIO fixture base `0x0001_8000`: `MMIO` allows documented test-local addresses.
 - Helper names and file names in `tb/common/`: `VERIFICATION_CONVENTIONS.md` naming (verbs for helpers).
-- Redirect target timing in G4-08g asserts a bound only, because `SR` says "at the earliest".
+- Redirect target timing in G4-08g asserts the exact cycle since IF-A4 (2026-11-23): the target is presented directly one cycle after the redirect cycle when no kept QUEUED entry is ahead of it, which holds at gnt delay 0.
 - Sheet migration (Brief 006): split rows share their parent's test function; the stimulus snippets (registers, small literals such as `0x11`, `x2=0x100`) are the author's illustrative choices and every expected value is a relation or a literal computed from them.
 
 ## 14. Not established by this plan
