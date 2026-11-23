@@ -3,8 +3,8 @@
 | Field | Value |
 | --- | --- |
 | Description | Stateless instruction OBI port for the selected fetch entry, with request and raw response events to the fetch controller. |
-| Last modified | 2026-11-07 |
-| Status | Accepted by Việt on 2026-11-07 |
+| Last modified | 2026-11-23 |
+| Status | Accepted by Việt on 2026-11-23 |
 | Owner | Nguyễn Tô Quốc Việt |
 | RTL | `rtl/fetch_obi_interface.sv`, module `fetch_obi_interface`, instance `if_fetch_obi_interface` in `prefetch_unit` |
 | Parent | [Fetch stage](fetch-stage.md); [five-stage BASE core](5-stage-baseline-core.md); [Fetch Controller Unit](fetch-controller-unit.md); [Fetch Buffer](fetch-buffer.md) |
@@ -89,7 +89,7 @@ rdata <- instruction OBI subordinate          |   fetch_obi_interface    | -> wd
 ## 7. Timing and Control
 
 - Every output is combinational in the same cycle, so the leaf adds no latency.
-- No path from `gnt`, `rvalid`, `rdata` or `rst_n` reaches `req` or `addr`, because BASE forbids a response bypass ([capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states)).
+- No path from `gnt`, `rvalid`, `rdata` or `rst_n` reaches `req` or `addr`, because BASE forbids a path from a response to a request; the response bypass of IF-A4 reaches only IF/ID ([capacity and transaction states](5-stage-baseline-core.md#instruction-fetch-capacity-and-transaction-states)).
 - `req` ignores the outstanding entry, so the one-outstanding limit comes from `gnt`.
 - After a request transfer, the next presented entry may drive `req` in the next cycle, and the leaf adds no idle cycle.
 
@@ -158,6 +158,6 @@ rdata <- instruction OBI subordinate          |   fetch_obi_interface    | -> wd
 | FOI-D5 | `req` is not gated by `rst_n`. | The BASE reset wording already drops `req` when the controller clears `present_valid`, and a gate would put a reset term on the port path. |
 | FOI-D6 | `rdata` passes through as `response_data`, as the accepted fetch-stage wiring routes it. | It avoids editing an accepted parent document for a port with no logic. |
 
-- History: 2026-11-01 the Owner settled FOI-O1 to FOI-O6; 2026-11-04 and 2026-11-06 the peers moved with IF-A3; 2026-11-07 rewritten in the block spec format, IDs renumbered.
+- History: 2026-11-01 the Owner settled FOI-O1 to FOI-O6; 2026-11-04 and 2026-11-06 the peers moved with IF-A3; 2026-11-07 rewritten in the block spec format, IDs renumbered. 2026-11-23 IF-A4: no port or logic change; the reason in section 7 now names the request path, because the response bypass reaches only IF/ID.
 - Old ID map: FOI-O1 to FOI-O6 map to FOI-D1 to FOI-D6 in order; all kept.
 - Open items: none.

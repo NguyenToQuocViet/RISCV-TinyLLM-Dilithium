@@ -3,8 +3,8 @@
 | Field | Value |
 | --- | --- |
 | Description | Indexed pc and instruction payload array; no reset and no control. |
-| Last modified | 2026-11-07 |
-| Status | Accepted by Việt on 2026-11-07 |
+| Last modified | 2026-11-23 |
+| Status | Accepted by Việt on 2026-11-23 |
 | Owner | Nguyễn Tô Quốc Việt |
 | RTL | `rtl/fetch_buffer.sv`, module `fetch_buffer`, instance `if_fetch_buffer` in `prefetch_unit` |
 | Parent | [Five-stage BASE core](5-stage-baseline-core.md#instruction-fetch-organization) (IF-A3); [Fetch stage](fetch-stage.md) §3 and §4; [Fetch Controller Unit](fetch-controller-unit.md) |
@@ -14,6 +14,7 @@
 - The fetch buffer stores the `pc` and the `instruction` of each of the three fetch slots.
 - It holds no slot state, pointer, killed mark or choice of slot, because the [Fetch Controller Unit](fetch-controller-unit.md) owns those.
 - A read of a slot returns the last value written to that slot on an earlier edge with its write enable high.
+- Two read muxes bypass the arrays (IF-A4): `present_pc` can show `pc_write_data` for a direct presentation, and `fetch_instruction` can show `instruction_write_data` for a bypassed response.
 
 ## 2. Block Design
 
@@ -28,7 +29,9 @@ instruction_write <- fetch_controller_unit        |       fetch_buffer       |
 instruction_write_slot <- fetch_controller_unit   |                          |
 instruction_write_data <- fetch_obi_interface     |                          |
 present_slot <- fetch_controller_unit             |                          |
+present_direct <- fetch_controller_unit           |                          |
 fetch_slot <- fetch_controller_unit               |                          |
+fetch_bypass <- fetch_controller_unit             |                          |
                                                   +--------------------------+
 ```
 
@@ -47,15 +50,17 @@ fetch_slot <- fetch_controller_unit               |                          |
 | `instruction_write_slot` | Input | 2 | `fetch_controller_unit` | Slot that an `instruction_write` writes. |
 | `instruction_write_data` | Input | `INSTR_WIDTH` | `fetch_obi_interface` | Instruction word that an `instruction_write` stores. It is the `response_data` of the OBI leaf. |
 | `present_slot` | Input | 2 | `fetch_controller_unit` | Slot that `present_pc` reads. |
+| `present_direct` | Input | 1 | `fetch_controller_unit` | High selects `pc_write_data` for `present_pc` instead of the stored `pc`. |
 | `fetch_slot` | Input | 2 | `fetch_controller_unit` | Slot that `fetch_pc` and `fetch_instruction` read. |
-| `present_pc` | Output | `ADDR_WIDTH` | `fetch_obi_interface` | The stored `pc` of the slot that `present_slot` selects. |
+| `fetch_bypass` | Input | 1 | `fetch_controller_unit` | High selects `instruction_write_data` for `fetch_instruction` instead of the stored `instruction`. |
+| `present_pc` | Output | `ADDR_WIDTH` | `fetch_obi_interface` | `pc_write_data` when `present_direct` is high, otherwise the stored `pc` of the slot that `present_slot` selects. |
 | `fetch_pc` | Output | `ADDR_WIDTH` | `fetch_stage` | The stored `pc` of the slot that `fetch_slot` selects. |
-| `fetch_instruction` | Output | `INSTR_WIDTH` | `fetch_stage` | The stored `instruction` of the slot that `fetch_slot` selects. |
+| `fetch_instruction` | Output | `INSTR_WIDTH` | `fetch_stage` | `instruction_write_data` when `fetch_bypass` is high, otherwise the stored `instruction` of the slot that `fetch_slot` selects. |
 
 ## 4. Internal Structure
 
 - The buffer holds two arrays of three entries: one for `pc` and one for `instruction`.
-- It holds three read selectors, one for each output.
+- It holds three read selectors, one for each output, and two 2:1 muxes on `present_pc` and `fetch_instruction`.
 - It has no sub-blocks.
 
 ## 5. State
@@ -67,7 +72,8 @@ fetch_slot <- fetch_controller_unit               |                          |
 
 ## 6. Behavior
 
-- Each output is the stored value at its read slot, at all times.
+- `fetch_pc` is the stored value at its read slot, at all times.
+- `present_pc` and `fetch_instruction` are the stored value at their read slot while their select is low, and the matching write data while it is high.
 - Each array changes only on a rising edge that writes it.
 
 | Condition at the edge | `pc` array after the edge | `instruction` array after the edge |
@@ -84,15 +90,17 @@ fetch_slot <- fetch_controller_unit               |                          |
 
 - The arrays are registered storage and the three reads are combinational.
 - A written value appears at the outputs after the write edge, with no further delay.
-- The outputs depend only on the stored values and the two read slots, which the controller drives from registers.
-- Write enables, write slots and write data are sampled only at the edge and reach no output within a cycle ([fetch stage](fetch-stage.md) §2).
+- The read slots and the two selects come from controller registers.
+- `pc_write_data` reaches `present_pc` within a cycle through the direct mux; it is the controller's `next_fetch_pc` register, so `present_pc` still depends on registered state only.
+- `instruction_write_data` reaches `fetch_instruction` within a cycle through the bypass mux; this is the response bypass path (IF-A4).
+- Write enables and write slots are sampled only at the edge and reach no output within a cycle.
 
 ### When valid
 
 | Signal group | When valid |
 | --- | --- |
-| `present_pc` | While `fetch_controller_unit` presents an entry in the selected slot, after that entry's `pc` write edge. It stays valid for a killed entry that is still presented, until its request fires. |
-| `fetch_pc`, `fetch_instruction` | While `fetch_controller_unit` reports a deliverable entry in the slot that `fetch_slot` selects. `fetch_instruction` also needs that entry's response written. |
+| `present_pc` | While `fetch_controller_unit` presents an entry in the selected slot, after that entry's `pc` write edge, or presents directly with `present_direct` high. It stays valid for a killed entry that is still presented, until its request fires. |
+| `fetch_pc`, `fetch_instruction` | While `fetch_controller_unit` reports a deliverable entry in the slot that `fetch_slot` selects. With `fetch_bypass` low, `fetch_instruction` needs that entry's response written; with it high, it is the response word in the cycle. |
 
 ### Reset, stall, flush
 
@@ -110,6 +118,8 @@ fetch_slot <- fetch_controller_unit               |                          |
 | E1 | `pc_write` high, `pc_write_slot` 2, `pc_write_data` 0x20 | `pc` of slot 2 holds 0x20 | `present_pc` with `present_slot` 2 is 0x20 |
 | E2 | `instruction_write` high, `instruction_write_slot` 2, `instruction_write_data` I1 | `instruction` of slot 2 holds I1 | `fetch_pc` and `fetch_instruction` with `fetch_slot` 2 are 0x20 and I1 |
 
+- With `present_direct` high, `present_pc` shows `pc_write_data` in the same cycle, before E1 writes it. With `fetch_bypass` high before E2, `fetch_instruction` shows I1 in the same cycle.
+
 ## 8. Assumptions and Corner Cases
 
 | Assumption | Guaranteed by | If violated |
@@ -117,6 +127,7 @@ fetch_slot <- fetch_controller_unit               |                          |
 | The slot ports carry 0, 1 or 2 | `fetch_controller_unit` ([FCU-O11](fetch-controller-unit.md)) | Not specified; the controller never drives it. |
 | The write enables, slots and data come from the controller and the OBI leaf only | The wiring in [fetch stage](fetch-stage.md) §3 | The stored values no longer follow the controller's allocation and response events. |
 | A `pc_write` never selects the slot of a killed entry that is still presented | `fetch_controller_unit` ([pc write on a redirect](fetch-controller-unit.md)) | `present_pc` changes while the request is held, which breaks the OBI hold rule. |
+| A slot presented directly and not granted is written with the presented `pc_write_data` on that edge | `fetch_controller_unit` (FCU-D11) | `present_pc` changes between the direct cycle and the QUEUED cycle, which breaks the OBI hold rule. |
 
 | Case | Inputs | Result |
 | --- | --- | --- |
@@ -126,14 +137,15 @@ fetch_slot <- fetch_controller_unit               |                          |
 
 ## 9. Verification
 
-- No fetch-buffer test exists.
-- The checks below are planned.
+- Tests are in `tb/exploratory/fetch_buffer_cocotb.py`.
 
 | Requirement | Stimulus | Expected observation |
 | --- | --- | --- |
 | Write, then read; enable low (section 6) | `pc_write` to slot `s`, read `s` through `present_slot` or `fetch_slot`; then change the data with the enable low | Read returns the written value; stored value unchanged |
 | Independent writes (section 6) | `pc_write` and `instruction_write` on one edge, to different slots | Both arrays capture their own data |
 | Combinational read (section 6) | Change a read slot within a cycle | Output follows the array with no edge |
+| Direct mux (section 6) | `present_direct` high, change `pc_write_data` within a cycle; then `present_direct` low | `present_pc` follows `pc_write_data`, then the stored `pc` |
+| Bypass mux (section 6) | `fetch_bypass` high, change `instruction_write_data` within a cycle; then `fetch_bypass` low | `fetch_instruction` follows `instruction_write_data`, then the stored `instruction`; `fetch_pc` stays the stored `pc` |
 | Reset with enables low (section 7) | Reset asserted with `pc_write` and `instruction_write` held at 0 | Arrays unchanged |
 
 ## 10. Decisions and Open Items
@@ -142,8 +154,10 @@ fetch_slot <- fetch_controller_unit               |                          |
 | --- | --- | --- |
 | FB-D1 | The buffer is an indexed payload array with no reset, not a FIFO. | Entries are allocated before their data arrives and a redirect reloads the pointers, so a FIFO does not fit. |
 | FB-D2 | The read selectors are in the buffer. | The controller handles only slot numbers, never payload. |
+| FB-D3 | The direct and bypass muxes are in the buffer, selected by `present_direct` and `fetch_bypass` from the controller. | Both data inputs already reach the buffer, so the controller still handles no payload and `prefetch_unit` stays wiring only (IF-A4). |
 
 - History: 2026-11-06 decisions settled (IF-A3); rewritten in the block spec format, IDs renumbered.
+  - 2026-11-23 IF-A4 accepted: FB-D3 added, with the `present_direct` and `fetch_bypass` inputs.
 
 | Old ID | New ID | Status |
 | --- | --- | --- |
