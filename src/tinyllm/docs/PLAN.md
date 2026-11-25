@@ -9,11 +9,12 @@ Cần chọn đồng thời **quy tắc số học (numerical contract)** và c�
 ```text
 Cố định nguồn model → Chạy bằng FP32 để lấy kết quả chuẩn
                               ↓
-         Thử fake-quant ↔ Quy tắc số học + bản chạy số nguyên
-                              ↕
-               Thiết kế thử các khối RTL và đo chi phí
+   Thử fake-quant → Contract số học: biểu diễn, độ rộng bit, phép tính nền
                               ↓
-               Chọn phương án và chốt quy tắc số học
+        Đặc tả thiết kế chi tiết ↔ Chọn thuật toán phi tuyến, cập nhật contract
+        Golden số học từng khối  ↔ RTL đại diện để đo DDR, timing và đối chứng
+                              ↓
+   Chốt đặc tả và contract → Ghép golden toàn model → Xác nhận heldout
                               ↓
                Viết RTL đầy đủ và kiểm tra
                               ↓
@@ -21,6 +22,8 @@ Cố định nguồn model → Chạy bằng FP32 để lấy kết quả chuẩ
                               ↓
                Tạo bitstream và chạy demo trên VCU118
 ```
+
+Contract được chốt theo từng phần ([D03](DECISIONS.md#d03-chốt-contract-theo-từng-phần-hàm-phi-tuyến-chọn-trong-lúc-thiết-kế)). Đặc tả hoàn chỉnh đi trước RTL đầy đủ; chỉ những khối thỏa điều kiện ngoại lệ mới được viết RTL sớm hơn ([D04](DECISIONS.md#d04-hoàn-thành-đặc-tả-thiết-kế-trước-khi-viết-rtl-đầy-đủ)). Golden model kiểm tra đúng đắn số học, không mô phỏng phần cứng ([D05](DECISIONS.md#d05-golden-model-ở-mức-số-học)).
 
 ## Các chặng thực hiện
 
@@ -63,63 +66,80 @@ Cố định nguồn model → Chạy bằng FP32 để lấy kết quả chuẩ
 - Đã kiểm tra chất lượng cho prefill và decode trong phạm vi hỗ trợ.
 - Tập kiểm tra cuối chưa được dùng để chọn phương án; chỉ dùng để xác nhận sau khi chốt.
 
-### 3. Xác định quy tắc số học và viết bản phần mềm số nguyên
+### 3. Xác định contract số học: biểu diễn, độ rộng bit và phép tính nền
+
+Chặng này chốt phần contract mà mọi khối phần cứng dựa vào. Thuật toán phi tuyến ở chặng này là tạm thời; thuật toán chính thức được chọn ở chặng 4 theo [D03](DECISIONS.md#d03-chốt-contract-theo-từng-phần-hàm-phi-tuyến-chọn-trong-lúc-thiết-kế). [Numerical contract v1](design/numerical_contract_v1.md) là kết quả của chặng này.
 
 **Công việc:**
 
-1. **Xác định các biên dữ liệu.** Từ cấu hình và qparams chặng 2, điền bảng biểu diễn trọng số, activation, residual, KV, attention, RoPE, norm, LUT và logits trong contract. Phân biệt thông số đã chọn với định dạng số nguyên còn cần khảo sát; xác định đầu vào/đầu ra của các khối phi tuyến ngay từ bước này.
+1. **Xác định các biên dữ liệu.** Từ cấu hình và qparams chặng 2, điền bảng biểu diễn trọng số, activation, residual, KV, attention, RoPE, norm, LUT và logits trong contract. Xác định đầu vào/đầu ra của các khối phi tuyến ngay từ bước này.
 2. **Định nghĩa và kiểm tra các phép tính nền.** Hoàn thiện MAC, smoothing/requantization và chuyển scale: độ rộng tích/accumulator, thứ tự cộng, hệ số nhân/dịch, rounding, saturation và overflow. Chuẩn bị W số nguyên và hệ số cần dùng; viết bản số nguyên cùng oracle độc lập cho các phép này. Đầu ra là primitive đã kiểm tra và quy tắc đủ rõ để tái hiện từng bit.
-3. **Hoàn thiện từng nhóm phép toán.** Theo các giao diện ở bước 1, chọn thuật toán và hiện thực RMSNorm; RoPE và đường attention QK–mask–Softmax–PV/KV cache; SiLU, gate multiply và residual. Với mỗi nhóm, ghi từng bước số nguyên, bảng tra/hệ số, độ rộng và scale, rồi kiểm tra riêng trước khi ghép. Bao gồm số âm, half-step, cực trị, mask, cache và giới hạn độ dài chuỗi.
-4. **Ghép golden integer.** Hoàn thiện embedding và LM head dùng chung một bộ trọng số, cách áp scale ở hai nơi và biểu diễn logits; ghép một decoder layer rồi đủ 30 layer, final norm và LM head. Chạy prefill và decode với cùng token đầu vào; đường tính model hoàn chỉnh phải thuần số nguyên theo contract.
-5. **Hoàn thiện định dạng dữ liệu và vector chuẩn.** Chốt cách biểu diễn/nạp trọng số, scale, hệ số và LUT; chuẩn bị dữ liệu, kiểm tra lưu/nạp và xuất đầu vào/kết quả số nguyên cần cho regression và đối chiếu RTL. Không tạo hai bản trọng số embedding/head ngoài quy tắc đã ghi.
-6. **Đánh giá toàn model.** Dùng lại protocol và scorer của chặng 2 để so FP32, fake-quant và golden integer trên selection, gồm PPL, PIQA, prefill, token đầu tiên và hai regime decode. Ghi chất lượng, các sai khác cần điều tra và kết quả có thể chạy lại; chưa dùng heldout để sửa hoặc chọn contract.
-7. **Đối chiếu chi phí với chặng 4.** Khảo sát các kernel RTL đại diện khi contract của chúng đã đủ rõ. Nếu chất lượng hoặc chi phí chưa đạt, sửa phần contract liên quan và chạy lại kiểm chứng bị ảnh hưởng; cập nhật golden integer và vector chuẩn cùng phiên bản. Chỉ chuyển sang chốt contract sau khi đủ bằng chứng chất lượng và phần cứng.
+3. **Chọn thuật toán phi tuyến tạm thời.** Chọn thuật toán số nguyên cho RMSNorm, RoPE, Softmax và SiLU đủ để chạy và đánh giá contract toàn model. Ghi từng bước số nguyên, bảng tra/hệ số, độ rộng và scale; bao gồm số âm, half-step, cực trị, mask, cache và giới hạn độ dài chuỗi.
+4. **Hiện thực runtime contract.** Chạy toàn model trên mã nguyên theo contract, gồm embedding và LM head dùng chung một bộ trọng số, prefill, decode và KV cache, từ bộ mã W, hệ số và LUT đã xuất. Runtime này dùng để chấm chất lượng mỗi phiên bản contract.
+5. **Hoàn thiện định dạng trao đổi.** Chốt cách biểu diễn/lưu trọng số, scale, hệ số và LUT; kiểm tra lưu/nạp. Không tạo hai bản trọng số embedding/head ngoài quy tắc đã ghi. Định dạng đóng gói cho phần cứng được suy ra từ định dạng này ở chặng 4.
+6. **Đánh giá toàn model.** Dùng lại protocol và scorer của chặng 2 để so FP32, fake-quant và runtime contract trên selection, gồm PPL, PIQA, prefill, token đầu tiên và hai regime decode. Ghi chất lượng, các sai khác cần điều tra và kết quả có thể chạy lại; không dùng heldout ([D06](DECISIONS.md#d06-dùng-selection-và-heldout-trong-giai-đoạn-thiết-kế)).
 
 **Tiêu chí hoàn thành:**
 
-- Quy tắc đủ rõ để hai cách viết độc lập cho kết quả giống nhau tới từng bit.
-- Bản số nguyên chạy được prefill và decode, đạt mức chất lượng yêu cầu.
-- Có bộ đầu vào và kết quả chuẩn để kiểm tra lại sau mỗi lần sửa, đồng thời dùng để đối chiếu RTL.
-- Chưa chốt quy tắc số học trước khi kiểm tra chi phí phần cứng ở chặng 4.
+- Biểu diễn, độ rộng bit, scale và các phép tính nền đủ rõ để hai cách viết độc lập cho kết quả giống nhau tới từng bit.
+- Runtime contract chạy được prefill và decode, đạt quality gate trên selection.
+- Thuật toán phi tuyến được ghi rõ là tạm thời, không được coi là kiến trúc phần cứng đã chốt.
 
-### 4. Thiết kế microarchitecture và kiểm tra khả năng triển khai trên VCU118
+### 4. Đặc tả thiết kế chi tiết và golden số học
 
-Chặng 2–4 được thực hiện lặp và có thể xen kẽ. Bắt đầu khảo sát các khối RTL đại diện khi có mô tả số học ứng viên cho các khối đó; không cần hoàn thiện bản số nguyên của mọi ứng viên trước.
+Đặc tả mô tả toàn bộ accelerator đủ chi tiết để viết golden số học và RTL mà không phải đoán. Đặc tả được xây dần từ đầu; nội dung có trong đặc tả là nội dung đã quyết. Contract được cập nhật trong chặng này khi chốt thuật toán phi tuyến.
 
 **Công việc:**
 
-- Từ khảo sát sơ bộ ở chặng 2, xác định và tinh chỉnh mục tiêu tốc độ cùng ngân sách tài nguyên, bộ nhớ và băng thông cho workload đã chọn.
-- Thiết kế datapath của các khối tính toán, cách chia phép nhân ma trận/vector thành các phần nhỏ để xử lý và lịch dùng lại khối tính toán qua 30 layer.
-- Lập cách lưu và chuyển trọng số, KV cache và dữ liệu trung gian; xác định bộ nhớ cần có, tốc độ truyền dữ liệu, cách chia phép tính thành các tầng (pipeline) và cách điều khiển việc tính/truyền dữ liệu.
-- Ước lượng tài nguyên, thời gian chạy và bộ nhớ. Viết một số khối RTL đại diện để kiểm tra các giả định bằng kết quả tổng hợp mạch (synthesis) và kiểm tra thời gian truyền tín hiệu (timing).
-- Tính cả phần tốn thêm để tìm/lưu scale, chuyển cách biểu diễn số và lưu thông tin đi kèm dữ liệu.
-- Dùng kết quả đo để sửa quy tắc số học ở chặng 2–3 hoặc cách tổ chức phần cứng. So từng cặp **quy tắc số học + cách tổ chức phần cứng** theo chất lượng và chi phí.
-- Xác định phần giới hạn hiệu năng hoặc tài nguyên từ số đo và mô hình chi phí; đề xuất cơ chế kiến trúc cần khảo sát, xây dựng thiết kế đối chứng (baseline) và đối chiếu với nghiên cứu trước.
-- Thử cơ chế đề xuất trên các khối RTL đại diện, so với baseline theo cùng workload và các ràng buộc chất lượng, phần cứng đã chọn; tính cả chi phí bổ sung của cơ chế trước khi triển khai RTL đầy đủ.
-- Đưa các kích thước model thành tham số có thể thay đổi, nhưng ưu tiên hoàn thành SmolLM2-135M trước.
-- Đề xuất các thanh ghi/lệnh điều khiển, cách nạp trọng số, địa chỉ bộ nhớ, cách báo hoàn tất và báo lỗi.
+- **Mục tiêu và ngân sách.** Từ khảo sát sơ bộ ở chặng 2, xác định mục tiêu tốc độ, clock, ngân sách DSP/URAM/BRAM, số kênh DDR, phân bố trên các SLR và các miền clock. Thống nhất ngân sách với kiến trúc sư SoC.
+- **Đo thông số nền bằng RTL đại diện.** Đo băng thông DDR4 duy trì trên VCU118 qua bộ điều khiển DDR4 (MIG). Viết một nhóm PE có drain/requant, kiểm tra clock mục tiêu sau place-and-route. RTL đại diện phục vụ đo và đối chứng, không bắt buộc giữ lại.
+- **Datapath và matmul engine.** Cách chia phép nhân ma trận/vector thành tile; ánh xạ Linear, QK, PV và LM head cho prefill và decode; tile lẻ, mask và causal skip; lịch dùng lại khối tính toán qua 30 layer.
+- **Bộ nhớ và dữ liệu.**
+  - Phân cấp DDR → bộ đệm nạp trước → bộ nhớ nội bộ → thanh ghi.
+  - Layout của trọng số, activation, KV cache và hệ số trong DDR và trên chip; chuyển vị và sinh địa chỉ.
+  - Embedding và LM head dùng chung trọng số.
+  - Dung lượng của từng bộ nhớ.
+- **Lịch thực thi.**
+  - Thứ tự vòng lặp của prefill và decode.
+  - Thứ tự tính các ma trận và hàm phi tuyến.
+  - Chỗ gộp phép và các điểm chắn (barrier) giữa nhân ma trận và phi tuyến, nhằm giảm đọc/ghi bộ nhớ.
+  - Phụ thuộc dữ liệu, ví dụ K/V của token hiện tại vào cache trước khi QK đọc.
+- **DMA và giao diện SoC.** AXI (độ rộng, burst, số yêu cầu chờ), thanh ghi điều khiển, ngắt, memory map, coherence với Rocket, chia băng thông với RISC-V/Dilithium, cách nạp trọng số lên board, cách báo hoàn tất và báo lỗi.
+- **Bộ điều phối.**
+  - Cách điều khiển toàn bộ suy luận và định dạng lệnh/descriptor.
+  - Kích thước model là dữ liệu cấu hình, ưu tiên hoàn thành SmolLM2-135M trước.
+  - Quy ước giao diện chung giữa các khối: handshake, cấu hình, báo xong, báo lỗi.
+- **Hệ số, LUT và đóng gói.** Định dạng đóng gói phần cứng suy ra từ định dạng trao đổi của contract; công cụ đóng gói có version. Quyết định nạp hệ số/LUT sẵn trên chip hay stream theo layer.
+- **Khối phi tuyến.** Theo D03, chọn thuật toán và kiến trúc phù hợp với thiết kế xung quanh. Sàng lọc có thể dùng fake-quant. Phương án được chọn được cập nhật vào contract và chấm bằng runtime contract trên selection.
+- **Golden số học.** Khi một khối đã chốt thuật toán, viết golden của khối đó theo [D05](DECISIONS.md#d05-golden-model-ở-mức-số-học) và kiểm tra với oracle độc lập.
+- **Gỡ lỗi và kiểm chứng.** Dump bộ đệm trung gian, bộ đếm hiệu năng, assertion cho các cận overflow. Ánh xạ điểm quan sát của đặc tả sang boundary của contract. Lập kế hoạch kiểm tra RTL.
+- **Cơ chế kiến trúc và đối chứng.** Xác định phần giới hạn hiệu năng hoặc tài nguyên từ số đo và mô hình chi phí. Đề xuất cơ chế kiến trúc, xây dựng baseline và đối chiếu với nghiên cứu trước. Thử cơ chế trên RTL đại diện, so với baseline theo cùng workload và ràng buộc, tính cả chi phí bổ sung.
+- **Ước lượng.** Ước lượng tài nguyên, thời gian chạy và bộ nhớ, tính cả phần tốn thêm để tìm/lưu scale, chuyển biểu diễn số và lưu thông tin đi kèm dữ liệu. Nếu chất lượng hoặc chi phí chưa đạt, sửa contract hoặc thiết kế rồi chạy lại các kiểm chứng bị ảnh hưởng.
 
 **Tiêu chí hoàn thành:**
 
-- Chọn được một cặp đạt yêu cầu chất lượng; ước lượng thời gian chạy và kết quả các khối RTL cho thấy có thể đáp ứng mục tiêu tốc độ và giới hạn tài nguyên.
-- Có mô tả microarchitecture đủ rõ để hiện thực RTL: các khối, kết nối, bộ nhớ, pipeline và cơ chế điều khiển.
-- Có kết quả thử nghiệm và đối chứng sơ bộ để quyết định tiếp tục hoặc điều chỉnh cơ chế kiến trúc trước khi viết RTL đầy đủ.
-- Chốt phiên bản quy tắc số học và xác nhận chất lượng trên tập kiểm tra cuối.
-- Có kế hoạch kiểm tra RTL; giao diện cần thiết được thống nhất trước khi chốt RTL cấp cao nhất.
-- Kết quả timing sau synthesis được ghi đúng mức: vẫn cần kiểm tra sau bước bố trí và nối dây mạch (place-and-route) ở chặng 8.
+- Đặc tả mô tả đủ các khối, kết nối, bộ nhớ, pipeline, lịch thực thi và điều khiển để viết RTL không phải đoán. Giao diện giữa các khối và với SoC đã thống nhất.
+- Ước lượng thời gian chạy và số đo RTL đại diện cho thấy có thể đáp ứng mục tiêu tốc độ và giới hạn tài nguyên.
+- Có kết quả đối chứng sơ bộ giữa cơ chế kiến trúc và baseline.
+- Mọi khối có golden số học. Golden toàn model ghép từ các khối chạy được prefill và decode, cho cùng mã với runtime contract.
+- Contract phiên bản cuối đạt quality gate trên selection, sau đó được xác nhận một lần trên heldout theo D06.
+- Kết quả timing của RTL đại diện được ghi đúng mức: vẫn cần kiểm tra sau place-and-route của toàn thiết kế ở chặng 8.
 
 ### 5. Viết RTL và kiểm tra từng khối
 
+RTL đầy đủ bắt đầu sau khi chốt đặc tả. Khối thỏa điều kiện ngoại lệ của [D04](DECISIONS.md#d04-hoàn-thành-đặc-tả-thiết-kế-trước-khi-viết-rtl-đầy-đủ) có thể được viết trong chặng 4.
+
 **Công việc:**
 
-- Viết các khối tính toán: nhân-cộng và chuyển cách biểu diễn số, embedding, RMSNorm, Q/K/V, RoPE, GQA/attention/softmax, KV cache, FFN/SiLU, cộng residual, chuẩn hóa cuối, LM head và chọn token.
-- Viết mã kiểm tra (testbench) trong `tb/`; so kết quả và trạng thái bên trong với bản phần mềm số nguyên.
+- Viết các khối tính toán theo đặc tả: nhân-cộng và chuyển cách biểu diễn số, embedding, RMSNorm, Q/K/V, RoPE, GQA/attention/softmax, KV cache, FFN/SiLU, cộng residual, chuẩn hóa cuối, LM head và chọn token; cùng DMA, bộ nhớ và bộ điều phối.
+- Viết mã kiểm tra (testbench) trong `tb/`; so khớp từng bit với golden số học tại đầu ra từng khối.
+- Chọn dữ liệu kiểm tra theo phần cứng, vì golden không biết tile: T = 1, T không chia hết cho kích thước tile, L quanh bội số kích thước khối key, L = 512, khối causal nằm trên đường chéo, decode ngay sau prefill.
 - Kiểm tra cả lúc luồng dữ liệu phải chờ, lúc reset, phần tử attention bị che, giá trị bị giới hạn và địa chỉ ở biên vùng nhớ.
 - Ghép thành một decoder layer, rồi thêm phần điều khiển để chạy đủ số layer.
 
 **Tiêu chí hoàn thành:**
 
-- Các khối và một layer khớp bản số nguyên tới từng bit.
+- Các khối và một layer khớp golden số học tới từng bit.
 - Bộ kiểm tra chạy lại đạt yêu cầu sau khi ghép hoặc sửa mã.
 - Không còn lỗi đã biết trong việc truyền dữ liệu và điều khiển giữa các khối.
 
@@ -128,23 +148,23 @@ Chặng 2–4 được thực hiện lặp và có thể xen kẽ. Bắt đầu 
 **Công việc:**
 
 - Chạy đầy đủ từ prefill đến nhiều lượt decode, dùng trọng số và KV cache thật cùng cách chọn token đã thống nhất.
-- So token, logits và các giá trị số nguyên quan sát được với bản phần mềm số nguyên.
+- So token, logits và các giá trị số nguyên quan sát được với golden số học toàn model.
 - Kiểm tra nạp model, nhiều độ dài prompt, chuỗi gần giới hạn, token kết thúc (EOS), giới hạn số token sinh, reset và chạy lặp.
 - Đo thời gian chạy, tốc độ xử lý token, lượng dữ liệu truyền và tài nguyên sử dụng.
 - Đánh giá lợi ích của cơ chế kiến trúc trên toàn TinyLLM so với baseline và kiểm tra riêng đóng góp của cơ chế đã chọn.
-- Nếu sửa quy tắc số học sau khi chốt, cập nhật phiên bản, bản số nguyên và dữ liệu kiểm tra; quay lại đánh giá chất lượng ở chặng 2–4 trước khi chốt lại. Không dùng tập kiểm tra cuối để chọn hoặc điều chỉnh phương án.
-- Với thay đổi microarchitecture giữ nguyên quy tắc số học, kiểm chứng RTL khớp bản số nguyên hiện có.
+- Nếu sửa quy tắc số học sau khi chốt, cập nhật phiên bản contract, golden và dữ liệu kiểm tra; đánh giá lại chất lượng trên selection trước khi chốt lại. Không dùng tập kiểm tra cuối để chọn hoặc điều chỉnh phương án.
+- Với thay đổi microarchitecture giữ nguyên quy tắc số học, kiểm chứng RTL khớp golden hiện có.
 
 **Tiêu chí hoàn thành:**
 
-- Toàn bộ TinyLLM cho kết quả khớp bản số nguyên theo quy tắc đã chốt.
+- Toàn bộ TinyLLM cho kết quả khớp golden số học theo quy tắc đã chốt.
 - Có báo cáo kiểm tra, tốc độ và tài nguyên đủ để quyết định chuyển sang tích hợp SoC.
 
 ### 7. Chuẩn bị phần mềm và tích hợp vào SoC
 
 **Công việc:**
 
-- Hoàn thiện công cụ chạy trên máy tính để đóng gói trọng số, scale và bảng tra.
+- Hoàn thiện công cụ chạy trên máy tính để đóng gói trọng số, scale và bảng tra theo định dạng đóng gói trong đặc tả.
 - Phối hợp với phần RISC-V để chuẩn bị phần mềm điều khiển, tokenizer/detokenizer, nạp dữ liệu và điều khiển các lượt prefill/decode.
 - Kết nối TinyLLM với bộ nhớ, liên kết truyền dữ liệu (interconnect), clock/reset và ngắt qua giao diện đã thống nhất.
 - Kiểm tra TinyLLM khi hoạt động cùng các phần khác của SoC.
@@ -162,7 +182,7 @@ Chặng 2–4 được thực hiện lặp và có thể xen kẽ. Bắt đầu 
 - Chạy synthesis và place-and-route; kiểm tra mạch đáp ứng clock đã đặt, đủ tài nguyên và đủ bộ nhớ.
 - Tạo bitstream và nạp lên board.
 - Chạy lại bộ đầu vào chuẩn và demo sinh văn bản với model/tokenizer đã cố định phiên bản.
-- So kết quả board với bản phần mềm số nguyên; đo thời gian chạy, tốc độ xử lý token và tài nguyên sử dụng. Đo điện năng nếu có phương pháp đáng tin cậy.
+- So kết quả board với golden số học; đo thời gian chạy, tốc độ xử lý token và tài nguyên sử dụng. Đo điện năng nếu có phương pháp đáng tin cậy.
 - Đối chiếu lợi ích kiến trúc trên board với baseline theo cùng workload và các ràng buộc đã chọn; ghi rõ nguồn số liệu đối chứng là đo trên board hay ước lượng.
 - Lưu phiên bản công cụ, các ràng buộc thiết kế, bitstream, log và kết quả để có thể chạy lại và đối chiếu.
 
@@ -174,7 +194,7 @@ Chặng 2–4 được thực hiện lặp và có thể xen kẽ. Bắt đầu 
 
 ## Các điểm cần quyết định trước khi chốt thiết kế
 
-1. Mức giảm chất lượng cho phép, độ dài chuỗi hỗ trợ và mục tiêu tốc độ.
-2. Quy tắc số học cuối cùng, nhất là scale, số bit bộ cộng dồn, softmax, bảng tra và cách cập nhật KV cache khi chuỗi dài.
-3. Giới hạn tài nguyên, tốc độ truyền dữ liệu và cách lưu trọng số/KV trên VCU118.
+1. Mục tiêu tốc độ; mức giảm chất lượng cho phép và độ dài chuỗi hỗ trợ giữ theo quality gate hiện có, trừ khi được thống nhất lại.
+2. Thuật toán và kiến trúc của RMSNorm, RoPE, Softmax và SiLU, cùng phần contract tương ứng.
+3. Giới hạn tài nguyên, băng thông DDR đo được và cách lưu trọng số/KV trên VCU118.
 4. Giao diện TinyLLM–SoC và phần việc của phần mềm/phần cứng, được ghi trong tài liệu quyết định tương ứng.
