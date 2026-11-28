@@ -1,4 +1,4 @@
-// Author: Luke Beckwith
+// Author: Nguyen Hung
 // License: Apache-2.0
 `timescale 1ns/1ps
 
